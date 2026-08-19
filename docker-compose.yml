@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: job-assistant-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: job_assistant
+      POSTGRES_USER: job_assistant
+      POSTGRES_PASSWORD: job_assistant_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - job-assistant-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U job_assistant -d job_assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  job-assistant-postgres-data:

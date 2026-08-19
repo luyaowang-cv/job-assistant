@@ -1,0 +1,502 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../server/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ApplicationStatus {
+  SAVED
+  PREPARING
+  APPLIED
+  WRITTEN_TEST
+  INTERVIEWING
+  OFFERED
+  REJECTED
+  WITHDRAWN
+}
+
+enum ApplicationChannel {
+  OFFICIAL_SITE
+  BOSS
+  NIUKE
+  REFERRAL
+  OTHER
+}
+
+enum JobSource {
+  OFFICIAL_SITE
+  BOSS
+  NIUKE
+  MANUAL
+  OTHER
+}
+
+enum ApplicationEventType {
+  CREATE
+  UPDATE
+  STATUS_CHANGED
+  DELETE
+}
+
+enum AgentRunType {
+  JOB_EVALUATION
+}
+
+enum AgentRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum ResumeVersionType {
+  BASE
+  TARGETED
+}
+
+enum MaterialCardType {
+  PROJECT
+  INTERNSHIP
+  WORK
+  CAMPUS
+  AWARD
+  SKILL
+  SELF_EVALUATION
+  CUSTOM_ANSWER
+}
+
+enum DocumentMutationType {
+  MATERIAL_CREATED
+  MATERIAL_UPDATED
+  MATERIAL_VARIANT_CREATED
+  MATERIAL_ARCHIVED
+  PROFILE_VERSION_CREATED
+  RESUME_VERSION_CREATED
+  MATERIAL_MIGRATED
+  DOCUMENT_SYNCED
+  INTERVIEW_PREP_SAVED
+  INTERVIEW_REFLECTION_MERGED
+  MATERIAL_DELETED
+  APPLICATION_PROFILE_DELETED
+  RESUME_VERSION_DELETED
+  INTERVIEW_RECORD_SAVED
+  INTERVIEW_RECORD_REVIEW_SAVED
+}
+
+enum InterviewRound {
+  FIRST
+  SECOND
+  HR
+  FINAL
+}
+
+enum InterviewResult {
+  UNDECIDED
+  PASSED
+  FAILED
+  WITHDRAWN
+}
+
+model User {
+  id          String        @id @default(cuid())
+  email       String        @unique
+  displayName String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  applications  Application[]
+  jobPreference JobPreference?
+  agentRuns     AgentRun[]
+  materials     ApplicationMaterial[]
+  resume        Resume?
+  personalProfile PersonalProfile?
+  aiProviderSetting AiProviderSetting?
+  feishuConnection FeishuConnection?
+  applicationProfiles ApplicationProfile[]
+  materialCards MaterialCard[]
+  documentMutationEvents DocumentMutationEvent[]
+  interviewPreps InterviewPrepDocument[]
+  interviewRecords InterviewRecord[]
+}
+
+model FeishuConnection {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  encryptedAccessToken  String
+  accessTokenExpiresAt  DateTime
+  encryptedRefreshToken String
+  refreshTokenExpiresAt DateTime?
+  scopes                String[] @default([])
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Company {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  website     String?
+  industry    String?
+  companyType String?
+  tags        String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  jobs        Job[]
+}
+
+model Job {
+  id          String      @id @default(cuid())
+  companyId   String
+  title       String
+  department  String?
+  location    String?
+  salaryMin   Int?
+  salaryMax   Int?
+  source      JobSource   @default(MANUAL)
+  url         String?
+  description String?
+  deadlineAt  DateTime?
+  recruitmentType String?
+  announcementUrl String?
+  hasWrittenTest Boolean?
+  sourceDocId String?
+  sourceUpdatedAt DateTime?
+  syncedAt DateTime?
+  offlineAt DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  applications Application[]
+
+  @@index([companyId])
+  @@index([source])
+  @@index([sourceDocId])
+  @@index([offlineAt])
+}
+
+model Application {
+  id           String             @id @default(cuid())
+  userId       String
+  jobId        String
+  status       ApplicationStatus  @default(SAVED)
+  channel      ApplicationChannel @default(OTHER)
+  appliedAt    DateTime?
+  nextAction   String?
+  nextActionAt DateTime?
+  notes        String?
+  deletedAt    DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  user         User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  job          Job                @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  events       ApplicationEvent[]
+  agentRuns    AgentRun[]
+  materials    ApplicationMaterial[]
+  resumeVersions ResumeVersion[]
+  interviewRecords InterviewRecord[]
+
+  @@unique([userId, jobId])
+  @@index([userId, status])
+  @@index([userId, deletedAt])
+  @@index([nextActionAt])
+}
+
+model ApplicationEvent {
+  id            String               @id @default(cuid())
+  applicationId String
+  type          ApplicationEventType
+  occurredAt    DateTime             @default(now())
+  payload       Json?
+  application   Application          @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+
+  @@index([applicationId, occurredAt])
+}
+
+model JobPreference {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  targetRoles    String[] @default([])
+  targetCities   String[] @default([])
+  companyTypes   String[] @default([])
+  technicalFocus String[] @default([])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model AgentRun {
+  id                 String         @id @default(cuid())
+  userId             String
+  applicationId      String
+  type               AgentRunType   @default(JOB_EVALUATION)
+  status             AgentRunStatus @default(PENDING)
+  preferenceSnapshot Json
+  resumeDigest       Json
+  output             Json?
+  provider           String
+  model              String
+  errorMessage       String?
+  startedAt          DateTime       @default(now())
+  completedAt        DateTime?
+  user               User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  application        Application    @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  materials          ApplicationMaterial[]
+
+  @@index([userId, applicationId, startedAt])
+  @@index([applicationId, startedAt])
+  @@index([status])
+}
+
+model ApplicationMaterial {
+  id              String      @id @default(cuid())
+  userId          String
+  applicationId   String
+  evaluationRunId String?
+  resumeDigest    Json
+  aiDraft         Json
+  content         Json
+  wasEdited       Boolean     @default(false)
+  provider        String
+  model           String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  user            User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  application     Application @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  evaluationRun   AgentRun?   @relation(fields: [evaluationRunId], references: [id], onDelete: SetNull)
+
+  @@index([userId, applicationId, createdAt])
+  @@index([applicationId, createdAt])
+  @@index([evaluationRunId])
+}
+
+model Resume {
+  id        String          @id @default(cuid())
+  userId    String          @unique
+  name      String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  user      User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  versions  ResumeVersion[]
+}
+
+model ResumeVersion {
+  id            String            @id @default(cuid())
+  resumeId      String
+  applicationId String?
+  type          ResumeVersionType
+  aiDraft       String?
+  content       String
+  changeSummary Json?
+  wasEdited     Boolean           @default(false)
+  provider      String
+  model         String
+  createdAt     DateTime          @default(now())
+  resume        Resume            @relation(fields: [resumeId], references: [id], onDelete: Restrict)
+  application   Application?      @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  applicationProfiles ApplicationProfile[] @relation("ApplicationProfileResumeVersion")
+  composition DocumentComposition?
+  interviewPrep InterviewPrepDocument?
+  interviewRecords InterviewRecord[]
+
+  @@index([resumeId, createdAt])
+  @@index([applicationId])
+}
+
+model ApplicationProfile {
+  id                String   @id @default(cuid())
+  userId            String
+  name              String
+  targetTags        String[] @default([])
+  strategy          Json     @default("{}")
+  resumeVersionId   String?
+  currentVersionId  String?  @unique
+  basics            Json     @default("{}")
+  educations        Json     @default("[]")
+  workExperiences   Json     @default("[]")
+  projects          Json     @default("[]")
+  skills            Json     @default("[]")
+  languages         Json     @default("[]")
+  certificates      Json     @default("[]")
+  campusExperiences Json     @default("[]")
+  awards            Json     @default("[]")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  resumeVersion     ResumeVersion? @relation("ApplicationProfileResumeVersion", fields: [resumeVersionId], references: [id], onDelete: SetNull)
+  versions          ApplicationProfileVersion[] @relation("ApplicationProfileVersions")
+  currentVersion    ApplicationProfileVersion? @relation("ApplicationProfileCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, name])
+  @@index([userId, updatedAt])
+  @@index([resumeVersionId])
+  @@index([currentVersionId])
+}
+
+model ApplicationProfileVersion {
+  id                   String   @id @default(cuid())
+  applicationProfileId String
+  blocks               Json     @default("{}")
+  source               String   @default("MANUAL")
+  createdAt            DateTime @default(now())
+  applicationProfile   ApplicationProfile @relation("ApplicationProfileVersions", fields: [applicationProfileId], references: [id], onDelete: Restrict)
+  currentFor           ApplicationProfile? @relation("ApplicationProfileCurrentVersion")
+  composition          DocumentComposition?
+
+  @@index([applicationProfileId, createdAt])
+}
+
+model MaterialCard {
+  id              String           @id @default(cuid())
+  userId          String
+  type            MaterialCardType
+  title           String
+  tags            String[]         @default([])
+  facts           Json             @default("{}")
+  archivedAt      DateTime?
+  legacySourceKey String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  user            User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  variants        MaterialCardVariant[]
+  references      DocumentCardReference[]
+
+  @@unique([userId, legacySourceKey])
+  @@index([userId, archivedAt, updatedAt])
+  @@index([userId, type])
+}
+
+model MaterialCardVariant {
+  id         String   @id @default(cuid())
+  cardId     String
+  name       String
+  content    String
+  createdAt  DateTime @default(now())
+  card       MaterialCard @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  references DocumentCardReference[]
+
+  @@unique([cardId, name])
+  @@index([cardId, createdAt])
+}
+
+model DocumentComposition {
+  id                          String   @id @default(cuid())
+  resumeVersionId             String?  @unique
+  applicationProfileVersionId String?  @unique
+  fieldVisibility             Json     @default("{}")
+  config                      Json     @default("{}")
+  createdAt                   DateTime @default(now())
+  resumeVersion               ResumeVersion? @relation(fields: [resumeVersionId], references: [id], onDelete: Restrict)
+  applicationProfileVersion   ApplicationProfileVersion? @relation(fields: [applicationProfileVersionId], references: [id], onDelete: Restrict)
+  references                  DocumentCardReference[]
+}
+
+model DocumentCardReference {
+  id            String   @id @default(cuid())
+  compositionId String
+  cardId        String
+  variantId     String
+  section       String
+  fieldKey      String?
+  sortOrder     Int
+  visible       Boolean  @default(true)
+  renderRules   Json     @default("{}")
+  composition   DocumentComposition @relation(fields: [compositionId], references: [id], onDelete: Cascade)
+  card          MaterialCard @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  variant       MaterialCardVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([compositionId, section, sortOrder])
+  @@index([cardId])
+  @@index([variantId])
+}
+
+model DocumentMutationEvent {
+  id             String   @id @default(cuid())
+  userId         String
+  type           DocumentMutationType
+  entityType     String
+  entityId       String
+  source         String   @default("USER")
+  idempotencyKey String?
+  payload        Json?
+  occurredAt     DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, occurredAt])
+  @@index([entityType, entityId])
+}
+
+model PersonalProfile {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  photoMimeType String?
+  photoData   Bytes?
+  photoUpdatedAt DateTime?
+  basics     Json     @default("{}")
+  educations Json     @default("[]")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model AiProviderSetting {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  provider  String   @default("OPENAI_COMPATIBLE")
+  baseUrl   String   @default("https://api.openai.com/v1")
+  model     String   @default("gpt-4o-mini")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model InterviewPrepDocument {
+  id              String   @id @default(cuid())
+  userId          String
+  resumeVersionId String   @unique
+  jdText          String
+  extraText       String
+  sections        Json
+  reflection      Json
+  provider        String
+  model           String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  resumeVersion ResumeVersion @relation(fields: [resumeVersionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model InterviewRecord {
+  id               String          @id @default(cuid())
+  userId           String
+  applicationId    String?
+  resumeVersionId  String?
+  companyName      String?
+  jobTitle         String?
+  jdText           String?
+  round            InterviewRound?
+  interviewAt      DateTime?
+  methodAndAddress String?
+  briefNote        String?
+  prepSections     Json            @default("[]")
+  prepNotes        String?
+  result           InterviewResult?
+  review           Json            @default("[]")
+  provider         String          @default("MANUAL")
+  model            String          @default("manual")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  user             User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  application      Application?    @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  resumeVersion    ResumeVersion?  @relation(fields: [resumeVersionId], references: [id], onDelete: SetNull)
+
+  @@map("interview_record")
+  @@index([userId, updatedAt])
+  @@index([applicationId])
+  @@index([resumeVersionId])
+}

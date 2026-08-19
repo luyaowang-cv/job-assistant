@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Formily 网申表单测试</title>
+    <style>
+      body { max-width: 720px; margin: 32px auto; padding: 0 16px; font: 16px/1.5 system-ui, sans-serif; color: #0f172a; }
+      form { display: grid; gap: 20px; padding: 28px; border: 1px solid #cbd5e1; border-radius: 12px; }
+      .ud-formily-item { display: grid; gap: 8px; }
+      .ud-formily-item-label { font-weight: 600; }
+      .ud-formily-item-control { display: grid; gap: 8px; }
+      input, select { box-sizing: border-box; width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #94a3b8; border-radius: 6px; font: inherit; }
+      .phone { display: grid; grid-template-columns: 140px 1fr; gap: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Formily 网申表单（本地测试）</h1>
+    <p>用于验证标签位于 <code>.ud-formily-item-label</code> 时，扩展能够识别并写入字段。</p>
+    <form>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>姓名</label></span></div><span class="ud-formily-item-colon"></span></div>
+        <div class="ud-formily-item-control"><input name="fullName" /></div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>手机号码</label></span></div></div>
+        <div class="ud-formily-item-control phone"><select aria-label="国家区号"><option>+86</option></select><input name="mobile" type="tel" /></div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>邮箱</label></span></div></div>
+        <div class="ud-formily-item-control"><input name="email" type="email" /></div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>毕业院校</label></span></div></div>
+        <div class="ud-formily-item-control"><input name="school" /></div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>专业</label></span></div></div>
+        <div class="ud-formily-item-control"><input name="major" /></div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>身份证号</label></span></div></div>
+        <div class="ud-formily-item-control"><input name="idCard" /></div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>性别</label></span></div></div>
+        <div class="ud-formily-item-control">
+          <label class="el-radio"><input type="radio" name="gender" value="男" /><span class="el-radio__label">男</span></label>
+          <label class="el-radio"><input type="radio" name="gender" value="女" /><span class="el-radio__label">女</span></label>
+        </div>
+      </div>
+      <div class="ud-formily-item">
+        <div class="ud-formily-item-label"><div class="ud-formily-item-label-content"><span><label>期望工作地点</label></span></div></div>
+        <div class="ud-formily-item-control">
+          <select name="targetCity"><option value="">请选择</option><option value="北京">北京</option><option value="上海">上海</option></select>
+        </div>
+      </div>
+    </form>
+  </body>
+</html>

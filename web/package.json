@@ -1,0 +1,86 @@
+{
+  "name": "job-assistant-web",
+  "type": "module",
+  "private": true,
+  "packageManager": "pnpm@10.14.0",
+  "version": "0.1.0",
+  "description": "秋招求职工作台 Web 工作台",
+  "author": "luyaowang",
+  "license": "MIT",
+  "scripts": {
+    "preinstall": "npx only-allow pnpm",
+    "dev": "nuxi dev",
+    "build": "nuxi build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "preview": "nuxi preview",
+    "start": "node .output/server/index.mjs",
+    "generate": "nuxi generate",
+    "prepare": "nuxi prepare",
+    "typecheck": "vue-tsc --noEmit",
+    "test:profiles": "tsx --test server/services/application-profile-resolution.test.ts",
+    "test:personal-profile": "tsx --test server/schemas/personal-profile.test.ts",
+    "test:settings": "tsx --test server/schemas/ai-settings.test.ts",
+    "test:form-fill": "tsx --test server/schemas/form-fill.test.ts",
+    "test:jobs": "tsx --test server/schemas/job-library.test.ts",
+    "test:materials": "tsx --test server/schemas/material-card.test.ts",
+    "test:documents": "tsx --test server/schemas/document-composition.test.ts",
+    "test:resume-a4": "tsx --test server/services/resume-a4.test.ts server/schemas/resume-variant-suggestion.test.ts",
+    "test:ai-workflows": "tsx --test server/services/openai-compatible-json.test.ts",
+    "test:interview-prep": "tsx --test server/schemas/interview-prep.test.ts server/services/interview-prep-markdown.test.ts server/services/interview-prep-provider.test.ts",
+    "test:interview-record": "tsx --test server/schemas/interview-record.test.ts server/services/interview-record-markdown.test.ts server/services/interview-record-provider.test.ts server/services/interview-record-result.test.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "prisma db seed"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@langchain/core": "^1.2.5",
+    "@langchain/langgraph": "^1.4.9",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "dayjs": "1.11.13",
+    "dotenv": "^17.4.2",
+    "element-plus": "^2.10.5",
+    "lodash-unified": "1.0.3",
+    "pg": "^8.22.0",
+    "playwright-core": "1.55.0",
+    "xlsx": "^0.18.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@element-plus/nuxt": "^1.1.4",
+    "@iconify-json/ri": "^1.2.5",
+    "@nuxt/eslint": "^1.7.1",
+    "@nuxtjs/color-mode": "^3.5.2",
+    "@pinia/nuxt": "^0.11.2",
+    "@types/pg": "^8.20.4",
+    "@unocss/nuxt": "^66.4.0",
+    "@vueuse/nuxt": "^13.6.0",
+    "consola": "^3.4.2",
+    "eslint": "^9.32.0",
+    "nuxt": "^4.0.2",
+    "prisma": "^7.9.1",
+    "sass": "^1.89.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2",
+    "unocss": "66.4.0",
+    "vue-tsc": "^3.0.5"
+  },
+  "peerDependencies": {
+    "pinia": "^2.1.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "prisma"
+    ],
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "webpack",
+        "vite",
+        "vue"
+      ]
+    }
+  }
+}

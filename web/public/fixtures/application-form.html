@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>企业网申表单 Fixture</title>
+    <style>
+      body { max-width: 720px; margin: 32px auto; padding: 0 16px; font: 15px/1.5 system-ui, sans-serif; color: #1e293b; }
+      form { display: grid; gap: 16px; padding: 24px; border: 1px solid #cbd5e1; border-radius: 12px; }
+      label { display: grid; gap: 6px; }
+      input, select { padding: 8px; border: 1px solid #94a3b8; border-radius: 6px; font: inherit; }
+      button { justify-self: start; padding: 8px 12px; }
+      .note { color: #64748b; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <h1>企业网申表单（本地测试）</h1>
+    <p class="note">用于验证扩展填写规则；提交按钮只会显示提示，不会导航或发送数据。</p>
+    <p class="note">预期：组件式布局中的基础资料、年龄与具有唯一精确选项的原生下拉框会填写；已有值不覆盖；多选、单选、日期、期望地点和教育信息提示手动处理；敏感项跳过。</p>
+    <form id="application-form">
+      <div class="el-form-item"><div class="el-form-item__label">姓名 *</div><div><input id="full-name" name="fullName" autocomplete="name" /></div></div>
+      <div class="ant-form-item"><div class="ant-form-item-label"><label>手机号：</label></div><div><input id="mobile" name="mobile" type="tel" autocomplete="tel" /></div></div>
+      <table><tbody><tr><th>邮箱</th><td><input id="email" name="email" type="email" autocomplete="email" /></td></tr></tbody></table>
+      <div class="form-row"><span class="field-label">所在城市：</span><input id="city" name="residenceCity" /></div>
+      <label>国家/地区 <select id="country-region" name="countryRegion"><option value="">请选择</option><option value="cn">中国</option></select></label>
+      <label>性别 <select id="gender" name="gender"><option value="">请选择</option><option value="male">男</option><option value="female">女</option></select></label>
+      <label>年龄 <input id="age" name="age" /></label>
+      <label>微信号 <input id="wechat-id" name="wechatId" /></label>
+      <label>政治面貌 <input id="political-status" name="politicalStatus" /></label>
+      <label>个人证件 <input id="document-type" name="documentType" /></label>
+      <label>姓名 <input id="existing-name" value="页面已有内容" /></label>
+      <label>所在城市 <select id="city-select"><option value="">请选择</option><option>北京</option><option>上海</option></select></label>
+      <label>婚姻状况 <select id="marital-status"><option value="">请选择</option><option>未婚</option><option>已婚</option></select></label>
+      <label>期望工作地点 <select id="target-city" multiple><option>北京</option><option>上海</option></select></label>
+      <label>入学日期 <input id="education-date" type="date" /></label>
+      <label>毕业院校 <input id="school" name="school" /></label>
+      <label>身份证号码 <input id="id-card" name="idCard" /></label>
+      <label>登录密码 <input id="password" type="password" /></label>
+      <label>上传附件简历 <input id="resume-file" type="file" /></label>
+      <label><input id="privacy-consent" type="checkbox" /> 我已阅读个人信息授权声明</label>
+      <label>最喜欢的颜色 <input id="unknown-question" /></label>
+      <button id="submit-button" type="submit">提交申请（测试按钮）</button>
+      <output id="submit-status"></output>
+    </form>
+    <script>
+      document.querySelector('#application-form').addEventListener('submit', (event) => {
+        event.preventDefault()
+        document.querySelector('#submit-status').textContent = '测试页没有提交数据。'
+      })
+    </script>
+  </body>
+</html>

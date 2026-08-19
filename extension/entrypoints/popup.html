@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>求职助手</title>
+  </head>
+  <body>
+    <main>
+      <h1>求职助手</h1>
+      <p id="status" role="status">正在检查本地工作台连接…</p>
+      <p class="hint">只在你点击“读取当前页面”后读取可见文本；不会读取表单已有输入、不会自动发送内容。</p>
+
+      <section class="card">
+        <div class="section-heading">
+          <h2>网申填写助手</h2>
+          <button id="refresh-profiles" type="button">刷新档案</button>
+        </div>
+        <label>使用资料档案
+          <select id="application-profile" disabled>
+            <option value="">正在读取资料档案…</option>
+          </select>
+        </label>
+        <p class="hint">仅填写空白且可明确匹配的姓名、手机号、邮箱、所在城市；其余字段会在报告中提示你手动处理。</p>
+        <button id="fill-current-page" class="primary" type="button" disabled>填写</button>
+        <p id="fill-result" class="result" role="status"></p>
+        <div id="fill-report" class="fill-report" aria-live="polite"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <h2>当前岗位</h2>
+          <button id="read-page" type="button">读取当前页面</button>
+        </div>
+        <label>公司<input id="company-name" maxlength="120" placeholder="请确认或手动填写" /></label>
+        <label>岗位<input id="job-title" maxlength="120" placeholder="请确认或手动填写" /></label>
+        <label>地点<input id="location" maxlength="120" placeholder="选填" /></label>
+        <div class="field-grid">
+          <label>月薪下限（元）<input id="salary-min" type="number" min="1" step="100" placeholder="选填" /></label>
+          <label>月薪上限（元）<input id="salary-max" type="number" min="1" step="100" placeholder="选填" /></label>
+        </div>
+        <label>岗位链接<input id="job-url" maxlength="2048" placeholder="读取页面后自动带入" /></label>
+        <label>JD 原文<textarea id="description" rows="7" maxlength="20000" placeholder="可编辑，读取失败时可手动粘贴"></textarea></label>
+        <button id="save-job" class="primary" type="button">确认保存到工作台</button>
+        <p id="job-result" class="result" role="status"></p>
+      </section>
+
+      <section class="card">
+        <h2>打招呼话术</h2>
+        <label>本次简历文本<textarea id="resume-text" rows="5" maxlength="20000" placeholder="仅用于本次生成，不会保存"></textarea></label>
+        <button id="generate-greeting" class="primary" type="button">生成三版话术</button>
+        <p id="greeting-result" class="result" role="status"></p>
+        <div id="greetings" class="greetings" aria-live="polite"></div>
+      </section>
+    </main>
+    <script type="module" src="./popup/main.ts"></script>
+  </body>
+</html>

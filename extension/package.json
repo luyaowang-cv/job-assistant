@@ -1,0 +1,17 @@
+{
+  "name": "job-assistant-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "test": "node --test lib/*.test.js",
+    "zip": "wxt zip",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "wxt": "^0.20.27"
+  }
+}

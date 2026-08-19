@@ -1,0 +1,4 @@
+interface:
+  display_name: "SSD Feature Delivery"
+  short_description: "Drive features from spec to verified delivery."
+  default_prompt: "Create or continue a feature using the project SSD workflow."

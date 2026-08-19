@@ -1,0 +1,24 @@
+node_modules/
+.nuxt/
+.output/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+uploads/
+data/
+web/server/generated/
+
+# 本地调试产物与临时截图（不提交）
+tmp-*.png
+dogfood-output/
+artifacts/
+
+# 扩展构建缓存
+.wxt/
+
+# 下载的第三方 skill（依赖，非项目代码）
+.agents/
