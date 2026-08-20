@@ -5,14 +5,14 @@ import { buildFillPlan, classifyField, reconcileFillOutcome } from './form-fill-
 
 const profile = {
   basics: {
-    fullName: '王路瑶',
+    fullName: '张三',
     phone: '13800138000',
     email: 'wang@example.com',
     city: '北京',
     countryRegion: '中国',
     gender: '女',
     birthDate: '2000-01-01',
-    wechatId: 'wangluyao',
+    wechatId: 'zhangsan',
     politicalStatus: '中共党员',
     documentType: '居民身份证',
   },
@@ -142,7 +142,7 @@ test('fills an exact gender radio group and the first preferred work location', 
 
 test('fills highest education fields locally before requesting AI', () => {
   const educationProfile = {
-    basics: { fullName: '王路瑶', email: 'wang@example.com' },
+    basics: { fullName: '张三', email: 'wang@example.com' },
     educations: [
       { school: 'A 大学', major: '软件工程', educationLevel: '本科', academicDegree: '工学学士', endDate: '2025-06-30' },
       { school: 'B 大学', major: '计算机科学与技术', educationLevel: '硕士研究生', academicDegree: '工学硕士', endDate: '2027-06-30' },
@@ -158,12 +158,12 @@ test('fills highest education fields locally before requesting AI', () => {
     { id: 'graduation', label: '毕业时间', inputType: 'text' },
   ])
   assert.deepEqual(plan.entries.map(entry => entry.status), Array(7).fill('filled'))
-  assert.deepEqual(plan.entries.map(entry => entry.value), ['王路瑶', 'wang@example.com', 'B 大学', '计算机科学与技术', '硕士研究生', '工学硕士', '2027-06-30'])
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['张三', 'wang@example.com', 'B 大学', '计算机科学与技术', '硕士研究生', '工学硕士', '2027-06-30'])
 })
 
 test('keeps ATSX custom selectors manual while filling Formily metadata text fields', () => {
   const educationProfile = {
-    basics: { fullName: '王路瑶', phone: '13800138000', email: 'wang@example.com', documentNumber: '110101199001011234' },
+    basics: { fullName: '张三', phone: '13800138000', email: 'wang@example.com', documentNumber: '110101199001011234' },
     educations: [{ school: 'A 大学', major: '软件工程', endDate: '2027-06-30' }],
   }
   const plan = buildFillPlan(educationProfile, [
