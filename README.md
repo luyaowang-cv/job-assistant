@@ -32,13 +32,29 @@
 
 ## 🖥 界面预览
 
-| 首页看板 | 投递画像 |
-| :---: | :---: |
-| ![首页看板](docs/images/home.png) | ![投递画像](docs/images/application-profile.png) |
+### 工作台
 
-| 个人画像 | 简历中心 |
+| 首页看板 | 投递看板 |
 | :---: | :---: |
-| ![个人画像](docs/images/personal-profile.png) | ![简历中心](docs/images/resumes.png) |
+| ![首页看板](docs/images/home1.png) | ![投递看板](docs/images/投递看板.png) |
+
+| 岗位库 | 网申档案 |
+| :---: | :---: |
+| ![岗位库](docs/images/岗位库.png) | ![网申档案](docs/images/网申档案.png) |
+
+| 素材库 | 简历版本 |
+| :---: | :---: |
+| ![素材库](docs/images/素材库.png) | ![简历版本](docs/images/简历版本.png) |
+
+| 面试准备 | 首页 |
+| :---: | :---: |
+| ![面试准备](docs/images/面试准备.png) | ![首页](docs/images/home2.png) |
+
+### 浏览器插件
+
+| 岗位采集 | 一键填表 |
+| :---: | :---: |
+| ![岗位采集](docs/images/插件岗位.png) | ![一键填表](docs/images/插件填写.png) |
 
 ## 🧰 技术栈
 
