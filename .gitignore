@@ -22,3 +22,7 @@ artifacts/
 
 # 下载的第三方 skill（依赖，非项目代码）
 .agents/
+
+# 本地数据与进程文件（不提交）
+*.xlsx
+*.pid

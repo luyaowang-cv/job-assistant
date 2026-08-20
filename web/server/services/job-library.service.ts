@@ -242,6 +242,9 @@ export async function importExcelJobs(buffer: Buffer, filename: string) {
 
   const rows: ImportedJobRow[] = []
   let skipped = 0
+  const writtenTestAliases = ['是否笔试', '笔试', '有无笔试', 'written test', '笔试环节']
+  const normalizedHeader = (name: string) => name.replace(/\\s/g, '').toLowerCase()
+  const writtenTestCol = [...header.entries()].find(([, name]) => writtenTestAliases.some(alias => normalizedHeader(name) === normalizedHeader(alias)))?.[0]
   for (let i = 1; i < rawRows.length; i++) {
     const raw: Record<string, string | null> = {}
     for (const [colIndex, name] of header) raw[name] = xlsxCellText(rawRows[i]?.[colIndex])
@@ -257,7 +260,7 @@ export async function importExcelJobs(buffer: Buffer, filename: string) {
       recruitmentType: raw[excelColumnMap.recruitmentType],
       announcementUrl: raw[excelColumnMap.announcementUrl],
       url: raw[excelColumnMap.url],
-      hasWrittenTest: null,
+      hasWrittenTest: writtenTestCol === undefined ? null : booleanValue(rawRows[i]?.[writtenTestCol] as FeishuValue),
     })
     if (!parsed.success) { skipped += 1; continue }
     rows.push(parsed.data)
@@ -289,10 +292,10 @@ export async function listJobs(query: ListJobsQuery) {
   const user = await getLocalUser()
   const where: Prisma.JobWhereInput = {
     ...(query.includeOffline ? {} : { offlineAt: null }),
-    ...(query.location ? { location: query.location } : {}),
-    ...(query.recruitmentType ? { recruitmentType: query.recruitmentType } : {}),
+    ...(query.location ? { location: { contains: query.location, mode: 'insensitive' } } : {}),
+    ...(query.recruitmentType ? { recruitmentType: { contains: query.recruitmentType, mode: 'insensitive' } } : {}),
     ...(query.hasWrittenTest === undefined ? {} : { hasWrittenTest: query.hasWrittenTest }),
-    ...(query.industry || query.companyType ? { company: { ...(query.industry ? { industry: query.industry } : {}), ...(query.companyType ? { companyType: query.companyType } : {}) } } : {}),
+    ...(query.industry || query.companyType ? { company: { ...(query.industry ? { industry: { contains: query.industry, mode: 'insensitive' } } : {}), ...(query.companyType ? { companyType: { contains: query.companyType, mode: 'insensitive' } } : {}) } } : {}),
     ...(query.search ? { OR: [{ title: { contains: query.search, mode: 'insensitive' } }, { company: { name: { contains: query.search, mode: 'insensitive' } } }] } : {}),
   }
   const [items, total, filterRows] = await prisma.$transaction([
@@ -301,7 +304,19 @@ export async function listJobs(query: ListJobsQuery) {
     prisma.job.findMany({ where: { offlineAt: null }, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
   ])
   const values = (items: Array<string | null>) => [...new Set(items.filter((value): value is string => Boolean(value)))].sort()
-  return { items: items.map(({ applications, ...job }) => ({ ...job, applicationId: applications[0]?.id ?? null })), page: query.page, pageSize: query.pageSize, total, filters: { locations: values(filterRows.map(row => row.location)), industries: values(filterRows.map(row => row.company.industry)), companyTypes: values(filterRows.map(row => row.company.companyType)), recruitmentTypes: values(filterRows.map(row => row.recruitmentType)) } }
+  const splitTokens = (value: string) => value.split(/[,、，;；/]+/).map(item => item.trim()).filter(Boolean)
+  const uniqueTokens = (items: Array<string | null>, dropJunk = false) => {
+    const set = new Set<string>()
+    for (const value of items) {
+      if (!value) continue
+      for (const token of splitTokens(value)) {
+        if (dropJunk && token === '-') continue
+        set.add(token)
+      }
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  }
+  return { items: items.map(({ applications, ...job }) => ({ ...job, applicationId: applications[0]?.id ?? null })), page: query.page, pageSize: query.pageSize, total, filters: { locations: uniqueTokens(filterRows.map(row => row.location)), industries: uniqueTokens(filterRows.map(row => row.company.industry), true), companyTypes: values(filterRows.map(row => row.company.companyType)).filter(value => value !== '-'), recruitmentTypes: uniqueTokens(filterRows.map(row => row.recruitmentType)) } }
 }
 
 export async function createApplicationFromJob(jobId: string) {

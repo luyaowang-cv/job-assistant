@@ -20,7 +20,7 @@ interface JobFilters { locations: string[], industries: string[], companyTypes: 
 interface JobListData { items: JobItem[], page: number, pageSize: number, total: number, filters: JobFilters }
 interface FeishuConnection { connected: boolean, expiresAt: string | null, scopes: string[] }
 
-const filters = reactive({ search: '', location: '', industry: '', companyType: '', recruitmentType: '', hasWrittenTest: undefined as boolean | undefined, includeOffline: false })
+const filters = reactive({ search: '', location: '', industry: '', companyType: '', recruitmentType: '', hasWrittenTest: undefined as 'true' | 'false' | 'null' | undefined, includeOffline: false })
 const jobs = ref<JobItem[]>([])
 const options = ref<JobFilters>({ locations: [], industries: [], companyTypes: [], recruitmentTypes: [] })
 const total = ref(0)
@@ -76,7 +76,7 @@ async function fetchJobs() {
   databaseError.value = false
   try {
     const response = await $fetch<{ data: JobListData }>('/api/v1/jobs', {
-      query: { page: page.value, pageSize: 20, search: filters.search || undefined, location: filters.location || undefined, industry: filters.industry || undefined, companyType: filters.companyType || undefined, recruitmentType: filters.recruitmentType || undefined, hasWrittenTest: filters.hasWrittenTest === undefined ? undefined : String(filters.hasWrittenTest), includeOffline: String(filters.includeOffline) },
+      query: { page: page.value, pageSize: 20, search: filters.search || undefined, location: filters.location || undefined, industry: filters.industry || undefined, companyType: filters.companyType || undefined, recruitmentType: filters.recruitmentType || undefined, hasWrittenTest: filters.hasWrittenTest, includeOffline: String(filters.includeOffline) },
     })
     jobs.value = response.data.items
     total.value = response.data.total
@@ -188,7 +188,7 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()])
         <el-select v-model="filters.industry" clearable filterable placeholder="行业分类" aria-label="按行业分类筛选"><el-option v-for="value in options.industries" :key="value" :label="value" :value="value" /></el-select>
         <el-select v-model="filters.companyType" clearable filterable placeholder="企业性质" aria-label="按企业性质筛选"><el-option v-for="value in options.companyTypes" :key="value" :label="value" :value="value" /></el-select>
         <el-select v-model="filters.recruitmentType" clearable filterable placeholder="批次" aria-label="按批次筛选"><el-option v-for="value in options.recruitmentTypes" :key="value" :label="value" :value="value" /></el-select>
-        <el-select v-model="filters.hasWrittenTest" clearable placeholder="笔试" aria-label="按笔试筛选"><el-option label="有笔试" :value="true" /><el-option label="无笔试" :value="false" /></el-select>
+        <el-select v-model="filters.hasWrittenTest" clearable placeholder="笔试" aria-label="按笔试筛选"><el-option label="有笔试" value="true" /><el-option label="无笔试" value="false" /><el-option label="未标注" value="null" /></el-select>
         <el-checkbox v-model="filters.includeOffline" class="job-library__offline-toggle">显示已下线</el-checkbox>
         <el-button plain class="application-records__reset" @click="resetFilters">重置</el-button>
         <el-upload :auto-upload="false" :show-file-list="false" accept=".xlsx" :on-change="onExcelChange" class="job-library__upload">

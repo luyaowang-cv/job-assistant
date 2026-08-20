@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { repository } from "~/../package.json";
+import pkg from '~/../package.json'
+const repositoryUrl = (pkg as { repository?: { url?: string } }).repository?.url ?? ''
 </script>
 
 <template>
-  <a class="inline-flex justify-center items-center dark:text-white" :href="repository.url" target="_blank">
+  <a v-if="repositoryUrl" class="inline-flex justify-center items-center dark:text-white" :href="repositoryUrl" target="_blank">
     <div i-ri-github-line />
   </a>
 </template>

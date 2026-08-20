@@ -317,7 +317,7 @@ onMounted(async () => {
 
       <div class="interview-record-body">
         <aside class="interview-record-sidebar">
-          <div class="material-surface material-surface--transparent">
+          <div class="interview-record-sidebar-panel">
             <p class="material-section-label">来源绑定</p>
             <el-form label-position="top" size="small">
               <el-form-item label="投递记录（可选）">
@@ -528,13 +528,22 @@ onMounted(async () => {
   width: 324px;
   min-height: 0;
   overflow: hidden;
-  padding: 16px;
+  padding: 20px 22px 24px;
   border-right: 1px solid rgba(190, 204, 195, 0.65);
   background: rgba(248, 250, 252, 0.55);
 }
 
-.interview-record-sidebar .material-surface {
-  padding: var(--space-5);
+.interview-record-sidebar-panel {
+  padding: 2px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.interview-record-sidebar .el-form-item {
+  margin-bottom: 14px;
 }
 
 .interview-record-main {

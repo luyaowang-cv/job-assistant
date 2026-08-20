@@ -167,7 +167,7 @@ onMounted(() => void load())
         </div>
         <aside class="card-detail" aria-live="polite">
           <template v-if="selected">
-            <div class="card-detail__heading"><div><span>{{ typeLabels[selected.type] }}</span><h2>{{ selected.title }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><el-button v-if="!selected.archivedAt" text type="primary" @click="beginEdit(selected)">编辑</el-button><el-button v-if="!selected.archivedAt" text type="danger" @click="archive">归档</el-button><el-button text type="danger" :loading="deleting" @click="removeCard">删除</el-button></div>
+            <div class="card-detail__heading"><div><span>{{ typeLabels[selected.type] }}</span><h2>{{ selected.title }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><el-button v-if="!selected.archivedAt" plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button v-if="!selected.archivedAt" plain type="danger" @click="archive">归档</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div>
             <div class="variant-history"><article v-for="item in selected.variants" :key="item.id"><b>{{ item.name }}</b><small>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small><p>{{ item.content }}</p></article></div>
             <el-form v-if="!selected.archivedAt" label-position="top">
               <el-form-item label="新增文案版本"><el-input v-model="variant.name" placeholder="例如：互联网岗精简版" /></el-form-item>

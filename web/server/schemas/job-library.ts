@@ -14,7 +14,7 @@ export const listJobsQuerySchema = z.object({
   industry: text(80),
   companyType: text(80),
   recruitmentType: text(80),
-  hasWrittenTest: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
+  hasWrittenTest: z.enum(['true', 'false', 'null']).transform(value => value === 'null' ? null : value === 'true').optional(),
   includeOffline: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
 })
 
