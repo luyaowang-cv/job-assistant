@@ -5,6 +5,10 @@
   "packageManager": "pnpm@10.14.0",
   "version": "0.1.0",
   "description": "秋招求职工作台 Web 工作台",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luyaowang-cv/job-assistant"
+  },
   "author": "luyaowang",
   "license": "MIT",
   "scripts": {
