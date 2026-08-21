@@ -6,6 +6,10 @@ const date = z.preprocess(
   value => (value === '' || value === null ? undefined : value),
   z.string().trim().regex(/^\d{4}(?:-\d{2})?(?:-\d{2})?$/, '日期格式应为 YYYY、YYYY-MM 或 YYYY-MM-DD。').optional(),
 )
+const availabilityText = z.preprocess(
+  value => (value === '' || value === null ? undefined : value),
+  z.string().trim().max(80, '可到岗时间说明不能超过 80 个字符。').optional(),
+)
 
 const basicsSchema = z.object({
   fullName: text(80),
@@ -21,7 +25,7 @@ const namedDetailSchema = z.object({ name: z.string().trim().min(1).max(120), de
 const experienceSchema = z.object({ name: z.string().trim().min(1).max(160), startDate: date, endDate: date, description: text(2_000) }).strict()
 const applicationStrategySchema = z.object({
   targetLocations: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
-  expectedSalary: text(80), availableDate: date, recruitmentSource: text(120), referralCode: text(160),
+  expectedSalary: text(80), availableDate: availabilityText, recruitmentSource: text(120), referralCode: text(160),
 }).strict()
 
 export const applicationProfileSchema = z.object({

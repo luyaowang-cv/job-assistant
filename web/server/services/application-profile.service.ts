@@ -1,4 +1,4 @@
-import { DocumentMutationType } from '../generated/prisma/client'
+import { DocumentMutationType, ResumeVersionType } from '../generated/prisma/client'
 import type { Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { ApplicationProfileInput, ApplicationStrategy } from '../schemas/application-profile'
@@ -40,6 +40,13 @@ function buildFillContexts(profile: Awaited<ReturnType<typeof resolveProfile>>, 
     basics,
     educations: profile.educations,
     strategy,
+    workExperiences: profile.workExperiences,
+    projects: profile.projects,
+    skills: profile.skills,
+    languages: profile.languages,
+    certificates: profile.certificates,
+    campusExperiences: profile.campusExperiences,
+    awards: profile.awards,
     resumeVersion: resumeVersion ? { id: resumeVersion.id, type: resumeVersion.type } : null,
   }
   const aiContext = {
@@ -71,6 +78,9 @@ export async function getApplicationProfileFillContext(profileId: string) {
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id }, select: publicProfileSelect })
   if (!profile) return null
   const resolved = await resolveProfile(user.id, profile)
+  const resumeVersion = profile.resumeVersionId
+    ? await prisma.resumeVersion.findFirst({ where: { id: profile.resumeVersionId, resume: { userId: user.id } }, select: { id: true, type: true, content: true } })
+    : await prisma.resumeVersion.findFirst({ where: { type: ResumeVersionType.BASE, resume: { userId: user.id } }, select: { id: true, type: true, content: true }, orderBy: { createdAt: 'desc' } })
   const currentVersionId = await prisma.applicationProfile.findFirst({
     where: { id: profileId, userId: user.id },
     select: { currentVersionId: true },
@@ -83,15 +93,33 @@ export async function getApplicationProfileFillContext(profileId: string) {
         localFacts: {
           basics: composed.resolved.basics,
           educations: composed.resolved.educations,
+          strategy: asRecord(resolved.strategy),
+          workExperiences: resolved.workExperiences,
+          projects: resolved.projects,
+          skills: resolved.skills,
+          languages: resolved.languages,
+          certificates: resolved.certificates,
+          campusExperiences: resolved.campusExperiences,
+          awards: resolved.awards,
           blocks: composed.resolved.blocks,
+          references: composed.resolved.references,
+          resumeVersion: resumeVersion ? { id: resumeVersion.id, type: resumeVersion.type } : null,
         },
-        aiContext: composed.resolved,
+        aiContext: {
+          ...composed.resolved,
+          strategy: asRecord(resolved.strategy),
+          workExperiences: resolved.workExperiences,
+          projects: resolved.projects,
+          skills: resolved.skills,
+          languages: resolved.languages,
+          certificates: resolved.certificates,
+          campusExperiences: resolved.campusExperiences,
+          awards: resolved.awards,
+          resumeVersion: resumeVersion ? { id: resumeVersion.id, type: resumeVersion.type, content: resumeVersion.content } : null,
+        },
       }
     }
   }
-  const resumeVersion = profile.resumeVersionId
-    ? await prisma.resumeVersion.findFirst({ where: { id: profile.resumeVersionId, resume: { userId: user.id } }, select: { id: true, type: true, content: true } })
-    : null
   return { profileName: profile.name, ...buildFillContexts(resolved, resumeVersion) }
 }
 

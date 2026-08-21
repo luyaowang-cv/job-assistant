@@ -17,13 +17,14 @@ const SENSITIVE_PATTERNS = [
 
 const CATEGORY_PATTERNS = [
   ['education', /(?:教育|学历|学校|院校|专业|学位|毕业|education|school|university|major|degree)/i],
-  ['work', /(?:工作经历|工作经验|任职|雇主|公司经历|work\s*(?:experience|history)|employment)/i],
-  ['project', /(?:项目经历|项目经验|项目名称|project)/i],
+  ['work', /(?:工作经历|工作经验|实习经历|实习经验|任职|雇主|公司经历|work\s*(?:experience|history)|internship|employment)/i],
+  ['project', /(?:项目经历|项目经验|项目名称|项目描述|project)/i],
   ['skill', /(?:技能|技术栈|skill|technology)/i],
   ['language', /(?:语言能力|外语|language)/i],
   ['certificate', /(?:证书|资格证|certificat|qualification)/i],
   ['campus', /(?:校园|社团|学生工作|campus)/i],
   ['award', /(?:获奖|奖项|荣誉|award|honou?r)/i],
+  ['self_evaluation', /(?:自我评价|个人评价|个人总结|自我介绍|self[\s-]*(?:evaluation|assessment|introduction)|professional\s*summary)/i],
 ]
 
 const BASIC_RULES = [

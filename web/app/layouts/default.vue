@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Collection, Document, Grid, House, Search, Setting, User } from '@element-plus/icons-vue'
+import { ChatDotRound, Collection, Document, Grid, House, Search, Setting, User } from '@element-plus/icons-vue'
 
 const route = useRoute()
 
 const routeMeta: Record<string, { group: string, label: string }> = {
   '/': { group: '工作台', label: '今日工作台' },
   '/applications': { group: '推进求职', label: '投递看板' },
+  '/agent': { group: '推进求职', label: '求职 Agent' },
   '/jobs': { group: '推进求职', label: '岗位库' },
   '/materials': { group: '准备资料', label: '素材库' },
   '/resumes': { group: '准备资料', label: '简历版本' },
@@ -33,6 +34,7 @@ const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工�
         <p class="mb-2 px-2 font-mono text-[11px] tracking-[0.14em] text-[#8290a1]">推进求职</p>
         <el-menu :default-active="$route.path" router class="mb-6 border-0 !bg-transparent">
           <el-menu-item index="/"><el-icon><House /></el-icon><span>今日工作台</span></el-menu-item>
+          <el-menu-item index="/agent"><el-icon><ChatDotRound /></el-icon><span>求职 Agent</span></el-menu-item>
           <el-menu-item index="/applications"><el-icon><Grid /></el-icon><span>投递看板</span></el-menu-item>
         </el-menu>
         <el-menu :default-active="$route.path" router class="mb-6 border-0 !bg-transparent">

@@ -42,7 +42,7 @@ export function scanVisibleFormFields() {
 
     let cursor = element.parentElement
     for (let level = 0; cursor && level < 5; level += 1, cursor = cursor.parentElement) {
-      const controlsInContainer = cursor.querySelectorAll('input, textarea, select').length
+      const controlsInContainer = cursor.querySelectorAll('input, textarea, select, [contenteditable="true"]').length
       const text = shortVisibleText(cursor)
       // A field wrapper normally holds at most a few related controls. This avoids
       // accidentally using the entire page text as a field label or context.
@@ -112,10 +112,9 @@ export function scanVisibleFormFields() {
     const text = shortVisibleText(container)
     return text && text !== labelFor(element) ? text.slice(0, 240) : ''
   }
-  const allControls = Array.from(document.querySelectorAll('input, textarea, select'))
-  const customSelectFor = (element) => element.closest('.ud__select')
-    ?? element.closest('.el-select')
-    ?? (element.getAttribute('role') === 'combobox' && element.hasAttribute('readonly') ? element : null)
+  const allControls = Array.from(document.querySelectorAll('input, textarea, select, [contenteditable="true"]'))
+  const customSelectFor = (element) => element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select')
+    ?? (element.getAttribute('role') === 'combobox' ? element.closest('[role="combobox"]') ?? element : null)
   const radioGroupFor = (element) => {
     const name = element.getAttribute('name')
     if (name) return allControls.filter(candidate => candidate instanceof HTMLInputElement && candidate.type === 'radio' && candidate.getAttribute('name') === name)
@@ -131,6 +130,7 @@ export function scanVisibleFormFields() {
   const visibleControls = allControls.map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden' && !(element instanceof HTMLInputElement && element.type === 'radio'))
     .filter(({ element }) => !customSelectFor(element))
+    .filter(({ element }) => !element.hasAttribute('disabled') && !element.hasAttribute('readonly') && element.getAttribute('aria-disabled') !== 'true')
   const radioGroups = []
   const seenRadioAnchors = new Set()
   allControls.forEach((element, index) => {
@@ -141,6 +141,7 @@ export function scanVisibleFormFields() {
     const visibleOption = group.find(radio => isVisible(radio.closest('label') ?? radio.parentElement ?? radio))
     if (!visibleOption) return
     radioGroups.push({
+      sortIndex: anchorIndex,
       id: `radio-group-${anchorIndex}`,
       label: labelFor(element),
       context: contextFor(element),
@@ -154,43 +155,72 @@ export function scanVisibleFormFields() {
       isEditable: group.every(radio => !radio.disabled),
     })
   })
+  const seenCustomSelects = new Set()
   const customSelects = allControls.map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden' && Boolean(customSelectFor(element)))
+    .filter(({ element }) => {
+      const container = customSelectFor(element)
+      if (!container || seenCustomSelects.has(container)) return false
+      seenCustomSelects.add(container)
+      return true
+    })
     .map(({ element, index }) => ({
+      sortIndex: index,
       id: `custom-select-${index}`,
       label: labelFor(element),
       context: contextFor(element),
       name: element.getAttribute('name') ?? '',
       placeholder: element.getAttribute('placeholder') ?? '',
-      inputType: element instanceof HTMLInputElement ? element.type : '',
+      inputType: element instanceof HTMLInputElement ? element.type : (element.getAttribute('contenteditable') === 'true' ? 'contenteditable' : ''),
       controlType: 'custom-select',
       options: [],
       multiple: false,
-      hasValue: Boolean(element.value?.trim()),
-      // Universe Design selectors are intentionally outside the current fill
-      // scope. Marking them unavailable prevents both local and AI paths from
-      // clicking a dropdown, search input or clear affordance.
-      isEditable: !element.closest('.ud__select') && !element.hasAttribute('disabled'),
+      hasValue: Boolean((element.value ?? element.textContent ?? '').trim()),
+      isEditable: !element.hasAttribute('disabled') && element.getAttribute('aria-disabled') !== 'true',
     }))
 
-  return visibleControls.map(({ element, index }) => ({
+  const descriptors = visibleControls.map(({ element, index }) => ({
+    sortIndex: index,
     id: `form-field-${index}`,
     label: labelFor(element),
     context: contextFor(element),
     name: element.getAttribute('name') ?? '',
     placeholder: element.getAttribute('placeholder') ?? '',
-    inputType: element instanceof HTMLInputElement ? element.type : '',
+    inputType: element instanceof HTMLInputElement ? element.type : (element.getAttribute('contenteditable') === 'true' ? 'contenteditable' : ''),
     controlType: element.tagName.toLowerCase(),
     options: element instanceof HTMLSelectElement ? Array.from(element.options).map(option => option.textContent?.trim() ?? '') : [],
     multiple: element instanceof HTMLSelectElement && element.multiple,
     hasValue: element instanceof HTMLInputElement && ['checkbox', 'radio'].includes(element.type)
       ? element.checked
-      : Boolean(element.value?.trim()),
-    isEditable: !element.hasAttribute('disabled') && !element.hasAttribute('readonly'),
-  })).concat(radioGroups, customSelects)
+      : Boolean((element.value ?? element.textContent ?? '').trim()),
+    isEditable: !element.hasAttribute('disabled') && !element.hasAttribute('readonly') && element.getAttribute('aria-disabled') !== 'true',
+  })).concat(radioGroups, customSelects).sort((left, right) => left.sortIndex - right.sortIndex || left.id.localeCompare(right.id))
+  const labelTotals = descriptors.reduce((counts, field) => {
+    const key = normalizeLabel(field.label)
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1)
+    return counts
+  }, new Map())
+  const labelSeen = new Map()
+  return descriptors.map((field, index) => {
+    const { sortIndex: _sortIndex, ...descriptor } = field
+    const label = normalizeLabel(field.label)
+    const occurrence = label ? (labelSeen.get(label) ?? 0) + 1 : 0
+    if (label) labelSeen.set(label, occurrence)
+    const nearby = descriptors.slice(Math.max(0, index - 2), index + 3)
+      .filter(candidate => candidate !== field)
+      .map(candidate => normalizeLabel(candidate.label))
+      .filter(Boolean)
+    const context = [
+      field.context,
+      `页面字段 ${index + 1}/${descriptors.length}`,
+      label && labelTotals.get(label) > 1 ? `同名字段 ${occurrence}/${labelTotals.get(label)}` : '',
+      nearby.length ? `相邻字段：${nearby.join('、')}` : '',
+    ].filter(Boolean).join('；').slice(0, 240)
+    return { ...descriptor, context }
+  })
 }
 
-export function applyFillEntries(instructions) {
+export async function applyFillEntries(instructions) {
   const entries = Array.isArray(instructions) ? instructions : (instructions?.entries ?? [])
   const unresolvedIds = new Set(Array.isArray(instructions) ? [] : (instructions?.unresolvedIds ?? []))
   const isVisible = (element) => {
@@ -198,11 +228,12 @@ export function applyFillEntries(instructions) {
     const rect = element.getBoundingClientRect()
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
   }
-  const controls = Array.from(document.querySelectorAll('input, textarea, select'))
+  const controls = Array.from(document.querySelectorAll('input, textarea, select, [contenteditable="true"]'))
     .map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden')
     .filter(({ element }) => !(element instanceof HTMLInputElement && element.type === 'radio'))
-    .filter(({ element }) => !(element.closest('.ud__select') || element.closest('.el-select') || (element.getAttribute('role') === 'combobox' && element.hasAttribute('readonly'))))
+    .filter(({ element }) => !(element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select') || element.getAttribute('role') === 'combobox'))
+    .filter(({ element }) => !element.hasAttribute('disabled') && !element.hasAttribute('readonly') && element.getAttribute('aria-disabled') !== 'true')
   const byId = new Map(entries.map(entry => [entry.fieldId, entry]))
   const appliedIds = []
   const skippedExistingIds = []
@@ -212,31 +243,40 @@ export function applyFillEntries(instructions) {
     element.style.backgroundColor = color
     element.style.transition = 'background-color 160ms ease'
   }
+  const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+  const reveal = async (element) => {
+    element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    mark(element, '#fef3c7')
+    element.focus?.({ preventScroll: true })
+    await pause(220)
+  }
 
-  controls.forEach(({ element, index }) => {
+  for (const { element, index } of controls) {
     const fieldId = `form-field-${index}`
     const entry = byId.get(fieldId)
     if (!entry) {
-      if (unresolvedIds.has(fieldId) && !element.value?.trim() && !element.hasAttribute('disabled') && !element.hasAttribute('readonly')) mark(element, '#fee2e2')
-      return
+      if (unresolvedIds.has(fieldId) && !(element.value ?? element.textContent ?? '').trim()) mark(element, '#fee2e2')
+      continue
     }
     seenIds.add(fieldId)
 
     if (element.hasAttribute('disabled') || element.hasAttribute('readonly')) {
       unavailableIds.push(fieldId)
       if (unresolvedIds.has(fieldId)) mark(element, '#fee2e2')
-      return
+      continue
     }
-    if (element.value.trim()) {
+    if ((element.value ?? element.textContent ?? '').trim()) {
       skippedExistingIds.push(fieldId)
-      return
+      continue
     }
+
+    await reveal(element)
 
     if (element instanceof HTMLSelectElement) {
       if (element.multiple) {
         unavailableIds.push(fieldId)
         if (unresolvedIds.has(fieldId)) mark(element, '#fee2e2')
-        return
+        continue
       }
       const normalizeOption = (value) => String(value ?? '')
         .replace(/\s+/g, ' ')
@@ -244,12 +284,20 @@ export function applyFillEntries(instructions) {
         .replace(/\s*[*＊]\s*$/, '')
         .replace(/\s*(?:必填|required)?\s*[:：]\s*$/i, '')
         .trim()
-      const matches = Array.from(element.options)
-        .filter(option => !option.disabled && normalizeOption(option.textContent) === normalizeOption(entry.value))
+      const availableOptions = Array.from(element.options).filter(option => !option.disabled)
+      const wanted = normalizeOption(entry.value)
+      const exactMatches = availableOptions.filter(option => normalizeOption(option.textContent) === wanted)
+      const relaxedWanted = wanted.replace(/[省市]$/, '')
+      const matches = exactMatches.length ? exactMatches : availableOptions.filter((option) => {
+        const optionValue = normalizeOption(option.textContent)
+        return Boolean(optionValue) && (optionValue.replace(/[省市]$/, '') === relaxedWanted
+          || optionValue.includes(wanted)
+          || wanted.includes(optionValue))
+      })
       if (matches.length !== 1) {
         unavailableIds.push(fieldId)
         mark(element, '#fee2e2')
-        return
+        continue
       }
       const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
       if (setter) setter.call(element, matches[0].value)
@@ -260,28 +308,33 @@ export function applyFillEntries(instructions) {
       if (element.value !== matches[0].value) {
         unavailableIds.push(fieldId)
         mark(element, '#fee2e2')
-        return
+        continue
       }
       mark(element, '#dcfce7')
       appliedIds.push(fieldId)
-      return
+      await pause(180)
+      continue
     }
 
-    const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
-    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
-    if (setter) setter.call(element, entry.value)
-    else element.value = entry.value
+    if (element.getAttribute('contenteditable') === 'true') element.textContent = String(entry.value)
+    else {
+      const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+      const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+      if (setter) setter.call(element, entry.value)
+      else element.value = entry.value
+    }
     element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(entry.value) }))
     element.dispatchEvent(new Event('change', { bubbles: true }))
     element.dispatchEvent(new Event('blur', { bubbles: true }))
-    if (element.value !== String(entry.value)) {
+    if (String(element.value ?? element.textContent ?? '') !== String(entry.value)) {
       unavailableIds.push(fieldId)
       mark(element, '#fee2e2')
-      return
+      continue
     }
     mark(element, '#dcfce7')
     appliedIds.push(fieldId)
-  })
+    await pause(180)
+  }
 
   return {
     appliedIds,
@@ -303,7 +356,7 @@ export async function applyChoiceEntries(instructions) {
     .replace(/^[*\s]+|[*\s]+$/g, '')
     .replace(/[:：]\s*$/, '')
     .trim()
-  const allControls = Array.from(document.querySelectorAll('input, textarea, select'))
+  const allControls = Array.from(document.querySelectorAll('input, textarea, select, [contenteditable="true"]'))
   const byId = new Map(entries.map(entry => [entry.fieldId, entry]))
   const appliedIds = []
   const skippedExistingIds = []
@@ -313,7 +366,11 @@ export async function applyChoiceEntries(instructions) {
     element.style.backgroundColor = color
     element.style.transition = 'background-color 160ms ease'
   }
-  const waitForRender = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+  const waitForRender = async () => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    await pause(140)
+  }
   const radioOptionText = (element) => normalizeOption(
     element.getAttribute('aria-label')
       ?? element.closest('label')?.textContent
@@ -364,9 +421,16 @@ export async function applyChoiceEntries(instructions) {
     appliedIds.push(fieldId)
   })
 
+  const seenCustomInputs = new Set()
   const customInputs = allControls.map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden')
-    .filter(({ element }) => element.closest('.el-select') || (element.getAttribute('role') === 'combobox' && element.hasAttribute('readonly')))
+    .filter(({ element }) => element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select') || element.getAttribute('role') === 'combobox')
+    .filter(({ element }) => {
+      const container = element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select') ?? element.closest('[role="combobox"]') ?? element
+      if (seenCustomInputs.has(container)) return false
+      seenCustomInputs.add(container)
+      return true
+    })
   for (const { element, index } of customInputs) {
     const fieldId = `custom-select-${index}`
     const entry = byId.get(fieldId)
@@ -376,27 +440,44 @@ export async function applyChoiceEntries(instructions) {
       markUnavailable(fieldId, element)
       continue
     }
-    if (element.value.trim()) {
+    if ((element.value ?? element.textContent ?? '').trim()) {
       skippedExistingIds.push(fieldId)
       continue
     }
-    ;(element.closest('.el-select') ?? element).click()
+    const selectContainer = element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select') ?? element.closest('[role="combobox"]') ?? element
+    selectContainer.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+    mark(element, '#fef3c7')
+    element.focus?.({ preventScroll: true })
+    await pause(220)
+    selectContainer.click()
     await waitForRender()
-    const matches = Array.from(document.querySelectorAll('.el-select-dropdown__item, [role="option"]'))
+    const options = Array.from(document.querySelectorAll('.ud__select-option, .ud__select-dropdown-option, .ud__select-option-item, .el-select-dropdown__item, .ant-select-item-option, .arco-select-option, .semi-select-option, [role="option"]'))
       .filter(option => isVisible(option) && option.getAttribute('aria-disabled') !== 'true' && !option.classList.contains('is-disabled'))
-      .filter(option => normalizeOption(option.textContent) === normalizeOption(entry.value))
+    const exactMatches = options.filter(option => normalizeOption(option.textContent) === normalizeOption(entry.value))
+    const wanted = normalizeOption(entry.value)
+    const relaxedWanted = wanted.replace(/[省市]$/, '')
+    const matches = exactMatches.length ? exactMatches : options.filter((option) => {
+      const optionValue = normalizeOption(option.textContent)
+      return Boolean(optionValue) && (optionValue.replace(/[省市]$/, '') === relaxedWanted
+        || optionValue.includes(wanted)
+        || wanted.includes(optionValue))
+    })
     if (matches.length !== 1) {
       markUnavailable(fieldId, element)
       continue
     }
+    matches[0].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+    await pause(120)
     matches[0].click()
     await waitForRender()
-    if (normalizeOption(element.value) !== normalizeOption(entry.value)) {
+    const selectedText = normalizeOption(selectContainer.textContent)
+    if (normalizeOption(element.value ?? element.textContent) !== normalizeOption(entry.value) && !selectedText.includes(normalizeOption(entry.value))) {
       markUnavailable(fieldId, element)
       continue
     }
     mark(element, '#dcfce7')
     appliedIds.push(fieldId)
+    await pause(180)
   }
 
   for (const entry of entries) {

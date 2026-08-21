@@ -1,6 +1,6 @@
 import './style.css'
 import { applyChoiceEntries, applyFillEntries, scanVisibleFormFields } from '../../lib/form-page-bridge.js'
-import { buildFillPlan, reconcileFillOutcome } from '../../lib/form-fill-rules.js'
+import { buildFillPlan } from '../../lib/form-fill-rules.js'
 
 const statusElement = document.querySelector<HTMLElement>('#status')
 const readPageButton = document.querySelector<HTMLButtonElement>('#read-page')
@@ -13,7 +13,7 @@ const salaryMinInput = document.querySelector<HTMLInputElement>('#salary-min')
 const salaryMaxInput = document.querySelector<HTMLInputElement>('#salary-max')
 const jobUrlInput = document.querySelector<HTMLInputElement>('#job-url')
 const descriptionInput = document.querySelector<HTMLTextAreaElement>('#description')
-const resumeTextInput = document.querySelector<HTMLTextAreaElement>('#resume-text')
+const resumeVersionSelect = document.querySelector<HTMLSelectElement>('#resume-version')
 const jobResultElement = document.querySelector<HTMLElement>('#job-result')
 const greetingResultElement = document.querySelector<HTMLElement>('#greeting-result')
 const greetingsElement = document.querySelector<HTMLElement>('#greetings')
@@ -41,6 +41,10 @@ type ApiSuccess<T> = {
 type ApiFailure = {
   error?: {
     message?: string
+    details?: Array<{
+      path?: Array<string | number>
+      message?: string
+    }>
   }
 }
 
@@ -81,6 +85,20 @@ type ApplicationProfile = {
   }
 }
 
+type ResumeVersion = {
+  id: string
+  name: string
+  type: 'BASE' | 'TARGETED'
+  content: string
+  createdAt: string
+  application?: { job?: { title?: string, company?: { name?: string } } | null } | null
+}
+
+type Resume = {
+  name: string
+  versions: ResumeVersion[]
+}
+
 type LocalFacts = { basics: Record<string, string | number | string[] | undefined>, educations: unknown[], strategy: Record<string, unknown>, resumeVersion: { id: string, type: string } | null }
 type FillContext = { profileName: string, localFacts: LocalFacts, aiContext: unknown }
 
@@ -118,6 +136,7 @@ type AiFillPreview = {
 }
 
 let applicationProfiles: ApplicationProfile[] = []
+let resumeVersions: ResumeVersion[] = []
 
 let savedApplicationId: string | null = null
 
@@ -280,7 +299,11 @@ async function readApi<T>(path: string, init?: RequestInit) {
   })
   const body = await response.json().catch(() => ({})) as ApiSuccess<T> & ApiFailure
   if (!response.ok || !('data' in body)) {
-    throw new Error(body.error?.message ?? `工作台请求失败（HTTP ${response.status}）。`)
+    const detail = body.error?.details?.[0]
+    const detailPath = detail?.path?.length ? `${detail.path.join('.')}：` : ''
+    const detailMessage = detail?.message ? `${detailPath}${detail.message}` : ''
+    const message = body.error?.message ?? `工作台请求失败（HTTP ${response.status}）。`
+    throw new Error(detailMessage ? `${message} ${detailMessage}` : message)
   }
   return body.data
 }
@@ -301,13 +324,44 @@ async function checkWorkbench() {
 
 function renderProfileOptions() {
   if (!applicationProfileSelect) return
-  applicationProfileSelect.replaceChildren(new Option('请选择一份资料档案', ''))
+  const previous = applicationProfileSelect.value
+  applicationProfileSelect.replaceChildren(new Option('请选择一份网申档案', ''))
   for (const profile of applicationProfiles) {
     const suffix = profile.targetTags?.length ? `（${profile.targetTags.join(' / ')}）` : ''
     applicationProfileSelect.add(new Option(`${profile.name}${suffix}`, profile.id))
   }
   applicationProfileSelect.disabled = applicationProfiles.length === 0
+  if (applicationProfiles.some(profile => profile.id === previous)) applicationProfileSelect.value = previous
+  else if (applicationProfiles.length === 1) applicationProfileSelect.value = applicationProfiles[0].id
   if (fillCurrentPageButton) fillCurrentPageButton.disabled = applicationProfiles.length === 0
+}
+
+function resumeVersionLabel(version: ResumeVersion) {
+  return version.name
+}
+
+function renderResumeOptions() {
+  if (!resumeVersionSelect) return
+  const previous = resumeVersionSelect.value
+  resumeVersionSelect.replaceChildren(new Option('请选择一份工作台简历', ''))
+  for (const version of resumeVersions) resumeVersionSelect.add(new Option(resumeVersionLabel(version), version.id))
+  resumeVersionSelect.disabled = resumeVersions.length === 0
+  if (resumeVersions.some(version => version.id === previous)) resumeVersionSelect.value = previous
+  else if (resumeVersions.length === 1) resumeVersionSelect.value = resumeVersions[0].id
+}
+
+async function loadResumeVersions() {
+  try {
+    const resume = await readApi<Resume | null>('/api/v1/resumes')
+    resumeVersions = resume?.versions ?? []
+    renderResumeOptions()
+    if (!resumeVersions.length) setResult(greetingResultElement, '工作台还没有简历版本，请先在“简历版本”中创建。', true)
+  }
+  catch (error) {
+    resumeVersions = []
+    renderResumeOptions()
+    setResult(greetingResultElement, error instanceof Error ? error.message : '简历版本读取失败。', true)
+  }
 }
 
 async function loadApplicationProfiles() {
@@ -316,8 +370,8 @@ async function loadApplicationProfiles() {
     applicationProfiles = await readApi<ApplicationProfile[]>('/api/v1/application-profiles')
     renderProfileOptions()
     setResult(fillResultElement, applicationProfiles.length
-      ? '请选择一份资料档案；默认只填写安全的空白字段。'
-      : '尚无资料档案，请先在工作台“网申资料”中创建。', applicationProfiles.length === 0)
+      ? '请选择一份网申档案，AI 会使用其中已保存的完整资料填写空白字段。'
+      : '尚无网申档案，请先在工作台“网申档案”中创建。', applicationProfiles.length === 0)
   }
   catch (error) {
     applicationProfiles = []
@@ -375,7 +429,6 @@ async function fillCurrentPage() {
     const fields = (scanResult?.result ?? []) as FormFieldDescriptor[]
     const fillContext = await readApi<FillContext>(`/api/v1/application-profiles/${encodeURIComponent(profile.id)}/fill-context`)
     const localPlan = buildFillPlan(fillContext.localFacts, fields) as FillPlan
-    const byId = new Map(localPlan.entries.map(entry => [entry.fieldId, entry]))
     const localEntries = localPlan.entries.filter(entry => entry.status === 'filled').map(entry => ({ fieldId: entry.fieldId, value: entry.value ?? '' }))
     const choiceEntries = localEntries.filter(entry => /^radio-group-|^custom-select-/.test(entry.fieldId))
     const textEntries = localEntries.filter(entry => !/^radio-group-|^custom-select-/.test(entry.fieldId))
@@ -390,24 +443,53 @@ async function fillCurrentPage() {
       skippedExistingIds: [...textOutcome.skippedExistingIds, ...choiceOutcome.skippedExistingIds],
       unavailableIds: [...textOutcome.unavailableIds, ...choiceOutcome.unavailableIds],
     }
-    const localAppliedIds = new Set(localOutcome.appliedIds)
-    const localUnavailableIds = new Set(localOutcome.unavailableIds)
-    const localExistingIds = new Set(localOutcome.skippedExistingIds)
-    const aiFields = fields.filter((field) => {
-      const entry = byId.get(field.id)
-      return !localAppliedIds.has(field.id)
+    const fieldSignature = (field: FormFieldDescriptor) => [field.label, field.name, field.placeholder, field.controlType]
+      .map(value => String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase()).join('|')
+    const appliedSignatureCounts = localOutcome.appliedIds.reduce((counts, id) => {
+      const field = fields.find(candidate => candidate.id === id)
+      if (field) counts.set(fieldSignature(field), (counts.get(fieldSignature(field)) ?? 0) + 1)
+      return counts
+    }, new Map<string, number>())
+    const [rescanResult] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: scanVisibleFormFields })
+    const activeFields = (rescanResult?.result ?? []) as FormFieldDescriptor[]
+    const activePlan = buildFillPlan(fillContext.localFacts, activeFields) as FillPlan
+    const activeById = new Map(activePlan.entries.map(entry => [entry.fieldId, entry]))
+    const activeLocalAppliedIds = new Set<string>()
+    for (const field of activeFields) {
+      if (!field.hasValue) continue
+      const signature = fieldSignature(field)
+      const remaining = appliedSignatureCounts.get(signature) ?? 0
+      if (remaining > 0) {
+        activeLocalAppliedIds.add(field.id)
+        appliedSignatureCounts.set(signature, remaining - 1)
+      }
+    }
+    const aiFields = activeFields.filter((field) => {
+      const entry = activeById.get(field.id)
+      return !activeLocalAppliedIds.has(field.id)
         && entry?.category !== 'sensitive'
         && entry?.status !== 'skipped_existing'
-        && field.isEditable !== false
-        && field.controlType !== 'radio-group'
-        && !['checkbox', 'radio'].includes(String(field.inputType ?? '').toLowerCase())
+        && !['checkbox'].includes(String(field.inputType ?? '').toLowerCase())
+        && (String(field.inputType ?? '').toLowerCase() !== 'radio' || field.controlType === 'radio-group')
         && !['password', 'file'].includes(String(field.inputType ?? '').toLowerCase())
         && field.multiple !== true
     })
     if (aiFields.length === 0) {
-      const report = reconcileFillOutcome(localPlan, localOutcome) as Omit<FillPlan, 'entries'> & { entries: Array<Omit<FillEntry, 'value'>> }
+      const entries = activePlan.entries.map((entry) => {
+        const { value: _value, ...safeEntry } = entry
+        return activeLocalAppliedIds.has(entry.fieldId)
+          ? { ...safeEntry, status: 'filled' as const, reason: '已由本地个人主档案填写。' }
+          : safeEntry
+      })
+      const report = {
+        entries,
+        summary: entries.reduce((summary, entry) => {
+          summary[entry.status] += 1
+          return summary
+        }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
+      }
       renderFillReport(report)
-      setResult(fillResultElement, '没有可交给 AI 的空白普通字段。', true)
+      setResult(fillResultElement, '当前页面没有可填写的空白字段。')
       return
     }
     const preview = await readApi<AiFillPreview>('/api/v1/form-fill/preview', {
@@ -424,20 +506,21 @@ async function fillCurrentPage() {
         multiple: field.multiple,
       })) }),
     })
-    const aiChoiceFills = preview.fills.filter(fill => /^custom-select-/.test(fill.fieldId))
-    const aiTextFills = preview.fills.filter(fill => !/^custom-select-/.test(fill.fieldId))
+    const isChoiceField = (id: string) => /^(?:radio-group|custom-select)-/.test(id)
+    const aiChoiceFills = preview.fills.filter(fill => isChoiceField(fill.fieldId))
+    const aiTextFills = preview.fills.filter(fill => !isChoiceField(fill.fieldId))
     const aiTextOutcome = aiTextFills.length === 0 && preview.unresolvedIds.length === 0
       ? { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
       : (await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: applyFillEntries,
-          args: [{ entries: aiTextFills, unresolvedIds: preview.unresolvedIds.filter(id => !/^custom-select-/.test(id)) }],
+          args: [{ entries: aiTextFills, unresolvedIds: preview.unresolvedIds.filter(id => !isChoiceField(id)) }],
         }))[0]?.result ?? { appliedIds: [], skippedExistingIds: [], unavailableIds: aiTextFills.map(entry => entry.fieldId) }
     const aiChoiceOutcome = aiChoiceFills.length
       ? (await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: applyChoiceEntries,
-          args: [{ entries: aiChoiceFills, unresolvedIds: preview.unresolvedIds.filter(id => /^custom-select-/.test(id)) }],
+          args: [{ entries: aiChoiceFills, unresolvedIds: preview.unresolvedIds.filter(id => isChoiceField(id)) }],
         }))[0]?.result ?? { appliedIds: [], skippedExistingIds: [], unavailableIds: aiChoiceFills.map(entry => entry.fieldId) }
       : { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
     const outcome = {
@@ -448,11 +531,9 @@ async function fillCurrentPage() {
     const appliedIds = new Set(outcome.appliedIds)
     const unavailableIds = new Set(outcome.unavailableIds)
     const aiFieldIds = new Set(aiFields.map(field => field.id))
-    const entries = localPlan.entries.map((entry) => {
+    const entries = activePlan.entries.map((entry) => {
       const { value: _value, ...safeEntry } = entry
-      if (localAppliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: '已由本地个人主档案填写。' }
-      if (localExistingIds.has(entry.fieldId)) return { ...safeEntry, status: 'skipped_existing' as const, reason: '字段在填写前已有内容，不会覆盖。' }
-      if (localUnavailableIds.has(entry.fieldId)) return { ...safeEntry, status: 'needs_manual' as const, reason: '本地资料已匹配，但页面控件未能应用。' }
+      if (activeLocalAppliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: '已由本地个人主档案填写。' }
       if (!aiFieldIds.has(entry.fieldId) || entry.status === 'skipped_existing' || entry.status === 'skipped_sensitive') return safeEntry
       if (appliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: `AI 已填写（${preview.provider} / ${preview.model}）。` }
       if (unavailableIds.has(entry.fieldId)) return { ...safeEntry, status: 'needs_manual' as const, reason: 'AI 已给出建议，但页面控件未能应用。' }
@@ -525,6 +606,9 @@ async function saveCurrentJob() {
   setResult(jobResultElement, '')
 
   try {
+    const jobUrl = getHttpUrl(jobUrlInput?.value.trim())
+    const host = jobUrl ? new URL(jobUrl).hostname.toLowerCase() : ''
+    const channel = host.includes('zhipin.com') ? 'BOSS' : host.includes('nowcoder.com') ? 'NIUKE' : 'OTHER'
     const application = await readApi<SavedApplication>('/api/v1/applications', {
       method: 'POST',
       body: JSON.stringify({
@@ -533,11 +617,11 @@ async function saveCurrentJob() {
         location: locationInput?.value.trim() || undefined,
         salaryMin,
         salaryMax,
-        jobUrl: getHttpUrl(jobUrlInput?.value.trim()),
+        jobUrl,
         description: description || undefined,
-        source: 'MANUAL',
+        source: channel === 'BOSS' ? 'BOSS' : channel === 'NIUKE' ? 'NIUKE' : 'MANUAL',
         status: 'SAVED',
-        channel: 'OTHER',
+        channel,
       }),
     })
     savedApplicationId = application.id
@@ -594,13 +678,13 @@ function renderGreetings(greetings: MaterialsPreview['aiDraft']['greetings']) {
 }
 
 async function generateGreetings() {
-  const resumeText = resumeTextInput?.value.trim() ?? ''
+  const resumeVersion = resumeVersions.find(version => version.id === resumeVersionSelect?.value)
   if (!savedApplicationId) {
     setResult(greetingResultElement, '请先在本窗口确认保存当前岗位，再生成话术。', true)
     return
   }
-  if (!resumeText) {
-    setResult(greetingResultElement, '请粘贴本次用于生成的简历文本。', true)
+  if (!resumeVersion) {
+    setResult(greetingResultElement, '请选择一份工作台简历版本。', true)
     return
   }
 
@@ -611,7 +695,7 @@ async function generateGreetings() {
   try {
     const preview = await readApi<MaterialsPreview>(`/api/v1/applications/${encodeURIComponent(savedApplicationId)}/materials/preview`, {
       method: 'POST',
-      body: JSON.stringify({ resumeText }),
+      body: JSON.stringify({ resumeText: resumeVersion.content }),
     })
     renderGreetings(preview.aiDraft.greetings)
     setResult(greetingResultElement, '已生成三版话术；它们仅供复制，不会自动发送或保存。')
@@ -637,3 +721,4 @@ fillCurrentPageButton?.addEventListener('click', () => void fillCurrentPage())
 
 void checkWorkbench()
 void loadApplicationProfiles()
+void loadResumeVersions()

@@ -89,9 +89,8 @@ export async function createComposedResumeVersion(resumeId: string, composition:
   })
   const content = resolved.references.map(item => `## ${item.title}\n\n${item.content}`).join('\n\n')
   return prisma.$transaction(async (tx) => {
-    if (name) await tx.resume.update({ where: { id: resume.id }, data: { name } })
     const version = await tx.resumeVersion.create({ data: {
-      resumeId: resume.id, type: ResumeVersionType.TARGETED, content: content || '组合简历（暂无素材）',
+      resumeId: resume.id, name: name?.trim() || `${resume.name}（同步版）`, type: ResumeVersionType.TARGETED, content: content || '组合简历（暂无素材）',
       provider: 'MANUAL', model: 'composed-document-v1',
       composition: { create: {
         fieldVisibility: json(composition.fieldVisibility), config: json(composition.config),

@@ -26,10 +26,7 @@ function today(): string {
 }
 
 function versionLabel(version: VersionWithApplication): string {
-  const typeLabel = version.type === 'BASE' ? '基础版' : '定制版'
-  const job = version.application?.job
-  if (job) return `${typeLabel}（${job.company?.name ?? ''}-${job.title ?? ''}）`
-  return typeLabel
+  return version.name
 }
 
 function asReflection(value: Prisma.JsonValue | null | undefined): InterviewReflectionEntry[] {

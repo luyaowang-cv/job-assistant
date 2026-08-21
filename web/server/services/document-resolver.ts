@@ -27,13 +27,15 @@ export function resolveDocument(input: {
   const basics = Object.fromEntries(Object.entries(input.basics ?? {}).filter(([key]) => visibility[key] !== false))
   const visibleReferences = input.references
     .filter(reference => reference.visible)
-    .sort((a, b) => a.section.localeCompare(b.section) || a.sortOrder - b.sortOrder)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.section.localeCompare(b.section))
     .map(reference => ({
       id: reference.id,
       cardId: reference.card.id,
       variantId: reference.variant.id,
       section: reference.section,
+      sortOrder: reference.sortOrder,
       fieldKey: reference.fieldKey ?? null,
+      renderRules: reference.renderRules,
       title: reference.card.title,
       type: reference.card.type,
       facts: reference.card.facts && typeof reference.card.facts === 'object' ? reference.card.facts : {},
@@ -55,7 +57,7 @@ export function resolveDocument(input: {
   }))
   return {
     basics,
-    educations: input.educations ?? [],
+    educations: visibility.educations === false ? [] : (input.educations ?? []),
     references: visibleReferences,
     blocks,
     legacyContent: input.legacyContent ?? null,

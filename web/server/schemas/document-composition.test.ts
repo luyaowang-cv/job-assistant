@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { compositionInputSchema } from './document-composition'
+import { compositionInputSchema, resumeLayoutConfigSchema } from './document-composition'
 import { countCodePoints, resolveDocument } from '../services/document-resolver'
 
 const reference = {
@@ -11,6 +11,12 @@ const reference = {
 test('composition rejects facts and duplicate ordering', () => {
   assert.equal(compositionInputSchema.safeParse({ fieldVisibility: {}, config: {}, references: [reference], basics: { fullName: 'forbidden' } }).success, false)
   assert.equal(compositionInputSchema.safeParse({ fieldVisibility: {}, config: {}, references: [reference, { ...reference, cardId: 'card-2' }] }).success, false)
+})
+
+test('validates persisted A4 layout controls', () => {
+  assert.deepEqual(resumeLayoutConfigSchema.parse({}), { verticalMarginMm: 8, paragraphGapMm: 0.4, sectionGapMm: 2.4 })
+  assert.equal(compositionInputSchema.safeParse({ fieldVisibility: {}, config: { layout: { verticalMarginMm: 5, paragraphGapMm: 0.4, sectionGapMm: 2.4 } }, references: [] }).success, false)
+  assert.equal(compositionInputSchema.safeParse({ fieldVisibility: {}, config: { layout: { verticalMarginMm: 8, paragraphGapMm: 0.5, sectionGapMm: 2 } }, references: [] }).success, true)
 })
 
 test('resolver hides base fields and pins visible variants', () => {

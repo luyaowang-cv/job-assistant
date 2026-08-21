@@ -9,20 +9,20 @@
     <main>
       <h1>求职助手</h1>
       <p id="status" role="status">正在检查本地工作台连接…</p>
-      <p class="hint">只在你点击“读取当前页面”后读取可见文本；不会读取表单已有输入、不会自动发送内容。</p>
+      <p class="hint">由你主动读取岗位、填写网申或生成话术；提交和发送仍由你确认。</p>
 
       <section class="card">
         <div class="section-heading">
           <h2>网申填写助手</h2>
           <button id="refresh-profiles" type="button">刷新档案</button>
         </div>
-        <label>使用资料档案
+        <label>使用网申档案
           <select id="application-profile" disabled>
             <option value="">正在读取资料档案…</option>
           </select>
         </label>
-        <p class="hint">仅填写空白且可明确匹配的姓名、手机号、邮箱、所在城市；其余字段会在报告中提示你手动处理。</p>
-        <button id="fill-current-page" class="primary" type="button" disabled>填写</button>
+        <p class="hint">基础信息、教育、项目、实习/工作、校园经历、自我评价与描述等空白字段都会交给规则和 AI 识别填写。</p>
+        <button id="fill-current-page" class="primary" type="button" disabled>AI 填写当前页面</button>
         <p id="fill-result" class="result" role="status"></p>
         <div id="fill-report" class="fill-report" aria-live="polite"></div>
       </section>
@@ -47,7 +47,11 @@
 
       <section class="card">
         <h2>打招呼话术</h2>
-        <label>本次简历文本<textarea id="resume-text" rows="5" maxlength="20000" placeholder="仅用于本次生成，不会保存"></textarea></label>
+        <label>使用工作台简历版本
+          <select id="resume-version" disabled>
+            <option value="">正在读取简历版本…</option>
+          </select>
+        </label>
         <button id="generate-greeting" class="primary" type="button">生成三版话术</button>
         <p id="greeting-result" class="result" role="status"></p>
         <div id="greetings" class="greetings" aria-live="polite"></div>

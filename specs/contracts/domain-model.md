@@ -169,3 +169,20 @@ Application 是用户的状态与决策记录；Job 是岗位事实。不得把�
 - 生成与复盘提取均为 preview，零写库；保存、复盘确认写库并创建 `DocumentMutationEvent`（`INTERVIEW_RECORD_SAVED` / `INTERVIEW_RECORD_REVIEW_SAVED`，entityType=InterviewRecord）。
 - 面试结果取值 `UNDECIDED`(待定)/`PASSED`(通过)/`FAILED`(未通过)/`WITHDRAWN`(放弃)。绑定投递记录且结果发生变更时，服务端按映射常量同步 Application.status 并写 `STATUS_CHANGED` 事件；映射常量集中在服务端，客户端不得自行修改投递状态。
 - AI 输入可包含 JD、简历版本 content 与素材卡片（facts/变体摘要），但 InterviewRecord 不得持久化完整简历原文或素材卡片原文，仅保存生成的 prepSections/review 与用户编辑文本。
+
+## F-032 投递链接与插件 resolved context 约束
+
+- `Job.url` 继续作为岗位的唯一投递链接；岗位库导入、插件创建与投递详情编辑均写入同一字段，Application 不增加重复 URL 字段。
+- 投递列表的渠道来自 `Application.channel`，投递入口来自关联 `Job.url`。
+- 插件 AI 填写上下文是读取时派生的 resolved view，不新增持久化副本：组合网申版本使用 PersonalProfile + blocks/references，legacy 档案使用其全部结构化经历字段、策略与可选 ResumeVersion。
+- F-032 不产生新的数据写入类型；插件保存岗位继续由 Application API 创建 CREATE 事件，AI 表单 preview 与话术 preview 均保持零写库。
+
+## F-033 到岗时间策略约束
+
+- `ApplicationProfile.strategy.availableDate` 保持存储于 strategy JSON，不新增列；其语义是用户确认的“可到岗时间说明”，不是必须可解析的日历日期。
+- 经 trim 后的空字符串或 null 表示未填写；非空值最多 80 字符。AI 不得从该说明推断用户未承诺的更早到岗时间。
+
+## F-034 表单填写简历回退约束
+
+- ApplicationProfile.resumeVersionId 仍表示显式默认版本且不被自动写入。fill-context 在其为空时可只读派生当前 User 的 BASE ResumeVersion 作为 AI 补充事实来源。
+- BASE 回退不创建 ApplicationProfile/ResumeVersion/DocumentMutationEvent，也不改变文档版本关系；仅存在于用户本次明确点击填写所触发的 preview 上下文。

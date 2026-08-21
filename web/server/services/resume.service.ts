@@ -22,7 +22,7 @@ export async function createBaseResume(input: CreateBaseResumeInput) {
     data: {
       userId: user.id,
       name: input.name,
-      versions: { create: { type: ResumeVersionType.BASE, content: input.content, provider: 'MANUAL', model: 'manual-base-v1' } },
+      versions: { create: { name: input.name, type: ResumeVersionType.BASE, content: input.content, provider: 'MANUAL', model: 'manual-base-v1' } },
     },
     include: { versions: true },
   })
@@ -41,7 +41,7 @@ export async function replaceBaseResume(input: CreateBaseResumeInput) {
     await transaction.resume.update({ where: { id: resume.id }, data: { name: input.name } })
     return transaction.resumeVersion.update({
       where: { id: baseVersion.id },
-      data: { content: input.content, aiDraft: null, changeSummary: Prisma.JsonNull, wasEdited: false, provider: 'MANUAL', model: 'manual-base-v1' },
+      data: { name: input.name, content: input.content, aiDraft: null, changeSummary: Prisma.JsonNull, wasEdited: false, provider: 'MANUAL', model: 'manual-base-v1' },
     })
   })
 }
@@ -72,6 +72,7 @@ export async function createTargetedResumeVersion(input: SaveResumeVersionInput)
     data: {
       resumeId: resume.id,
       applicationId: input.applicationId ?? null,
+      name: input.name,
       type: ResumeVersionType.TARGETED,
       aiDraft: input.aiDraft,
       content: input.content,

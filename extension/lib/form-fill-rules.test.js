@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildFillPlan, classifyField, reconcileFillOutcome } from './form-fill-rules.js'
+import { applyChoiceEntries, applyFillEntries, scanVisibleFormFields } from './form-page-bridge.js'
 
 const profile = {
   basics: {
@@ -204,4 +205,49 @@ test('reconciles fields changed after scan without leaking their previous value'
 
   assert.deepEqual(report.summary, { filled: 1, skipped_existing: 1, skipped_sensitive: 0, needs_manual: 0 })
   assert.equal(report.entries[1].value, undefined)
+})
+
+test('classifies complete application-profile content for the AI fallback path', () => {
+  const plan = buildFillPlan(profile, [
+    { id: 'project', label: '项目描述', controlType: 'textarea', inputType: 'textarea', hasValue: false, isEditable: true },
+    { id: 'internship', label: '实习经历', controlType: 'textarea', inputType: 'textarea', hasValue: false, isEditable: true },
+    { id: 'self', label: '自我评价', controlType: 'textarea', inputType: 'textarea', hasValue: false, isEditable: true },
+    { id: 'start', label: '项目开始时间', controlType: 'input', inputType: 'month', hasValue: false, isEditable: true },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.category), ['project', 'work', 'self_evaluation', 'date'])
+  assert.ok(plan.entries.every(entry => entry.status === 'needs_manual'))
+  assert.ok(plan.entries.every(entry => entry.status !== 'skipped_sensitive'))
+})
+
+test('keeps scanned fields in DOM order with repeated-label context', () => {
+  const source = scanVisibleFormFields.toString()
+  assert.match(source, /sortIndex/)
+  assert.match(source, /同名字段/)
+  assert.match(source, /相邻字段/)
+})
+
+test('supports Universe Design custom selects without the legacy hard block', () => {
+  const scanSource = scanVisibleFormFields.toString()
+  const applySource = applyChoiceEntries.toString()
+  assert.doesNotMatch(scanSource, /isEditable:\s*!element\.closest\('\.ud__select'\)/)
+  assert.match(applySource, /element\.closest\('\.ud__select, \.el-select/)
+  assert.match(applySource, /\.ud__select-option/)
+})
+
+test('supports common framework comboboxes and contenteditable controls generically', () => {
+  const scanSource = scanVisibleFormFields.toString()
+  const applySource = applyChoiceEntries.toString()
+  const textApplySource = applyFillEntries.toString()
+  assert.match(scanSource, /contenteditable/)
+  assert.match(scanSource, /\.ant-select/)
+  assert.match(scanSource, /\.arco-select/)
+  assert.match(scanSource, /\.semi-select/)
+  assert.match(applySource, /\.ant-select-item-option/)
+  assert.match(applySource, /\.arco-select-option/)
+  assert.match(applySource, /\.semi-select-option/)
+  assert.match(applySource, /scrollIntoView/)
+  assert.match(applySource, /behavior:\s*'smooth'/)
+  assert.match(textApplySource, /scrollIntoView/)
+  assert.match(textApplySource, /await pause/)
 })

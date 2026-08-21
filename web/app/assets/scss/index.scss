@@ -148,12 +148,14 @@ select {
 }
 
 .page-rail {
-  width: min(100%, 1180px);
-  margin: 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
 }
 
 .page-rail--narrow {
-  width: min(100%, 960px);
+  width: 100%;
 }
 
 .page-heading {
@@ -617,7 +619,7 @@ select {
   font-weight: 600;
 }
 .settings-page { padding-bottom: 56px; }
-.settings-page .material-surface { max-width: 760px; }
+.settings-page .material-surface { width: 100%; max-width: none; box-sizing: border-box; }
 .settings-page .el-form-item { margin-bottom: var(--space-4); }
 .settings-page__status { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid rgba(190,204,195,.7); color: var(--workbench-slate); font-size: 14px; }
 .settings-page__note { margin: var(--space-4) 0 0; color: var(--workbench-slate); font-size: 13px; line-height: 1.6; }
@@ -637,6 +639,8 @@ select {
 .job-library__table { margin-top: 3px; }.job-library__table .el-table__cell { padding: 11px 0; }.job-library__table .el-table__body tr { cursor: default; }.job-library__role { display: grid; gap: 3px; }.job-library__role strong { color: #414a48; font-size: 13px; }.job-library__role span { color: #596863; font-size: 12px; }.job-library__role small { color: #a96c67; font-size: 10px; }.job-library__secondary { display: block; margin-top: 3px; color: #84928c; font-size: 10px; }
 .job-library__links { display: flex; gap: 9px; }.job-library__links a { color: #547864; font-size: 12px; font-weight: 600; text-decoration: none; }.job-library__links a:hover { color: #365f48; text-decoration: underline; }.job-library__links span { color: #9aa39f; }.job-library__test { color: #88918d; font-size: 11px; }.job-library__test--yes { color: #a77a57; }.job-library__pagination { display: flex; justify-content: flex-end; margin-top: 16px; }.job-library__dialog-copy { margin: 0 0 18px; color: #64736d; font-size: 13px; line-height: 1.65; }
 .job-library__connection { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(197, 208, 202, .82); border-radius: 12px; background: rgba(249, 249, 245, .56); }.job-library__connection--connected { border-color: rgba(177, 208, 186, .86); background: rgba(232, 244, 235, .62); }.job-library__connection strong, .job-library__connection span { display: block; }.job-library__connection strong { color: #4b5d55; font-size: 12px; }.job-library__connection span { margin-top: 4px; color: #7a8782; font-size: 11px; }
+
+.application-cell-role { display: grid; gap: 3px; }.application-cell-role strong { color: #414a48; font-size: 13px; font-weight: 700; }.application-cell-role span { color: #596863; font-size: 12px; font-weight: 400; }.application-cell-apply { color: #547864; font-size: 12px; font-weight: 600; text-decoration: none; }.application-cell-apply:hover, .application-cell-apply:focus-visible { color: #365f48; text-decoration: underline; }.application-cell-apply:focus-visible { border-radius: 3px; outline: 2px solid rgba(84, 120, 100, .35); outline-offset: 3px; }.application-cell-empty { color: #9aa39f; }
 
 /* Dashboard: preserve card rhythm when the fixed sidebar narrows the content rail. */
 @media (max-width: 1280px) {
@@ -681,7 +685,7 @@ select {
   }
 
   .workbench-main {
-    padding: 0 16px 40px;
+    padding: 0 16px 40px !important;
   }
 
   .page-heading {

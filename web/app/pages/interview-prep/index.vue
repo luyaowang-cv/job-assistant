@@ -21,9 +21,10 @@ interface InterviewRecordPayload {
   prepNotes: string | null
   result: string | null
   review: ReviewEntry[]
+  updatedAt?: string
 }
 interface ApplicationOption { id: string, job: { title: string, company: { name: string }, description: string | null } }
-interface ResumeVersionOption { id: string, type: 'BASE' | 'TARGETED', application?: { id: string, job?: { title?: string, company?: { name?: string } } } | null }
+interface ResumeVersionOption { id: string, name: string, type: 'BASE' | 'TARGETED', application?: { id: string, job?: { title?: string, company?: { name?: string } } } | null }
 
 const route = useRoute()
 
@@ -47,6 +48,8 @@ const kindMeta: Record<BlockKind, { label: string, hint: string }> = {
 const kindOrder: BlockKind[] = ['KNOWLEDGE', 'QUESTION_ASK', 'ROLE_POINT']
 
 const recordId = ref('')
+const records = ref<InterviewRecordPayload[]>([])
+const contextEditing = ref(true)
 const applications = ref<ApplicationOption[]>([])
 const applicationId = ref('')
 const resumeVersions = ref<ResumeVersionOption[]>([])
@@ -66,15 +69,10 @@ const transcript = ref('')
 const activeTab = ref('prep')
 
 const saving = ref(false)
-const generating = ref(false)
 const extracting = ref(false)
 const confirming = ref(false)
-const generateDialogVisible = ref(false)
-const generateDraft = ref<PrepBlock[]>([])
 const reviewPreviewVisible = ref(false)
 const reviewPreview = ref<ReviewExtracted | null>(null)
-
-function kindLabel(kind: BlockKind) { return kindMeta[kind].label }
 
 const prepGroups = computed(() => kindOrder.map(kind => ({
   kind,
@@ -82,11 +80,10 @@ const prepGroups = computed(() => kindOrder.map(kind => ({
   hint: kindMeta[kind].hint,
   blocks: prepBlocks.value.filter(block => block.kind === kind),
 })))
+const currentResumeName = computed(() => resumeVersions.value.find(item => item.id === resumeVersionId.value)?.name ?? '未绑定简历')
 
 function versionLabel(version: ResumeVersionOption) {
-  if (version.type === 'BASE') return '基础版'
-  const job = version.application?.job
-  return job ? '定制版（' + (job.company?.name ?? '') + '-' + (job.title ?? '') + '）' : '定制版'
+  return version.name
 }
 
 async function loadApplications() {
@@ -103,6 +100,14 @@ async function loadResumeVersions() {
     resumeVersions.value = response.data?.versions ?? []
   }
   catch { resumeVersions.value = [] }
+}
+
+async function loadRecords() {
+  try {
+    const response = await $fetch<{ data: InterviewRecordPayload[] }>('/api/v1/interview-records')
+    records.value = response.data
+  }
+  catch { records.value = [] }
 }
 
 function handleApplicationChange() {
@@ -134,45 +139,9 @@ async function loadRecord(id: string) {
     prepNotes.value = record.prepNotes ?? ''
     result.value = record.result ?? ''
     reviewEntries.value = record.review ?? []
+    contextEditing.value = false
   }
   catch { ElMessage.error('面试记录读取失败。') }
-}
-
-async function generateBlocks() {
-  generating.value = true
-  try {
-    const response = await $fetch<{ data: { blocks: PrepBlock[] } }>('/api/v1/interview-records/generate', {
-      method: 'POST',
-      body: {
-        applicationId: applicationId.value || null,
-        resumeVersionId: resumeVersionId.value || null,
-        jdText: jdText.value || null,
-      },
-    })
-    generateDraft.value = response.data.blocks
-    if (!generateDraft.value.length) { ElMessage.warning('AI 未生成内容，请检查 JD 与简历素材后重试。'); return }
-    generateDialogVisible.value = true
-  }
-  catch (error: unknown) {
-    const message = (error as { data?: { error?: { message?: string } } })?.data?.error?.message
-    ElMessage.error(message ?? '生成失败，请检查 API 设置后重试。')
-  }
-  finally { generating.value = false }
-}
-
-function confirmGenerate() {
-  let added = 0
-  const existingKeys = new Set(prepBlocks.value.map(block => block.kind + '::' + block.title + '::' + block.content))
-  for (const block of generateDraft.value) {
-    const key = block.kind + '::' + block.title + '::' + block.content
-    if (existingKeys.has(key)) continue
-    prepBlocks.value.push({ ...block, id: 'block-' + crypto.randomUUID() })
-    existingKeys.add(key)
-    added++
-  }
-  generateDialogVisible.value = false
-  generateDraft.value = []
-  ElMessage.success(added ? '已填入 ' + added + ' 条新内容（未覆盖已有编辑）。' : '生成内容与现有内容相同，未重复添加。')
 }
 
 function removeBlock(id: string) {
@@ -205,6 +174,8 @@ async function save() {
       const response = await $fetch<{ data: InterviewRecordPayload }>('/api/v1/interview-records', { method: 'POST', body: payload })
       recordId.value = response.data.id
     }
+    contextEditing.value = false
+    await loadRecords()
     ElMessage.success('面试记录已保存。')
   }
   catch (error: unknown) {
@@ -288,15 +259,48 @@ function onTranscriptFileChange(uploadFile: UploadFile) {
   if (uploadFile.raw) void importTranscript(uploadFile.raw)
 }
 
+function openAgent() {
+  navigateTo({
+    path: '/agent',
+    query: {
+      ...(applicationId.value ? { applicationId: applicationId.value } : {}),
+      ...(resumeVersionId.value ? { resumeVersionId: resumeVersionId.value } : {}),
+      mode: 'interview',
+    },
+  })
+}
+
+function newRecord() {
+  recordId.value = ''
+  applicationId.value = ''
+  resumeVersionId.value = ''
+  companyName.value = ''
+  jobTitle.value = ''
+  jdText.value = ''
+  round.value = ''
+  interviewAt.value = ''
+  methodAndAddress.value = ''
+  briefNote.value = ''
+  prepBlocks.value = []
+  prepNotes.value = ''
+  result.value = ''
+  reviewEntries.value = []
+  contextEditing.value = true
+  void navigateTo('/interview-prep', { replace: true })
+}
+
 onMounted(async () => {
-  await Promise.all([loadApplications(), loadResumeVersions()])
+  await Promise.all([loadApplications(), loadResumeVersions(), loadRecords()])
   const appId = typeof route.query.applicationId === 'string' ? route.query.applicationId : ''
   const id = typeof route.query.id === 'string' ? route.query.id : ''
-  if (appId) {
+  if (id) await loadRecord(id)
+  else if (appId) {
+    const existing = records.value.find(item => item.applicationId === appId)
+    if (existing) { await loadRecord(existing.id); return }
     applicationId.value = appId
     handleApplicationChange()
   }
-  if (id) await loadRecord(id)
+  else if (records.value[0]) await loadRecord(records.value[0].id)
 })
 </script>
 
@@ -309,8 +313,9 @@ onMounted(async () => {
           <el-tag v-if="recordId" size="small" effect="plain" type="success">已保存</el-tag>
         </div>
         <div class="flex flex-none items-center gap-2">
+          <el-button @click="newRecord">新建档案</el-button>
           <el-button :loading="saving" @click="save">保存</el-button>
-          <el-button type="primary" plain :loading="generating" @click="generateBlocks">AI生成面试材料</el-button>
+          <el-button type="primary" plain @click="openAgent">在 Agent 中准备</el-button>
           <el-button :disabled="!recordId" @click="exportMd">导出Markdown</el-button>
         </div>
       </div>
@@ -318,28 +323,38 @@ onMounted(async () => {
       <div class="interview-record-body">
         <aside class="interview-record-sidebar">
           <div class="interview-record-sidebar-panel">
-            <p class="material-section-label">来源绑定</p>
-            <el-form label-position="top" size="small">
-              <el-form-item label="投递记录（可选）">
-                <el-select v-model="applicationId" clearable filterable placeholder="选择投递记录，自动回填" class="w-full" @change="handleApplicationChange">
-                  <el-option v-for="app in applications" :key="app.id" :label="app.job.company.name + ' · ' + app.job.title" :value="app.id" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="公司">
-                <el-input v-model="companyName" placeholder="选中投递记录后自动回填" />
-              </el-form-item>
-              <el-form-item label="岗位">
-                <el-input v-model="jobTitle" placeholder="自动回填或手填" />
-              </el-form-item>
-              <el-form-item label="绑定简历版本">
-                <el-select v-model="resumeVersionId" clearable placeholder="选择简历版本" class="w-full">
-                  <el-option v-for="version in resumeVersions" :key="version.id" :label="versionLabel(version)" :value="version.id" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="JD 原文">
-                <el-input v-model="jdText" type="textarea" :rows="4" placeholder="选中投递记录后自动带入 JD" />
-              </el-form-item>
-            </el-form>
+            <div class="record-heading"><p class="material-section-label">面试档案</p><button type="button" @click="newRecord">＋ 新建</button></div>
+            <div class="record-list">
+              <button v-for="item in records" :key="item.id" type="button" :class="{ active: item.id === recordId }" @click="loadRecord(item.id)">
+                <strong>{{ item.companyName || '未命名公司' }}</strong>
+                <span>{{ item.jobTitle || '未命名岗位' }}</span>
+                <small>{{ item.updatedAt ? new Date(item.updatedAt).toLocaleDateString('zh-CN') : '' }}</small>
+              </button>
+              <p v-if="!records.length" class="record-empty">还没有面试档案，可从 Agent 保存回答后自动创建。</p>
+            </div>
+
+            <el-divider class="!mb-4 !mt-5" />
+
+            <div v-if="contextEditing" class="context-editor">
+              <div class="record-heading"><p class="material-section-label">新档案上下文</p><button v-if="recordId" type="button" @click="contextEditing = false">收起</button></div>
+              <el-form label-position="top" size="small">
+                <el-form-item label="投递岗位">
+                  <el-select v-model="applicationId" clearable filterable placeholder="选择岗位后自动带入 JD" class="w-full" @change="handleApplicationChange">
+                    <el-option v-for="app in applications" :key="app.id" :label="app.job.company.name + ' · ' + app.job.title" :value="app.id" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="简历版本">
+                  <el-select v-model="resumeVersionId" clearable placeholder="选择简历版本" class="w-full">
+                    <el-option v-for="version in resumeVersions" :key="version.id" :label="versionLabel(version)" :value="version.id" />
+                  </el-select>
+                </el-form-item>
+              </el-form>
+            </div>
+            <div v-else class="context-brief">
+              <div><small>岗位上下文</small><button type="button" @click="contextEditing = true">更换</button></div>
+              <strong>{{ companyName || '未绑定公司' }} · {{ jobTitle || '未绑定岗位' }}</strong>
+              <span>{{ currentResumeName }}</span>
+            </div>
 
             <el-divider class="!mb-4 !mt-5" />
 
@@ -369,9 +384,8 @@ onMounted(async () => {
               <div class="interview-record-tab-body">
                 <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <p class="m-0 max-w-xl text-[13px] leading-relaxed text-[#7b899a]">
-                    AI 基于 JD、简历版本与素材卡片生成复习内容；确认后填入页面，不覆盖已编辑内容。
+                    可从上方进入求职 Agent，自动带上当前投递与简历；确认后的复习内容仍可手动整理在这里。
                   </p>
-                  <el-button type="primary" :loading="generating" @click="generateBlocks">AI 分析生成复习内容</el-button>
                 </div>
 
                 <section v-for="group in prepGroups" :key="group.kind" class="mb-6">
@@ -448,23 +462,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <el-dialog v-model="generateDialogVisible" title="AI 生成面试材料（预览）" width="720px" destroy-on-close>
-      <el-alert class="mb-4" type="info" :closable="false" title="确认后按分类填入右侧面试准备区，不覆盖你已经编辑的内容。" />
-      <div v-if="generateDraft.length" class="max-h-[52vh] space-y-3 overflow-y-auto pr-1">
-        <el-card v-for="(block, index) in generateDraft" :key="index" shadow="never" class="rounded-xl border border-slate-200">
-          <div class="mb-1 flex items-center gap-2">
-            <el-tag size="small" effect="plain">{{ kindLabel(block.kind) }}</el-tag>
-            <strong class="text-sm">{{ block.title }}</strong>
-          </div>
-          <p class="m-0 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-600">{{ block.content }}</p>
-        </el-card>
-      </div>
-      <template #footer>
-        <el-button @click="generateDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmGenerate">确认填入（不覆盖）</el-button>
-      </template>
-    </el-dialog>
-
     <el-dialog v-model="reviewPreviewVisible" title="复盘提取预览" width="640px" destroy-on-close>
       <template v-if="reviewPreview">
         <p class="mb-1 mt-0 text-xs font-semibold text-[#8a96a6]">被问到的问题</p>
@@ -527,7 +524,7 @@ onMounted(async () => {
   flex: none;
   width: 324px;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
   padding: 20px 22px 24px;
   border-right: 1px solid rgba(190, 204, 195, 0.65);
   background: rgba(248, 250, 252, 0.55);
@@ -545,6 +542,66 @@ onMounted(async () => {
 .interview-record-sidebar .el-form-item {
   margin-bottom: 14px;
 }
+
+.record-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.record-heading button,
+.context-brief button {
+  border: 0;
+  background: transparent;
+  color: #7c6f9d;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.record-list {
+  display: grid;
+  gap: 7px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.record-list > button {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(132, 149, 171, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.46);
+  color: #607086;
+  text-align: left;
+  cursor: pointer;
+}
+
+.record-list > button.active {
+  border-color: rgba(112, 139, 126, 0.46);
+  background: rgba(231, 240, 234, 0.72);
+}
+
+.record-list strong { color: #344960; font-size: 13px; }
+.record-list span { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.record-list small { position: absolute; top: 10px; right: 10px; color: #98a3b0; font-size: 10px; }
+.record-empty { margin: 2px 0; color: #8a96a6; font-size: 12px; line-height: 1.6; }
+
+.context-brief {
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  border-left: 3px solid #8ca999;
+  background: rgba(238, 244, 240, 0.7);
+}
+
+.context-brief > div { display: flex; align-items: center; justify-content: space-between; }
+.context-brief small { color: #7c8998; font-size: 11px; }
+.context-brief strong { color: #344960; font-size: 13px; }
+.context-brief span { color: #788697; font-size: 12px; }
 
 .interview-record-main {
   flex: 1;

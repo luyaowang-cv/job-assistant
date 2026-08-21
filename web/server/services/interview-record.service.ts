@@ -19,6 +19,7 @@ const recordInclude = {
   resumeVersion: {
     select: {
       id: true,
+      name: true,
       type: true,
       createdAt: true,
       application: { select: { job: { select: { title: true, company: { select: { name: true } } } } } },
@@ -105,10 +106,10 @@ export async function getInterviewRecord(id: string) {
   return requireOwnedRecord(id)
 }
 
-export async function listInterviewRecords(applicationId: string) {
+export async function listInterviewRecords(applicationId?: string) {
   const user = await getLocalUser()
   return prisma.interviewRecord.findMany({
-    where: { userId: user.id, applicationId },
+    where: { userId: user.id, ...(applicationId ? { applicationId } : {}) },
     orderBy: { updatedAt: 'desc' },
     include: recordInclude,
   })

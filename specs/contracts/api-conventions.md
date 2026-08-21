@@ -250,3 +250,22 @@
 - 复盘分析仅接受用户提供的录音文字内容（`transcript`，≤50,000 字符），产品不做音频文件上传或转写。
 - 导出 Markdown 仅接受已持久化且归属当前用户的 `InterviewRecord`，不创建/更新记录或事件。
 - AI 失败沿用 `AI_KEY_NOT_CONFIGURED` / `AI_PROVIDER_UNAVAILABLE` / `AI_PROVIDER_ERROR` / `AI_PROVIDER_INVALID_RESPONSE`。
+
+## F-032 插件完整填写与简历选择
+
+- `GET /api/v1/applications` 返回的 Application 继续包含 `job.url`；该 URL 是投递看板“投递”操作的唯一数据源，岗位库转换和插件创建不得另存一份链接副本。
+- `GET /api/v1/resumes` 供插件列出当前用户可用的 ResumeVersion；插件只在用户选择版本并点击生成后，将该版本 `content` 提交给既有材料 preview API。
+- `GET /api/v1/application-profiles/:id/fill-context` 的 legacy 回退必须包含 basics、educations、strategy、workExperiences、projects、skills、languages、certificates、campusExperiences、awards 与关联 ResumeVersion；组合版本返回 resolved blocks/references。
+- `POST /api/v1/form-fill/preview` 可接收空白、可编辑的 input、textarea、date/month 等日期输入、select、radio-group 和 custom-select descriptor，并允许项目、实习/工作、校园经历、自我评价和长描述字段。服务端仍拒绝密码、验证码、文件上传、支付/银行卡和同意声明字段。
+- AI 只能使用所选网申档案的 resolved context，不得编造事实；输出仍限制为请求中已声明的 fieldId，并经 Zod 校验。
+
+## F-033 网申档案到岗时间说明
+
+- ApplicationProfile 的 `strategy.availableDate` 是可选到岗时间说明，接受 `YYYY-MM-DD` 等具体日期，也接受“可立即到岗”“一个月内到岗”等用户原文，trim 后最多 80 字符。
+- 空字符串与 null 归一化为未填写。该规则不影响 educations、workExperiences、projects、campusExperiences 的结构化日期字段。
+
+## F-034 上下文感知表单填写
+
+- `GET /api/v1/application-profiles/:id/fill-context` 优先使用档案显式绑定的 ResumeVersion；未绑定时只读回退当前 User 的 BASE ResumeVersion，不修改 ApplicationProfile。
+- `POST /api/v1/form-fill/preview` 的模型上下文压缩为 basics、educations、strategy、experiences、非空 sections、resumeContent 和 legacy 分类字段；composition id、计数和审计元数据不进入 prompt。
+- descriptor.context 可携带不含页面已有值的字段顺序、同名序号和相邻标签；仍不得提交页面输入值、DOM 或 HTML。

@@ -63,6 +63,8 @@ enum MaterialCardType {
   WORK
   CAMPUS
   AWARD
+  RESEARCH
+  CERTIFICATE
   SKILL
   SELF_EVALUATION
   CUSTOM_ANSWER
@@ -119,6 +121,7 @@ model User {
   documentMutationEvents DocumentMutationEvent[]
   interviewPreps InterviewPrepDocument[]
   interviewRecords InterviewRecord[]
+  careerAgentConversations CareerAgentConversation[]
 }
 
 model FeishuConnection {
@@ -196,6 +199,7 @@ model Application {
   materials    ApplicationMaterial[]
   resumeVersions ResumeVersion[]
   interviewRecords InterviewRecord[]
+  careerAgentConversations CareerAgentConversation[]
 
   @@unique([userId, jobId])
   @@index([userId, status])
@@ -285,6 +289,7 @@ model ResumeVersion {
   id            String            @id @default(cuid())
   resumeId      String
   applicationId String?
+  name          String
   type          ResumeVersionType
   aiDraft       String?
   content       String
@@ -299,6 +304,7 @@ model ResumeVersion {
   composition DocumentComposition?
   interviewPrep InterviewPrepDocument?
   interviewRecords InterviewRecord[]
+  careerAgentConversations CareerAgentConversation[]
 
   @@index([resumeId, createdAt])
   @@index([applicationId])
@@ -499,4 +505,36 @@ model InterviewRecord {
   @@index([userId, updatedAt])
   @@index([applicationId])
   @@index([resumeVersionId])
+}
+
+model CareerAgentConversation {
+  id              String   @id @default(cuid())
+  userId          String
+  applicationId   String?
+  resumeVersionId String?
+  title           String   @default("新对话")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application     Application? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  resumeVersion   ResumeVersion? @relation(fields: [resumeVersionId], references: [id], onDelete: SetNull)
+  messages        CareerAgentMessage[]
+
+  @@index([userId, updatedAt])
+  @@index([applicationId])
+  @@index([resumeVersionId])
+}
+
+model CareerAgentMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String
+  content        String
+  error          Boolean  @default(false)
+  provider       String?
+  model          String?
+  createdAt      DateTime @default(now())
+  conversation   CareerAgentConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
 }

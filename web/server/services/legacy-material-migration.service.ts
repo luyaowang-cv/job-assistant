@@ -30,7 +30,7 @@ function candidate(profileId: string, sourceField: string, index: number, type: 
   const sourceKey = createHash('sha256').update(JSON.stringify({ profileId, sourceField, index, value })).digest('hex')
   return {
     sourceKey, sourceField, type, title: title || `${sourceField} ${index + 1}`,
-    facts: item, variant: { name: '迁移标准版', content: content || title },
+    facts: item, variant: { name: '迁移网申版', content: content || title },
   }
 }
 
@@ -44,7 +44,7 @@ export async function previewLegacyMaterialMigration(profileId: string) {
     ['skills', MaterialCardType.SKILL, profile.skills as unknown[]],
     ['campusExperiences', MaterialCardType.CAMPUS, profile.campusExperiences as unknown[]],
     ['awards', MaterialCardType.AWARD, profile.awards as unknown[]],
-    ['certificates', MaterialCardType.AWARD, profile.certificates as unknown[]],
+    ['certificates', MaterialCardType.CERTIFICATE, profile.certificates as unknown[]],
   ]
   const candidates = sources.flatMap(([field, type, values]) => (Array.isArray(values) ? values : [])
     .map((value, index) => candidate(profileId, field, index, type, value)).filter((value): value is Candidate => Boolean(value)))
