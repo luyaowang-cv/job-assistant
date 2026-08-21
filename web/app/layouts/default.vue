@@ -35,10 +35,10 @@ const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工�
         <el-menu :default-active="$route.path" router class="mb-6 border-0 !bg-transparent">
           <el-menu-item index="/"><el-icon><House /></el-icon><span>今日工作台</span></el-menu-item>
           <el-menu-item index="/agent"><el-icon><ChatDotRound /></el-icon><span>求职 Agent</span></el-menu-item>
-          <el-menu-item index="/applications"><el-icon><Grid /></el-icon><span>投递看板</span></el-menu-item>
+          <el-menu-item index="/jobs"><el-icon><Search /></el-icon><span>岗位库</span></el-menu-item>
         </el-menu>
         <el-menu :default-active="$route.path" router class="mb-6 border-0 !bg-transparent">
-          <el-menu-item index="/jobs"><el-icon><Search /></el-icon><span>岗位库</span></el-menu-item>
+          <el-menu-item index="/applications"><el-icon><Grid /></el-icon><span>投递看板</span></el-menu-item>
         </el-menu>
 
         <p class="mb-2 px-2 font-mono text-[11px] tracking-[0.14em] text-[#8290a1]">准备资料</p>

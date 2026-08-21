@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 type ApplicationStatus = 'SAVED' | 'PREPARING' | 'APPLIED' | 'WRITTEN_TEST' | 'INTERVIEWING' | 'OFFERED' | 'REJECTED' | 'WITHDRAWN'
 type ApplicationChannel = 'OFFICIAL_SITE' | 'BOSS' | 'NIUKE' | 'REFERRAL' | 'OTHER'
 
-interface Company { name: string }
+interface Company { name: string, description: string | null }
 interface Job {
   title: string
   department: string | null
@@ -13,6 +13,8 @@ interface Job {
   salaryMax: number | null
   url: string | null
   description: string | null
+  referralCode: string | null
+  applicationNotes: string | null
   company: Company
 }
 interface ApplicationItem {
@@ -41,9 +43,10 @@ const channelOptions: Array<{ value: ApplicationChannel, label: string }> = [
   { value: 'NIUKE', label: '牛客' }, { value: 'REFERRAL', label: '内推' }, { value: 'OTHER', label: '其他' },
 ]
 
-const filters = reactive({ search: '', status: undefined as ApplicationStatus | undefined, channel: undefined as ApplicationChannel | undefined })
+const filters = reactive({ search: '', status: undefined as ApplicationStatus | undefined })
 const applications = ref<ApplicationItem[]>([])
 const total = ref(0)
+const updatedSort = ref<'asc' | 'desc'>('desc')
 const loading = ref(false)
 const databaseError = ref(false)
 const createDialogVisible = ref(false)
@@ -51,6 +54,7 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const submitting = ref(false)
 const deleting = ref(false)
+const deletingId = ref<string | null>(null)
 const selectedApplication = ref<ApplicationDetail | null>(null)
 const viewMode = ref<'list' | 'kanban'>('list')
 const draggedApplicationId = ref<string | null>(null)
@@ -59,15 +63,14 @@ const resumeVersions = ref<ResumeVersionItem[]>([])
 const evaluationVersionId = ref('')
 
 const emptyForm = () => ({
-  companyName: '', jobTitle: '', department: '', location: '', salaryMin: undefined as number | undefined,
+  companyName: '', companyDescription: '', jobTitle: '', department: '', location: '', salaryMin: undefined as number | undefined,
   salaryMax: undefined as number | undefined, channel: 'BOSS' as ApplicationChannel, status: 'SAVED' as ApplicationStatus,
-  appliedAt: '', jobUrl: '', description: '', notes: '', nextAction: '', nextActionAt: '',
+  appliedAt: '', jobUrl: '', description: '', referralCode: '', applicationNotes: '', notes: '', nextAction: '', nextActionAt: '',
 })
 const form = reactive(emptyForm())
 const originalStatus = ref<ApplicationStatus>('SAVED')
 
 function statusLabel(status: ApplicationStatus) { return statusOptions.find(option => option.value === status)?.label ?? status }
-function channelLabel(channel: ApplicationChannel) { return channelOptions.find(option => option.value === channel)?.label ?? channel }
 function statusTone(status: ApplicationStatus) {
   return ({
     SAVED: 'neutral', PREPARING: 'amber', APPLIED: 'blue', WRITTEN_TEST: 'violet',
@@ -75,7 +78,11 @@ function statusTone(status: ApplicationStatus) {
   } as Record<ApplicationStatus, string>)[status]
 }
 function eventLabel(type: ApplicationEvent['type']) { return ({ CREATE: '创建投递', UPDATE: '编辑信息', STATUS_CHANGED: '状态变更', DELETE: '删除投递' })[type] }
-function dateText(value: string | null) { return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' }).format(new Date(value)) : '—' }
+function dateText(value: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()}`
+}
 function toDateInput(value: string | null) { return value ? value.slice(0, 10) : '' }
 function optional(value: string) { return value.trim() || null }
 function salaryText(item: ApplicationItem) {
@@ -86,14 +93,14 @@ function salaryText(item: ApplicationItem) {
 }
 function resetForm() { Object.assign(form, emptyForm()) }
 function resetFilters() {
-  Object.assign(filters, { search: '', status: undefined, channel: undefined })
+  Object.assign(filters, { search: '', status: undefined })
   void fetchApplications()
 }
 function applicationPayload() {
   return {
-    companyName: form.companyName.trim(), jobTitle: form.jobTitle.trim(), department: optional(form.department), location: optional(form.location),
+    companyName: form.companyName.trim(), companyDescription: optional(form.companyDescription), jobTitle: form.jobTitle.trim(), department: optional(form.department), location: optional(form.location),
     salaryMin: form.salaryMin || null, salaryMax: form.salaryMax || null, channel: form.channel,
-    appliedAt: optional(form.appliedAt), jobUrl: optional(form.jobUrl), description: optional(form.description), notes: optional(form.notes),
+    appliedAt: optional(form.appliedAt), jobUrl: optional(form.jobUrl), description: optional(form.description), referralCode: optional(form.referralCode), applicationNotes: optional(form.applicationNotes), notes: optional(form.notes),
     nextAction: optional(form.nextAction), nextActionAt: optional(form.nextActionAt),
   }
 }
@@ -111,7 +118,7 @@ async function fetchApplications() {
   loading.value = true
   databaseError.value = false
   try {
-    const response = await $fetch<{ data: ApplicationListData }>('/api/v1/applications', { query: { search: filters.search || undefined, status: filters.status, channel: filters.channel } })
+    const response = await $fetch<{ data: ApplicationListData }>('/api/v1/applications', { query: { search: filters.search || undefined, status: filters.status, updatedSort: updatedSort.value } })
     applications.value = response.data.items
     total.value = response.data.total
   }
@@ -130,16 +137,21 @@ async function createApplication() {
   finally { submitting.value = false }
 }
 
+function sortByUpdatedAt({ order }: { order: 'ascending' | 'descending' | null }) {
+  updatedSort.value = order === 'ascending' ? 'asc' : 'desc'
+  void fetchApplications()
+}
+
 async function openDetail(item: ApplicationItem) {
   detailVisible.value = true; detailLoading.value = true; selectedApplication.value = null
   try {
     const response = await $fetch<{ data: ApplicationDetail }>(`/api/v1/applications/${item.id}`)
     selectedApplication.value = response.data
     Object.assign(form, {
-      companyName: response.data.job.company.name, jobTitle: response.data.job.title, department: response.data.job.department ?? '',
+      companyName: response.data.job.company.name, companyDescription: response.data.job.company.description ?? '', jobTitle: response.data.job.title, department: response.data.job.department ?? '',
       location: response.data.job.location ?? '', salaryMin: response.data.job.salaryMin ?? undefined, salaryMax: response.data.job.salaryMax ?? undefined,
       channel: response.data.channel, status: response.data.status, appliedAt: toDateInput(response.data.appliedAt), jobUrl: response.data.job.url ?? '',
-      description: response.data.job.description ?? '', notes: response.data.notes ?? '', nextAction: response.data.nextAction ?? '', nextActionAt: toDateInput(response.data.nextActionAt),
+      description: response.data.job.description ?? '', referralCode: response.data.job.referralCode ?? '', applicationNotes: response.data.job.applicationNotes ?? '', notes: response.data.notes ?? '', nextAction: response.data.nextAction ?? '', nextActionAt: toDateInput(response.data.nextActionAt),
     })
     originalStatus.value = response.data.status
     evaluationVersionId.value = resumeVersions.value[0]?.id ?? ''
@@ -166,17 +178,23 @@ async function saveDetail() {
   finally { submitting.value = false }
 }
 
-async function removeApplication() {
-  if (!selectedApplication.value) return
+async function removeApplicationItem(application: ApplicationItem, closeDetail = false) {
   try { await ElMessageBox.confirm('删除后不会在看板中显示，但审计记录会保留。确定删除吗？', '删除投递', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }) }
   catch { return }
   deleting.value = true
+  deletingId.value = application.id
   try {
-    await $fetch(`/api/v1/applications/${selectedApplication.value.id}`, { method: 'DELETE' })
-    ElMessage.success('投递记录已删除'); detailVisible.value = false; await fetchApplications()
+    await $fetch(`/api/v1/applications/${application.id}`, { method: 'DELETE' })
+    ElMessage.success('投递记录已删除')
+    if (closeDetail || selectedApplication.value?.id === application.id) detailVisible.value = false
+    await fetchApplications()
   }
   catch { ElMessage.error('删除失败，请稍后重试。') }
-  finally { deleting.value = false }
+  finally { deleting.value = false; deletingId.value = null }
+}
+
+async function removeApplication() {
+  if (selectedApplication.value) await removeApplicationItem(selectedApplication.value, true)
 }
 
 async function moveApplication(application: ApplicationItem, status: ApplicationStatus) {
@@ -205,19 +223,18 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
     <div class="application-records__toolbar">
       <el-input v-model="filters.search" style="width: 180px" clearable placeholder="搜索公司或岗位" @input="fetchApplications" @clear="fetchApplications" />
       <el-select v-model="filters.status" style="width: 104px" clearable placeholder="状态" @change="fetchApplications" @clear="fetchApplications"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
-      <el-select v-model="filters.channel" style="width: 104px" clearable placeholder="渠道" @change="fetchApplications" @clear="fetchApplications"><el-option v-for="option in channelOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
       <el-button class="application-records__reset" plain @click="resetFilters">重置</el-button>
       <el-button-group class="application-records__view-toggle ml-auto"><el-button :class="{ 'is-active': viewMode === 'list' }" @click="viewMode = 'list'">列表</el-button>
         <el-button :class="{ 'is-active': viewMode === 'kanban' }" @click="viewMode = 'kanban'">看板</el-button></el-button-group>
     </div>
 
-    <div v-if="viewMode === 'list'" class="workbench-table-shell workbench-table-shell--transparent"><el-table v-loading="loading" :data="applications" empty-text="还没有投递记录，先创建第一条吧。" class="w-full" @row-click="openDetail">
+    <div v-if="viewMode === 'list'" class="workbench-table-shell workbench-table-shell--transparent"><el-table v-loading="loading" :data="applications" empty-text="还没有投递记录，先创建第一条吧。" class="w-full" :default-sort="{ prop: 'updatedAt', order: 'descending' }" @row-click="openDetail" @sort-change="sortByUpdatedAt">
+      <el-table-column label="更新时间" prop="updatedAt" sortable="custom" :sort-orders="['descending', 'ascending']" width="132"><template #default="{ row }">{{ dateText(row.updatedAt) }}</template></el-table-column>
       <el-table-column label="公司 / 岗位" min-width="250"><template #default="{ row }"><div class="application-cell-role"><strong>{{ row.job.company.name }}</strong><span>{{ row.job.title }}</span></div></template></el-table-column>
       <el-table-column label="当前阶段" width="140"><template #default="{ row }"><span :class="['application-status', `application-status--${statusTone(row.status)}`]">{{ statusLabel(row.status) }}</span></template></el-table-column>
-      <el-table-column label="投递渠道" width="120"><template #default="{ row }"><span class="application-cell-channel">{{ channelLabel(row.channel) }}</span></template></el-table-column>
-      <el-table-column label="地点 / 薪资" min-width="160"><template #default="{ row }"><span class="application-cell-meta">{{ row.job.location || '地点待定' }} · {{ salaryText(row) }}</span></template></el-table-column>
       <el-table-column label="下一步" min-width="190"><template #default="{ row }"><span class="application-cell-next">{{ row.nextAction || '待安排' }}</span></template></el-table-column>
-      <el-table-column label="投递" width="82"><template #default="{ row }"><a v-if="row.job.url" class="application-cell-apply" :href="row.job.url" target="_blank" rel="noopener noreferrer" @click.stop>投递</a><span v-else class="application-cell-empty">—</span></template></el-table-column>
+      <el-table-column label="内推码" min-width="120"><template #default="{ row }"><span class="application-cell-referral">{{ row.job.referralCode || '—' }}</span></template></el-table-column>
+      <el-table-column label="操作" fixed="right" width="132"><template #default="{ row }"><div class="application-cell-actions"><el-button class="application-cell-action-button" size="small" type="danger" plain :loading="deletingId === row.id" @click.stop="removeApplicationItem(row)">删除</el-button><el-button v-if="row.job.url" class="application-cell-action-button" size="small" type="success" plain tag="a" :href="row.job.url" target="_blank" rel="noopener noreferrer" @click.stop>投递</el-button><el-button v-else class="application-cell-action-button" size="small" type="success" plain disabled>投递</el-button></div></template></el-table-column>
     </el-table></div>
 
     <div v-else v-loading="loading" class="grid gap-3 overflow-x-auto pb-2" style="grid-template-columns: repeat(8, minmax(200px, 1fr))">
@@ -229,13 +246,13 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
     </section>
 
     <el-dialog v-model="createDialogVisible" title="新增投递" width="620px" destroy-on-close @closed="resetForm">
-      <el-form label-position="top"><div class="grid grid-cols-1 gap-x-4 md:grid-cols-2"><el-form-item label="公司名称" required><el-input v-model="form.companyName" placeholder="例如：字节跳动" /></el-form-item><el-form-item label="岗位名称" required><el-input v-model="form.jobTitle" placeholder="例如：前端开发工程师" /></el-form-item><el-form-item label="投递状态" required><el-select v-model="form.status" class="w-full"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item><el-form-item label="投递渠道"><el-select v-model="form.channel" class="w-full"><el-option v-for="option in channelOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item></div><el-form-item label="工作地点"><el-input v-model="form.location" placeholder="例如：北京" /></el-form-item><el-form-item label="岗位链接"><el-input v-model="form.jobUrl" placeholder="https://..." /></el-form-item><el-form-item label="下一步安排"><el-input v-model="form.nextAction" placeholder="例如：本周五前完成笔试" /></el-form-item><el-form-item label="JD 原文"><el-input v-model="form.description" type="textarea" :rows="4" placeholder="可粘贴职位描述，后续用于匹配与打招呼话生成。" /></el-form-item></el-form>
+      <el-form label-position="top"><div class="grid grid-cols-1 gap-x-4 md:grid-cols-2"><el-form-item label="公司名称" required><el-input v-model="form.companyName" placeholder="例如：字节跳动" /></el-form-item><el-form-item label="岗位名称" required><el-input v-model="form.jobTitle" placeholder="例如：前端开发工程师" /></el-form-item><el-form-item label="投递状态" required><el-select v-model="form.status" class="w-full"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item><el-form-item label="投递渠道"><el-select v-model="form.channel" class="w-full"><el-option v-for="option in channelOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item></div><el-form-item label="工作地点"><el-input v-model="form.location" placeholder="例如：北京" /></el-form-item><el-form-item label="岗位链接"><el-input v-model="form.jobUrl" placeholder="https://..." /></el-form-item><el-form-item label="内推码"><el-input v-model="form.referralCode" placeholder="如无内推码可留空" /></el-form-item><el-form-item label="下一步安排"><el-input v-model="form.nextAction" placeholder="例如：本周五前完成笔试" /></el-form-item><el-form-item label="JD 原文"><el-input v-model="form.description" type="textarea" :rows="4" placeholder="可粘贴职位描述，后续用于匹配与打招呼话生成。" /></el-form-item><el-form-item label="投递注意事项"><el-input v-model="form.applicationNotes" type="textarea" :rows="3" /></el-form-item><el-form-item label="公司介绍"><el-input v-model="form.companyDescription" type="textarea" :rows="3" /></el-form-item></el-form>
       <template #footer><el-button type="primary" :loading="submitting" @click="createApplication">保存投递</el-button></template>
     </el-dialog>
 
     <el-drawer v-model="detailVisible" title="投递详情" size="400px" destroy-on-close :show-close="false" header-class="!mb-0 !pb-2">
       <template #header><div class="flex w-full items-center justify-between gap-2"><h2 class="m-0 text-lg font-semibold text-slate-800">投递详情</h2><div class="flex gap-1"><el-button size="small" type="primary" plain @click="openAgent('evaluate')">在 Agent 中分析</el-button><el-button size="small" type="primary" plain @click="openAgent('interview')">准备面试</el-button></div></div></template>
-      <div v-loading="detailLoading" class="pr-3"><template v-if="selectedApplication"><el-form label-position="top"><div class="grid grid-cols-1 gap-x-4 md:grid-cols-2"><el-form-item label="公司名称" required><el-input v-model="form.companyName" /></el-form-item><el-form-item label="岗位名称" required><el-input v-model="form.jobTitle" /></el-form-item><el-form-item label="部门"><el-input v-model="form.department" /></el-form-item><el-form-item label="工作地点"><el-input v-model="form.location" /></el-form-item><el-form-item label="薪资下限（元/月）"><el-input-number v-model="form.salaryMin" class="w-full" :min="1" controls-position="right" /></el-form-item><el-form-item label="薪资上限（元/月）"><el-input-number v-model="form.salaryMax" class="w-full" :min="1" controls-position="right" /></el-form-item><el-form-item label="状态"><el-select v-model="form.status" class="w-full"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item><el-form-item label="投递渠道"><el-select v-model="form.channel" class="w-full"><el-option v-for="option in channelOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item><el-form-item label="投递日期"><el-date-picker v-model="form.appliedAt" class="w-full" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="下一步日期"><el-date-picker v-model="form.nextActionAt" class="w-full" type="date" value-format="YYYY-MM-DD" /></el-form-item></div><el-form-item label="岗位链接"><el-input v-model="form.jobUrl" /></el-form-item><el-form-item label="下一步安排"><el-input v-model="form.nextAction" /></el-form-item><el-form-item label="JD 原文"><el-input v-model="form.description" type="textarea" :rows="5" /></el-form-item><el-form-item label="备注"><el-input v-model="form.notes" type="textarea" :rows="4" /></el-form-item></el-form><div class="mt-6 border-t border-slate-200 pt-5"><h3 class="mb-3 text-base text-slate-800">操作时间线</h3><el-timeline><el-timeline-item v-for="event in selectedApplication.events" :key="event.id" :timestamp="dateText(event.occurredAt)" placement="top">{{ eventLabel(event.type) }}</el-timeline-item></el-timeline></div></template></div>
+      <div v-loading="detailLoading" class="pr-3"><template v-if="selectedApplication"><el-form label-position="top"><div class="grid grid-cols-1 gap-x-4 md:grid-cols-2"><el-form-item label="公司名称" required><el-input v-model="form.companyName" /></el-form-item><el-form-item label="岗位名称" required><el-input v-model="form.jobTitle" /></el-form-item><el-form-item label="部门"><el-input v-model="form.department" /></el-form-item><el-form-item label="工作地点"><el-input v-model="form.location" /></el-form-item><el-form-item label="薪资下限（元/月）"><el-input-number v-model="form.salaryMin" class="w-full" :min="1" controls-position="right" /></el-form-item><el-form-item label="薪资上限（元/月）"><el-input-number v-model="form.salaryMax" class="w-full" :min="1" controls-position="right" /></el-form-item><el-form-item label="状态"><el-select v-model="form.status" class="w-full"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item><el-form-item label="投递渠道"><el-select v-model="form.channel" class="w-full"><el-option v-for="option in channelOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item><el-form-item label="投递日期"><el-date-picker v-model="form.appliedAt" class="w-full" type="date" value-format="YYYY-MM-DD" /></el-form-item><el-form-item label="下一步日期"><el-date-picker v-model="form.nextActionAt" class="w-full" type="date" value-format="YYYY-MM-DD" /></el-form-item></div><el-form-item label="岗位链接"><el-input v-model="form.jobUrl" /></el-form-item><el-form-item label="内推码"><el-input v-model="form.referralCode" /></el-form-item><el-form-item label="下一步安排"><el-input v-model="form.nextAction" /></el-form-item><el-form-item label="JD 原文"><el-input v-model="form.description" type="textarea" :rows="5" /></el-form-item><el-form-item label="投递注意事项"><el-input v-model="form.applicationNotes" type="textarea" :rows="4" /></el-form-item><el-form-item label="公司介绍"><el-input v-model="form.companyDescription" type="textarea" :rows="4" /></el-form-item><el-form-item label="备注"><el-input v-model="form.notes" type="textarea" :rows="4" /></el-form-item></el-form><div class="mt-6 border-t border-slate-200 pt-5"><h3 class="mb-3 text-base text-slate-800">操作时间线</h3><el-timeline><el-timeline-item v-for="event in selectedApplication.events" :key="event.id" :timestamp="dateText(event.occurredAt)" placement="top">{{ eventLabel(event.type) }}</el-timeline-item></el-timeline></div></template></div>
       <template #footer><div class="flex items-center justify-between"><el-button type="danger" plain :loading="deleting" @click="removeApplication">删除投递</el-button><el-button type="primary" :loading="submitting" @click="saveDetail">保存修改</el-button></div></template>
     </el-drawer>
   </section>

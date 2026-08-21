@@ -186,3 +186,11 @@ Application 是用户的状态与决策记录；Job 是岗位事实。不得把�
 
 - ApplicationProfile.resumeVersionId 仍表示显式默认版本且不被自动写入。fill-context 在其为空时可只读派生当前 User 的 BASE ResumeVersion 作为 AI 补充事实来源。
 - BASE 回退不创建 ApplicationProfile/ResumeVersion/DocumentMutationEvent，也不改变文档版本关系；仅存在于用户本次明确点击填写所触发的 preview 上下文。
+
+## F-035 岗位详情补充字段约束
+
+- `Company.description?` 保存可复用于同一公司的公司介绍；`Job.referralCode?` 与 `Job.applicationNotes?` 分别保存岗位内推码和投递注意事项。
+- 三个字段均为用户或导入来源提供的可空文本，不由 AI 推断；历史记录不回填，migration 仅增加可空列。
+- 从岗位库创建 Application 仍只建立对原 Job 的引用，因此新增岗位事实会自然出现在投递看板，不创建字段副本。
+- 用户在投递详情保存上述信息时，沿用 Application 更新事务并写 `ApplicationEvent(type=UPDATE)`；纯查看岗位详情不产生事件。
+- 已知来源污染文本“婉清学姐冲冲冲的店唯一正版”不属于行业或企业性质事实；导入边界删除该文本，migration 同步清理存量 Company 分类字段。

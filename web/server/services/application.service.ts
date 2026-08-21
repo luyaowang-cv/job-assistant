@@ -17,6 +17,7 @@ export async function createApplication(input: CreateApplicationInput) {
       where: { name: input.companyName },
       update: {
         website: input.companyWebsite ?? undefined,
+        description: input.companyDescription ?? undefined,
         industry: input.companyIndustry ?? undefined,
         companyType: input.companyType ?? undefined,
         tags: input.companyTags ?? undefined,
@@ -24,6 +25,7 @@ export async function createApplication(input: CreateApplicationInput) {
       create: {
         name: input.companyName,
         website: input.companyWebsite ?? null,
+        description: input.companyDescription ?? null,
         industry: input.companyIndustry ?? null,
         companyType: input.companyType ?? null,
         tags: input.companyTags ?? [],
@@ -41,6 +43,8 @@ export async function createApplication(input: CreateApplicationInput) {
         source: input.source,
         url: input.jobUrl ?? null,
         description: input.description ?? null,
+        referralCode: input.referralCode ?? null,
+        applicationNotes: input.applicationNotes ?? null,
         deadlineAt: input.deadlineAt ?? null,
       },
     })
@@ -105,7 +109,7 @@ export async function listApplications(query: ListApplicationsQuery) {
     prisma.application.findMany({
       where,
       include: { job: { include: { company: true } } },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { updatedAt: query.updatedSort },
       skip: (query.page - 1) * query.pageSize,
       take: query.pageSize,
     }),
@@ -137,12 +141,13 @@ export async function updateApplication(applicationId: string, input: UpdateAppl
   return prisma.$transaction(async (transaction) => {
     const changedFields = Object.keys(input).filter(key => input[key as keyof UpdateApplicationInput] !== undefined)
 
-    if (input.companyName !== undefined || input.companyWebsite !== undefined || input.companyIndustry !== undefined || input.companyType !== undefined || input.companyTags !== undefined) {
+    if (input.companyName !== undefined || input.companyWebsite !== undefined || input.companyDescription !== undefined || input.companyIndustry !== undefined || input.companyType !== undefined || input.companyTags !== undefined) {
       await transaction.company.update({
         where: { id: current.job.company.id },
         data: {
           name: input.companyName,
           website: input.companyWebsite,
+          description: input.companyDescription,
           industry: input.companyIndustry,
           companyType: input.companyType,
           tags: input.companyTags,
@@ -150,7 +155,7 @@ export async function updateApplication(applicationId: string, input: UpdateAppl
       })
     }
 
-    if (input.jobTitle !== undefined || input.department !== undefined || input.location !== undefined || input.salaryMin !== undefined || input.salaryMax !== undefined || input.source !== undefined || input.jobUrl !== undefined || input.description !== undefined || input.deadlineAt !== undefined) {
+    if (input.jobTitle !== undefined || input.department !== undefined || input.location !== undefined || input.salaryMin !== undefined || input.salaryMax !== undefined || input.source !== undefined || input.jobUrl !== undefined || input.description !== undefined || input.referralCode !== undefined || input.applicationNotes !== undefined || input.deadlineAt !== undefined) {
       await transaction.job.update({
         where: { id: current.jobId },
         data: {
@@ -162,6 +167,8 @@ export async function updateApplication(applicationId: string, input: UpdateAppl
           source: input.source,
           url: input.jobUrl,
           description: input.description,
+          referralCode: input.referralCode,
+          applicationNotes: input.applicationNotes,
           deadlineAt: input.deadlineAt,
         },
       })

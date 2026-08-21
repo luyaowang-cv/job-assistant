@@ -141,6 +141,7 @@ model Company {
   id          String   @id @default(cuid())
   name        String   @unique
   website     String?
+  description String?
   industry    String?
   companyType String?
   tags        String[] @default([])
@@ -163,6 +164,8 @@ model Job {
   deadlineAt  DateTime?
   recruitmentType String?
   announcementUrl String?
+  referralCode String?
+  applicationNotes String?
   hasWrittenTest Boolean?
   sourceDocId String?
   sourceUpdatedAt DateTime?

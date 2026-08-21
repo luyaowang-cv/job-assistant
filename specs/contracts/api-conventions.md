@@ -164,7 +164,7 @@
 | GET | `/api/v1/integrations/feishu/callback` | 飞书的 `code`、`state` | 持久化授权后 302 回 `/jobs?feishu=connected` |
 | DELETE | `/api/v1/integrations/feishu` | 无 | `{ disconnected: true }` |
 
-- 授权 scope 固定为 `bitable:app:readonly offline_access`。`bitable:app:readonly` 已覆盖多维表格、数据表与记录的查看/评论/导出读取能力；OAuth state 必须签名并限时校验，回调 code 只能在服务器端用 App Secret 交换。
+- 授权 scope 固定为 `bitable:app:readonly wiki:wiki wiki:wiki:readonly wiki:node:read drive:export:readonly offline_access`。多维表格 scope 用于读取 Bitable，Wiki scopes 用于解析 Wiki 节点，导出 scope 用于将 `resource_type=bitable` 的 Sheet 容器只读导出为 XLSX；OAuth state 必须签名并限时校验，回调 code 只能在服务器端用 App Secret 交换。
 - 岗位同步仅使用当前 local user 的有效 `user_access_token`；access token 到期时服务器用已加密的 refresh token 刷新并轮换保存。用户授权满 365 天或 refresh 失败时，返回重新连接指引。
 
 ## F-001 Application API
@@ -267,5 +267,15 @@
 ## F-034 上下文感知表单填写
 
 - `GET /api/v1/application-profiles/:id/fill-context` 优先使用档案显式绑定的 ResumeVersion；未绑定时只读回退当前 User 的 BASE ResumeVersion，不修改 ApplicationProfile。
+
+## F-035 岗位与投递详情字段
+
+- `GET /api/v1/jobs` 的岗位项包含 `referralCode`、`applicationNotes`，关联 Company 包含 `description`；现有筛选查询参数保持后端兼容，但岗位库 UI 不再发送 industry、recruitmentType、hasWrittenTest。可选 `updatedSort=asc|desc` 按 `sourceUpdatedAt` 排序，默认 desc，空值始终置后。
+- Excel/飞书岗位导入可接收内推码、投递注意事项、公司介绍；所有字段经 Zod trim/限长，缺失值保存为 null。
+- 飞书导入同时接受 `/base/{appToken}` 与 `/wiki/{wikiToken}` 链接；Wiki 链接通过当前用户授权调用 Wiki node API。节点为 Bitable 时读取记录 API；节点为 Sheet 且子资源是 Bitable 时创建只读 XLSX 导出任务，下载到内存后按表头解析，不持久化导出文件。`TfJkwz7yIil5qvktSKOcBJj8nFd` 数据源不应用届次/批次过滤。
+- 导入记录的企业名称若以含明确月日的半角或全角括号结尾，则去除该日期括号作为 Company.name，并在没有独立更新时间时以同步年份补全 `sourceUpdatedAt`；非日期括号保持原文。
+- 导出任务轮询以 `result.file_token` 作为完成信号；`job_status=0` 为成功，`job_error_msg=success` 不视为错误。
+- `POST /api/v1/applications` 与 `PATCH /api/v1/applications/:id` 分别通过 `referralCode`、`applicationNotes`、`companyDescription` 写入对应 Job/Company；PATCH 的写入继续生成 UPDATE ApplicationEvent。
+- `GET /api/v1/applications` 与 `GET /api/v1/applications/:id` 通过关联 Job/Company 返回新增字段，不新增独立详情 API；列表可选 `updatedSort=asc|desc` 按 `Application.updatedAt` 排序，默认 desc。
 - `POST /api/v1/form-fill/preview` 的模型上下文压缩为 basics、educations、strategy、experiences、非空 sections、resumeContent 和 legacy 分类字段；composition id、计数和审计元数据不进入 prompt。
 - descriptor.context 可携带不含页面已有值的字段顺序、同名序号和相邻标签；仍不得提交页面输入值、DOM 或 HTML。

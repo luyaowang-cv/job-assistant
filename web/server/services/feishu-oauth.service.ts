@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma'
 
 import { getLocalUser } from './local-user'
 
-const authorizationScopes = ['bitable:app:readonly', 'offline_access']
+const authorizationScopes = ['bitable:app:readonly', 'wiki:wiki', 'wiki:wiki:readonly', 'wiki:node:read', 'drive:export:readonly', 'offline_access']
 const stateMaxAgeMs = 10 * 60 * 1_000
 
 export class FeishuOAuthError extends Error {

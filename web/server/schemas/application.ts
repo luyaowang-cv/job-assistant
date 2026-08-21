@@ -35,6 +35,7 @@ const optionalDateSchema = z.coerce.date().nullish()
 export const createApplicationSchema = z.object({
   companyName: z.string().trim().min(1).max(120),
   companyWebsite: optionalUrlSchema,
+  companyDescription: optionalTextSchema,
   companyIndustry: z.string().trim().max(80).nullish(),
   companyType: z.string().trim().max(80).nullish(),
   companyTags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
@@ -46,6 +47,8 @@ export const createApplicationSchema = z.object({
   source: jobSourceSchema.default('MANUAL'),
   jobUrl: optionalUrlSchema,
   description: optionalTextSchema,
+  referralCode: z.string().trim().max(500).nullish(),
+  applicationNotes: optionalTextSchema,
   deadlineAt: optionalDateSchema,
   status: applicationStatusSchema,
   channel: applicationChannelSchema.default('OTHER'),
@@ -71,6 +74,7 @@ export const updateApplicationStatusSchema = z.object({
 export const updateApplicationSchema = z.object({
   companyName: z.string().trim().min(1).max(120).optional(),
   companyWebsite: optionalUrlSchema,
+  companyDescription: optionalTextSchema,
   companyIndustry: z.string().trim().max(80).nullish(),
   companyType: z.string().trim().max(80).nullish(),
   companyTags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
@@ -82,6 +86,8 @@ export const updateApplicationSchema = z.object({
   source: jobSourceSchema.optional(),
   jobUrl: optionalUrlSchema,
   description: optionalTextSchema,
+  referralCode: z.string().trim().max(500).nullish(),
+  applicationNotes: optionalTextSchema,
   deadlineAt: optionalDateSchema,
   channel: applicationChannelSchema.optional(),
   appliedAt: optionalDateSchema,
@@ -111,6 +117,7 @@ export const listApplicationsQuerySchema = z.object({
   search: z.string().trim().min(1).max(120).optional(),
   status: applicationStatusSchema.optional(),
   channel: applicationChannelSchema.optional(),
+  updatedSort: z.enum(['asc', 'desc']).default('desc'),
 })
 
 export const applicationIdSchema = z.object({
