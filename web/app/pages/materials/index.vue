@@ -13,14 +13,11 @@ const deleting = ref(false)
 const search = ref('')
 const type = ref('')
 const tags = ref<string[]>([])
-const includeArchived = ref(false)
 const editorOpen = ref(false)
 const editingId = ref<string | null>(null)
 const form = reactive({ type: 'PROJECT', title: '', organization: '', role: '', techStackText: '', tags: [] as string[], startDate: '', endDate: '', current: false, projectUrl: '', variantName: '简短版', content: '' })
 const variant = reactive({ name: '网申版', content: '' })
 const variantNameOptions = ['简短版', '网申版', '完整版']
-const impact = ref<{ previewToken: string; targets: Array<{ id: string; title: string; reason: string }> } | null>(null)
-const selectedTargets = ref<string[]>([])
 const timedTypes = new Set(['PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE'])
 const detailedTypes = new Set(['PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE'])
 const technicalTypes = new Set(['PROJECT', 'INTERNSHIP', 'WORK'])
@@ -43,7 +40,7 @@ function cardMeta(card: Card) {
 async function load() {
   loading.value = true
   try {
-    const response = await $fetch<{ data: ListResponse }>('/api/v1/material-cards', { query: { search: search.value, type: type.value || undefined, tags: tags.value.join(','), includeArchived: includeArchived.value, pageSize: 100 } })
+    const response = await $fetch<{ data: ListResponse }>('/api/v1/material-cards', { query: { search: search.value, type: type.value || undefined, tags: tags.value.join(','), pageSize: 100 } })
     cards.value = response.data.items
     if (selected.value) selected.value = cards.value.find(card => card.id === selected.value?.id) ?? null
   } catch { ElMessage.error('素材库读取失败。') } finally { loading.value = false }
@@ -111,13 +108,6 @@ async function addVariant() {
     ElMessage.success('新文案版本已保存。')
   } catch { ElMessage.error('保存失败；版本名称不能重复。') } finally { saving.value = false }
 }
-async function archive() {
-  if (!selected.value) return
-  await ElMessageBox.confirm('归档后不再进入新文档候选，历史引用仍可读取。', '确认归档')
-  await $fetch(`/api/v1/material-cards/${selected.value.id}/archive`, { method: 'POST' })
-  selected.value = null
-  await load()
-}
 async function removeCard() {
   if (!selected.value) return
   await ElMessageBox.confirm('删除后该卡片及其所有版本将从素材库和相关文档中移除，且不可恢复。确认删除？', '确认删除', {
@@ -135,19 +125,7 @@ async function removeCard() {
   catch { ElMessage.error('删除失败，请重试。') }
   finally { deleting.value = false }
 }
-async function previewImpact() {
-  if (!selected.value) return
-  const response = await $fetch<{ data: NonNullable<typeof impact.value> }>(`/api/v1/material-cards/${selected.value.id}/impact-preview`, { method: 'POST', body: { mode: 'SYNC', targetTags: selected.value.tags } })
-  impact.value = response.data
-  selectedTargets.value = []
-}
-async function confirmSync() {
-  if (!selected.value || !impact.value || !selectedTargets.value.length) return
-  const response = await $fetch<{ data: { results: Array<{ status: string }> } }>(`/api/v1/material-cards/${selected.value.id}/sync`, { method: 'POST', body: { previewToken: impact.value.previewToken, idempotencyKey: crypto.randomUUID(), targetIds: selectedTargets.value } })
-  ElMessage.success(`同步完成：${response.data.results.filter(item => item.status === 'created').length} 个新版本`)
-  impact.value = null
-}
-watch([search, type, tags, includeArchived], () => void load(), { deep: true })
+watch([search, type, tags], () => void load(), { deep: true })
 onMounted(() => void load())
 </script>
 
@@ -162,24 +140,23 @@ onMounted(() => void load())
         <el-input v-model="search" clearable placeholder="搜索标题或文案" />
         <el-select v-model="type" clearable placeholder="全部类型"><el-option v-for="(label, key) in typeLabels" :key="key" :label="label" :value="key" /></el-select>
         <el-select v-model="tags" multiple filterable allow-create placeholder="标签全部匹配" />
-        <el-checkbox v-model="includeArchived">显示已归档</el-checkbox>
       </div>
       <div v-loading="loading" class="material-layout">
         <div class="card-list" role="list" aria-label="素材卡片">
           <button v-for="card in cards" :key="card.id" class="material-card-row" :class="{ active: selected?.id === card.id }" type="button" @click="selected = card">
-            <span class="material-card-row__type">{{ typeLabels[card.type] }}</span><strong>{{ displayCardTitle(card) }}</strong><el-tag v-if="card.archivedAt" type="info">已归档</el-tag>
+            <span class="material-card-row__type">{{ typeLabels[card.type] }}</span><strong>{{ displayCardTitle(card) }}</strong>
             <span class="material-card-row__meta">{{ [cardMeta(card), card.tags.join(' · ')].filter(Boolean).join(' · ') || '未填写补充信息' }}</span>
           </button>
           <el-empty v-if="!loading && !cards.length" description="没有符合条件的素材" />
         </div>
         <aside class="card-detail" aria-live="polite">
           <template v-if="selected">
-            <div class="card-detail__heading"><div><span>{{ typeLabels[selected.type] }}</span><h2>{{ displayCardTitle(selected) }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><el-button v-if="!selected.archivedAt" plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button v-if="!selected.archivedAt" plain type="danger" @click="archive">归档</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div>
+            <div class="card-detail__heading"><div class="card-detail__title"><span>{{ typeLabels[selected.type] }}</span><h2>{{ displayCardTitle(selected) }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><div class="card-detail__actions"><el-button plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div></div>
             <div class="variant-history"><article v-for="item in selected.variants" :key="item.id"><b>{{ item.name }}</b><small>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small><p>{{ item.content }}</p></article></div>
-            <el-form v-if="!selected.archivedAt" label-position="top">
+            <el-form label-position="top">
               <el-form-item label="新增文案版本"><el-select v-model="variant.name" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
               <el-form-item label="文案"><el-input v-model="variant.content" type="textarea" :rows="5" show-word-limit maxlength="20000" /></el-form-item>
-              <div class="card-actions"><el-button :loading="saving" @click="addVariant">保存新版本</el-button><el-button type="primary" plain @click="previewImpact">查看影响</el-button></div>
+              <div class="card-actions"><el-button type="primary" :loading="saving" @click="addVariant">保存新版本</el-button></div>
             </el-form>
           </template>
           <el-empty v-else description="选择一张素材查看版本" />
@@ -219,17 +196,11 @@ onMounted(() => void load())
       </el-form>
       <template #footer><el-button @click="editorOpen = false">取消</el-button><el-button text type="primary" :loading="saving" @click="createCard">{{ editingId ? '保存' : '创建' }}</el-button></template>
     </el-dialog>
-    <el-dialog :model-value="Boolean(impact)" title="影响预览" width="min(680px, 92vw)" @close="impact = null">
-      <p>预览不会修改任何文档。请选择要创建新版本的目标：</p>
-      <el-checkbox-group v-if="impact?.targets.length" v-model="selectedTargets" class="impact-targets"><el-checkbox v-for="target in impact.targets" :key="target.id" :value="target.id"><b>{{ target.title }}</b> · {{ target.reason === 'DIRECT_REFERENCE' ? '正在引用' : '标签匹配' }}</el-checkbox></el-checkbox-group>
-      <el-empty v-else description="当前没有受影响文档" />
-      <template #footer><el-button @click="impact = null">取消</el-button><el-button type="primary" :disabled="!selectedTargets.length" @click="confirmSync">确认并创建新版本</el-button></template>
-    </el-dialog>
   </section>
 </template>
 
 <style scoped>
-.material-library{padding:24px}.material-surface__header h1{margin:4px 0 6px}.material-toolbar{display:grid;grid-template-columns:2fr 1fr 1.4fr auto;gap:12px;align-items:center;margin:20px 0}.material-layout{display:grid;grid-template-columns:minmax(280px,.9fr) minmax(360px,1.4fr);gap:18px;min-height:520px}.card-list,.card-detail{border:1px solid var(--el-border-color-lighter);border-radius:16px;background:var(--el-bg-color);padding:12px}.card-list{display:flex;flex-direction:column;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:flex;justify-content:space-between;align-items:start}.card-detail__heading h2{margin:4px 0 2px}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;max-height:290px;overflow:auto;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}.time-grid{grid-template-columns:1fr 1fr}.time-grid :deep(.el-date-editor){width:100%}.end-date-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;width:100%}.form-help{width:100%;margin:7px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5}.facts-note{align-self:start;display:grid;gap:4px;margin-top:30px;padding:10px 12px;border-left:3px solid var(--el-color-primary);background:var(--el-color-primary-light-9);color:var(--el-text-color-regular);font-size:12px}.facts-note b{font-size:13px;color:var(--el-text-color-primary)}.impact-targets{display:grid;gap:12px}.impact-targets :deep(.el-checkbox){height:auto;white-space:normal}
+.material-library{padding:24px}.material-surface__header h1{margin:4px 0 6px}.material-toolbar{display:grid;grid-template-columns:2fr 1fr 1.4fr;gap:12px;align-items:center;margin:20px 0}.material-layout{display:grid;grid-template-columns:minmax(280px,.9fr) minmax(360px,1.4fr);gap:18px;min-height:520px}.card-list,.card-detail{border:1px solid var(--el-border-color-lighter);border-radius:16px;background:var(--el-bg-color);padding:12px}.card-list{display:flex;flex-direction:column;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;max-height:290px;overflow:auto;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}.time-grid{grid-template-columns:1fr 1fr}.time-grid :deep(.el-date-editor){width:100%}.end-date-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;width:100%}.form-help{width:100%;margin:7px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5}.facts-note{align-self:start;display:grid;gap:4px;margin-top:30px;padding:10px 12px;border-left:3px solid var(--el-color-primary);background:var(--el-color-primary-light-9);color:var(--el-text-color-regular);font-size:12px}.facts-note b{font-size:13px;color:var(--el-text-color-primary)}
 @media(max-width:900px){.material-toolbar{grid-template-columns:1fr 1fr}.material-layout{grid-template-columns:1fr}.card-detail{min-height:360px}}
 @media(max-width:560px){.material-library{padding:16px}.material-toolbar,.dialog-grid{grid-template-columns:1fr}.material-surface__header{align-items:flex-start;gap:12px}.material-card-row{grid-template-columns:auto 1fr}}
 </style>

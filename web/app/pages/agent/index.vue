@@ -18,6 +18,7 @@ type Conversation = {
   _count?: { messages: number }
 }
 type StreamEvent = { type: 'delta'; text: string } | { type: 'done'; provider: string; model: string } | { type: 'error'; message: string }
+type TypewriterState = { buffer: string; ended: boolean; wake: (() => void) | null }
 
 const route = useRoute()
 const applications = ref<Application[]>([])
@@ -37,6 +38,7 @@ const saveTarget = ref<Message | null>(null)
 const savingToInterview = ref(false)
 const saveForm = reactive({ kind: 'KNOWLEDGE' as 'KNOWLEDGE' | 'QUESTION_ASK' | 'ROLE_POINT', title: 'Agent 面试准备' })
 let controller: AbortController | null = null
+let scrollFrame: number | null = null
 
 const selectedApplication = computed(() => applications.value.find(item => item.id === applicationId.value))
 const selectedVersion = computed(() => resume.value?.versions.find(item => item.id === resumeVersionId.value))
@@ -129,6 +131,46 @@ async function load() {
 function applyPrompt(text: string) { input.value = text }
 async function scrollToBottom(smooth = true) { await nextTick(); conversation.value?.scrollTo({ top: conversation.value.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }) }
 
+function scheduleScrollToBottom() {
+  if (scrollFrame !== null) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = null
+    const element = conversation.value
+    if (element) element.scrollTop = element.scrollHeight
+  })
+}
+
+function enqueueTypewriter(state: TypewriterState, text: string) {
+  if (!text) return
+  state.buffer += text
+  state.wake?.()
+  state.wake = null
+}
+
+function finishTypewriter(state: TypewriterState) {
+  state.ended = true
+  state.wake?.()
+  state.wake = null
+}
+
+function isIncompleteMarkdownPrefix(value: string) {
+  return /^(?:#{1,3}\s?|\*{1,2})$/.test(value)
+}
+
+async function runTypewriter(message: Message, state: TypewriterState) {
+  while (!state.ended || state.buffer) {
+    if (!state.buffer || (!message.content && !state.ended && isIncompleteMarkdownPrefix(state.buffer))) {
+      await new Promise<void>((resolve) => { state.wake = resolve })
+      continue
+    }
+    const take = Math.min(48, Math.max(2, Math.ceil(state.buffer.length / 24)))
+    message.content += state.buffer.slice(0, take)
+    state.buffer = state.buffer.slice(take)
+    scheduleScrollToBottom()
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+  }
+}
+
 async function ensureConversation() {
   if (conversationId.value) return conversationId.value
   const response = await $fetch<{ data: Conversation }>('/api/v1/career-agent/conversations', { method: 'POST', body: { applicationId: applicationId.value || null, resumeVersionId: resumeVersionId.value || null } })
@@ -148,12 +190,16 @@ async function send() {
   generating.value = true
   controller = new AbortController()
   let assistant: Message | null = null
+  let typewriterState: TypewriterState | null = null
+  let typewriterTask: Promise<void> | null = null
   try {
     const activeId = await ensureConversation()
     const history = messages.value.filter(item => item.content.trim() && !item.error).slice(-20).map(({ role, content: value }) => ({ role, content: value }))
     const userMessage: Message = { id: crypto.randomUUID(), role: 'user', content }
     await persistMessage(activeId, userMessage)
-    assistant = { id: crypto.randomUUID(), role: 'assistant', content: '' }
+    assistant = reactive<Message>({ id: crypto.randomUUID(), role: 'assistant', content: '' })
+    typewriterState = { buffer: '', ended: false, wake: null }
+    typewriterTask = runTypewriter(assistant, typewriterState)
     messages.value.push(userMessage, assistant)
     input.value = ''
     await scrollToBottom()
@@ -174,20 +220,21 @@ async function send() {
       for (const row of rows) {
         if (!row.trim()) continue
         const event = JSON.parse(row) as StreamEvent
-        if (event.type === 'delta' && assistant) assistant.content += event.text
-        if (event.type === 'error' && assistant) { assistant.error = true; assistant.content += `${assistant.content ? '\n\n' : ''}> ${event.message}` }
+        if (event.type === 'delta' && typewriterState) enqueueTypewriter(typewriterState, event.text)
+        if (event.type === 'error' && assistant && typewriterState) { assistant.error = true; enqueueTypewriter(typewriterState, `${assistant.content || typewriterState.buffer ? '\n\n' : ''}> ${event.message}`) }
         if (event.type === 'done' && assistant) { providerLabel.value = `${event.provider} / ${event.model}`; assistant.provider = event.provider; assistant.model = event.model }
       }
-      await scrollToBottom()
       if (done) break
     }
   }
   catch (error) {
     if (!assistant) ElMessage.error(error instanceof Error ? error.message : '发送失败，请重试。')
-    else if (controller?.signal.aborted) assistant.content += `${assistant.content ? '\n\n' : ''}> 已停止生成。`
-    else { assistant.error = true; assistant.content += `${assistant.content ? '\n\n' : ''}> ${error instanceof Error ? error.message : '生成失败，请重试。'}` }
+    else if (typewriterState && controller?.signal.aborted) enqueueTypewriter(typewriterState, `${assistant.content || typewriterState.buffer ? '\n\n' : ''}> 已停止生成。`)
+    else if (typewriterState) { assistant.error = true; enqueueTypewriter(typewriterState, `${assistant.content || typewriterState.buffer ? '\n\n' : ''}> ${error instanceof Error ? error.message : '生成失败，请重试。'}`) }
   }
   finally {
+    if (typewriterState) finishTypewriter(typewriterState)
+    if (typewriterTask) await typewriterTask
     if (assistant?.content.trim() && conversationId.value) {
       try { await persistMessage(conversationId.value, assistant) }
       catch { ElMessage.warning('回答已显示，但保存失败，请先复制保留。') }
@@ -223,6 +270,7 @@ async function confirmSaveToInterview() {
 }
 
 onMounted(() => void load())
+onBeforeUnmount(() => { controller?.abort(); if (scrollFrame !== null) cancelAnimationFrame(scrollFrame) })
 </script>
 
 <template>
@@ -268,4 +316,5 @@ onMounted(() => void load())
 
 <style scoped>
 .agent-page{width:min(1480px,100%);margin:0 auto}.agent-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:14px}.agent-heading>div:first-child>span,.session-strip label>span{font:600 11px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.12em;color:#7288a8}.agent-heading h1{margin:7px 0 5px;color:#26364f;font-family:"Songti SC","STSong",serif;font-size:31px;letter-spacing:.02em}.agent-heading p{margin:0;color:#748195;font-size:13px}.agent-status{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid rgba(130,151,179,.25);border-radius:999px;background:rgba(255,255,255,.45);color:#67788d;font-size:12px}.agent-status i{width:7px;height:7px;border-radius:50%;background:#87a696}.agent-status i.active{animation:pulse 1.2s ease-in-out infinite}.session-strip{display:flex;align-items:end;gap:9px;padding:10px 14px;border:1px solid rgba(126,146,174,.2);border-bottom:0;border-radius:16px 16px 0 0;background:rgba(249,251,253,.65)}.session-strip label{display:grid;flex:1;max-width:520px;gap:6px}.session-strip button{height:32px;padding:0 11px;border:1px solid rgba(126,146,174,.25);border-radius:8px;background:transparent;color:#52677f;font-size:12px;cursor:pointer}.session-strip button:disabled{cursor:not-allowed;opacity:.45}.session-strip .danger-link{border-color:transparent;color:#a56666}.context-docket{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) minmax(260px,1.1fr);gap:12px;padding:15px;border:1px solid rgba(126,146,174,.22);border-radius:0 0 10px 10px;background:linear-gradient(135deg,rgba(250,252,255,.82),rgba(239,245,242,.78));box-shadow:0 12px 30px rgba(73,91,118,.07)}.context-docket label{display:grid;gap:7px}.context-docket label>span,.context-summary small{font:600 11px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.08em;color:#74869e}.context-summary{display:grid;align-content:center;gap:4px;padding:4px 8px 4px 14px;border-left:1px solid rgba(116,137,164,.24)}.context-summary strong{overflow:hidden;color:#30445d;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.context-summary span{overflow:hidden;color:#718092;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.prompt-rack{display:flex;gap:8px;overflow-x:auto;padding:11px 2px}.prompt-rack button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:8px 12px;border:1px solid rgba(124,142,166,.25);border-radius:9px;background:rgba(255,255,255,.4);color:#52677f;font-size:12px;cursor:pointer}.prompt-rack button:hover{border-color:#8fa2c0;background:#fff}.prompt-rack button span{color:#7c6f9d}.conversation-shell{overflow:hidden;border:1px solid rgba(126,146,174,.22);border-radius:8px 8px 20px 20px;background:rgba(252,253,254,.82);box-shadow:0 22px 52px rgba(62,80,106,.09)}.conversation-stream{height:clamp(460px,61vh,760px);overflow-y:auto;padding:28px clamp(18px,4vw,58px)}.conversation-empty{display:grid;justify-items:center;align-content:center;height:100%;text-align:center;color:#758296}.conversation-empty>span{display:grid;place-items:center;width:54px;height:54px;margin-bottom:13px;border-radius:18px;background:linear-gradient(145deg,#a7bce2,#7998cf);color:#fff;font-family:"Songti SC",serif;font-size:24px;box-shadow:0 12px 26px rgba(89,120,174,.22)}.conversation-empty h2{margin:0 0 7px;color:#394c65;font-size:17px}.conversation-empty p{margin:0;font-size:13px}.message{display:flex;max-width:900px;margin:0 auto 26px}.message--assistant{justify-content:flex-start}.message--user{justify-content:flex-end}.message-body{width:min(100%,900px);min-width:0;padding:15px 18px;border:1px solid rgba(130,148,173,.18);border-radius:5px 17px 17px;background:#fff;box-shadow:0 8px 20px rgba(56,73,98,.05)}.message--user .message-body{width:min(82%,760px);border-radius:17px 5px 17px 17px;background:#f0f5f1}.message--error .message-body{border-color:#dfb6b1}.message-body>header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#5f7086;font-size:12px}.message-actions{display:flex;gap:12px}.message-body>header button{border:0;background:transparent;color:#7c6f9d;font-size:12px;cursor:pointer}.message-body>header button:disabled{color:#8b9b91;cursor:default}.message-thinking{display:flex;align-items:center;gap:4px;margin:10px 0;color:#8290a1;font-size:12px}.message-thinking i{width:5px;height:5px;border-radius:50%;background:#8297b6;animation:dots 1s ease-in-out infinite}.message-thinking i:nth-child(2){animation-delay:.15s}.message-thinking i:nth-child(3){animation-delay:.3s}.composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:end;padding:16px 18px;border-top:1px solid rgba(126,146,174,.17);background:rgba(240,244,248,.78);backdrop-filter:blur(12px)}.composer>div:last-child{display:flex;align-items:center;gap:8px}.prompt-rack button:disabled{cursor:not-allowed;opacity:.5}@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(135,166,150,.14)}}@keyframes dots{50%{transform:translateY(-3px);opacity:.5}}@media(prefers-reduced-motion:reduce){.agent-status i.active,.message-thinking i{animation:none}}@media(max-width:820px){.agent-heading{align-items:flex-start;flex-direction:column}.session-strip{align-items:stretch;flex-wrap:wrap}.session-strip label{flex-basis:100%;max-width:none}.context-docket{grid-template-columns:1fr}.context-summary{padding:8px 0 0;border-top:1px solid rgba(116,137,164,.24);border-left:0}.conversation-stream{height:58vh;padding:20px 14px}.composer{grid-template-columns:1fr}.composer>div:last-child{justify-content:flex-end}.message--user .message-body{width:92%}}
+.agent-page{width:100%;max-width:none;margin:0}.conversation-stream{padding-inline:clamp(14px,2.5vw,44px)}.message{width:100%;max-width:none}.message--assistant .message-body{width:100%;max-width:none}
 </style>
