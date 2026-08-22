@@ -1,4 +1,4 @@
-import { ApplicationChannel, ApplicationEventType, ApplicationStatus, JobSource, type Prisma } from '../generated/prisma/client'
+import { ApplicationChannel, ApplicationEventType, ApplicationStatus, DocumentMutationType, JobSource, type Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import { extractCompanyNameAndUpdatedAt, importedJobRowSchema, type FeishuImportInput, type ImportedJobRow, type ListJobsQuery } from '../schemas/job-library'
 
@@ -409,7 +409,7 @@ export async function clearJobs() {
 export async function listJobs(query: ListJobsQuery) {
   const user = await getLocalUser()
   const where: Prisma.JobWhereInput = {
-    ...(query.includeOffline ? {} : { offlineAt: null }),
+    ...(query.includeOffline ? {} : { offlineAt: null, manualOfflineAt: null }),
     ...(query.location ? { location: { contains: query.location, mode: 'insensitive' } } : {}),
     ...(query.recruitmentType ? { recruitmentType: { contains: query.recruitmentType, mode: 'insensitive' } } : {}),
     ...(query.hasWrittenTest === undefined ? {} : { hasWrittenTest: query.hasWrittenTest }),
@@ -419,7 +419,7 @@ export async function listJobs(query: ListJobsQuery) {
   const [items, total, filterRows] = await prisma.$transaction([
     prisma.job.findMany({ where, include: { company: true, applications: { where: { userId: user.id, deletedAt: null }, select: { id: true } } }, orderBy: [{ sourceUpdatedAt: { sort: query.updatedSort, nulls: 'last' } }, { updatedAt: query.updatedSort }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
     prisma.job.count({ where }),
-    prisma.job.findMany({ where: { offlineAt: null }, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
+    prisma.job.findMany({ where: { offlineAt: null, manualOfflineAt: null }, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
   ])
   const values = (items: Array<string | null>) => [...new Set(items.filter((value): value is string => Boolean(value)))].sort()
   const splitTokens = (value: string) => value.split(/[,、，;；/]+/).map(item => item.trim()).filter(Boolean)
@@ -435,6 +435,33 @@ export async function listJobs(query: ListJobsQuery) {
     return [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   }
   return { items: items.map(({ applications, ...job }) => ({ ...job, applicationId: applications[0]?.id ?? null })), page: query.page, pageSize: query.pageSize, total, filters: { locations: uniqueTokens(filterRows.map(row => row.location)), industries: uniqueTokens(filterRows.map(row => row.company.industry), true), companyTypes: values(filterRows.map(row => row.company.companyType)).filter(value => value !== '-'), recruitmentTypes: uniqueTokens(filterRows.map(row => row.recruitmentType)) } }
+}
+
+export async function manuallyOfflineJob(jobId: string) {
+  const user = await getLocalUser()
+  const current = await prisma.job.findUnique({ where: { id: jobId }, select: { id: true, offlineAt: true, manualOfflineAt: true } })
+  if (!current) return null
+  if (current.manualOfflineAt) return current
+
+  return prisma.$transaction(async (transaction) => {
+    const manualOfflineAt = new Date()
+    const job = await transaction.job.update({
+      where: { id: jobId },
+      data: { manualOfflineAt },
+      select: { id: true, offlineAt: true, manualOfflineAt: true },
+    })
+    await transaction.documentMutationEvent.create({
+      data: {
+        userId: user.id,
+        type: DocumentMutationType.JOB_MANUALLY_OFFLINED,
+        entityType: 'Job',
+        entityId: job.id,
+        source: 'USER',
+        payload: { manualOfflineAt: manualOfflineAt.toISOString() },
+      },
+    })
+    return job
+  })
 }
 
 export async function createApplicationFromJob(jobId: string) {

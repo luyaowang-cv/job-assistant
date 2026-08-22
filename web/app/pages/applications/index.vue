@@ -46,6 +46,8 @@ const channelOptions: Array<{ value: ApplicationChannel, label: string }> = [
 const filters = reactive({ search: '', status: undefined as ApplicationStatus | undefined })
 const applications = ref<ApplicationItem[]>([])
 const total = ref(0)
+const page = ref(1)
+const applicationPageSize = 20
 const updatedSort = ref<'asc' | 'desc'>('desc')
 const loading = ref(false)
 const databaseError = ref(false)
@@ -94,8 +96,10 @@ function salaryText(item: ApplicationItem) {
 function resetForm() { Object.assign(form, emptyForm()) }
 function resetFilters() {
   Object.assign(filters, { search: '', status: undefined })
-  void fetchApplications()
+  refreshFromFirstPage()
 }
+function refreshFromFirstPage() { page.value = 1; void fetchApplications() }
+function changePage(value: number) { page.value = value; void fetchApplications() }
 function applicationPayload() {
   return {
     companyName: form.companyName.trim(), companyDescription: optional(form.companyDescription), jobTitle: form.jobTitle.trim(), department: optional(form.department), location: optional(form.location),
@@ -118,9 +122,14 @@ async function fetchApplications() {
   loading.value = true
   databaseError.value = false
   try {
-    const response = await $fetch<{ data: ApplicationListData }>('/api/v1/applications', { query: { search: filters.search || undefined, status: filters.status, updatedSort: updatedSort.value } })
-    applications.value = response.data.items
+    const response = await $fetch<{ data: ApplicationListData }>('/api/v1/applications', { query: { page: page.value, pageSize: applicationPageSize, search: filters.search || undefined, status: filters.status, updatedSort: updatedSort.value } })
     total.value = response.data.total
+    if (!response.data.items.length && response.data.total > 0 && page.value > 1) {
+      page.value = Math.max(1, Math.ceil(response.data.total / applicationPageSize))
+      await fetchApplications()
+      return
+    }
+    applications.value = response.data.items
   }
   catch { applications.value = []; total.value = 0; databaseError.value = true }
   finally { loading.value = false }
@@ -131,7 +140,7 @@ async function createApplication() {
   submitting.value = true
   try {
     await $fetch('/api/v1/applications', { method: 'POST', body: { ...applicationPayload(), status: form.status } })
-    ElMessage.success('投递记录已创建'); createDialogVisible.value = false; resetForm(); await fetchApplications()
+    ElMessage.success('投递记录已创建'); createDialogVisible.value = false; resetForm(); page.value = 1; await fetchApplications()
   }
   catch { ElMessage.error('保存失败，请检查必填信息和本地数据库连接。') }
   finally { submitting.value = false }
@@ -139,6 +148,7 @@ async function createApplication() {
 
 function sortByUpdatedAt({ order }: { order: 'ascending' | 'descending' | null }) {
   updatedSort.value = order === 'ascending' ? 'asc' : 'desc'
+  page.value = 1
   void fetchApplications()
 }
 
@@ -187,6 +197,8 @@ async function removeApplicationItem(application: ApplicationItem, closeDetail =
     await $fetch(`/api/v1/applications/${application.id}`, { method: 'DELETE' })
     ElMessage.success('投递记录已删除')
     if (closeDetail || selectedApplication.value?.id === application.id) detailVisible.value = false
+    const remainingTotal = Math.max(0, total.value - 1)
+    page.value = Math.min(page.value, Math.max(1, Math.ceil(remainingTotal / applicationPageSize)))
     await fetchApplications()
   }
   catch { ElMessage.error('删除失败，请稍后重试。') }
@@ -221,8 +233,8 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
       <span class="application-records__count">{{ total }} 条记录</span>
     </div>
     <div class="application-records__toolbar">
-      <el-input v-model="filters.search" style="width: 180px" clearable placeholder="搜索公司或岗位" @input="fetchApplications" @clear="fetchApplications" />
-      <el-select v-model="filters.status" style="width: 104px" clearable placeholder="状态" @change="fetchApplications" @clear="fetchApplications"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
+      <el-input v-model="filters.search" style="width: 180px" clearable placeholder="搜索公司或岗位" @input="refreshFromFirstPage" @clear="refreshFromFirstPage" />
+      <el-select v-model="filters.status" style="width: 104px" clearable placeholder="状态" @change="refreshFromFirstPage" @clear="refreshFromFirstPage"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
       <el-button class="application-records__reset" plain @click="resetFilters">重置</el-button>
       <el-button-group class="application-records__view-toggle ml-auto"><el-button :class="{ 'is-active': viewMode === 'list' }" @click="viewMode = 'list'">列表</el-button>
         <el-button :class="{ 'is-active': viewMode === 'kanban' }" @click="viewMode = 'kanban'">看板</el-button></el-button-group>
@@ -243,6 +255,7 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
         <div class="space-y-2"><article v-for="item in applications.filter(application => application.status === status.value)" :key="item.id" draggable="true" class="application-kanban-card cursor-grab rounded-[14px] border border-white/80 bg-white/78 p-3 shadow-[0_7px_16px_rgba(100,114,148,.08)]" @click="openDetail(item)" @dragstart="draggedApplicationId = item.id"><strong class="block text-sm text-slate-800">{{ item.job.company.name }}</strong><p class="my-1 text-sm text-slate-600">{{ item.job.title }}</p><p class="m-0 text-xs text-slate-400">{{ item.job.location || '地点待定' }} · {{ salaryText(item) }}</p><p v-if="item.nextAction" class="mb-0 mt-2 border-t border-slate-100 pt-2 text-xs text-[#6385be]">下一步：{{ item.nextAction }}</p></article></div>
       </section>
     </div>
+    <el-pagination v-if="total > applicationPageSize" v-model:current-page="page" class="mt-5 flex justify-end" background layout="prev, pager, next" :page-size="applicationPageSize" :total="total" @current-change="changePage" />
     </section>
 
     <el-dialog v-model="createDialogVisible" title="新增投递" width="620px" destroy-on-close @closed="resetForm">

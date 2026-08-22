@@ -16,6 +16,7 @@ interface JobItem {
   hasWrittenTest: boolean | null
   deadlineAt: string | null
   offlineAt: string | null
+  manualOfflineAt: string | null
   company: Company
   applicationId: string | null
 }
@@ -34,6 +35,7 @@ const syncing = ref(false)
 const uploading = ref(false)
 const clearing = ref(false)
 const convertingId = ref<string | null>(null)
+const offliningId = ref<string | null>(null)
 const databaseError = ref(false)
 const syncDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
@@ -58,6 +60,7 @@ function dateText(value: string | null) {
   const date = new Date(value)
   return `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()}`
 }
+function jobOfflineAt(job: JobItem) { return job.manualOfflineAt || job.offlineAt }
 
 function resetFilters() {
   Object.assign(filters, { search: '', location: '', companyType: '', includeOffline: false })
@@ -180,6 +183,24 @@ async function convertJob(job: JobItem) {
   finally { convertingId.value = null }
 }
 
+async function offlineJob(job: JobItem) {
+  if (jobOfflineAt(job)) return
+  try { await ElMessageBox.confirm('下线后该岗位默认不再显示；勾选“显示已下线”仍可查看。确定下线吗？', '下线岗位', { type: 'warning', confirmButtonText: '下线', cancelButtonText: '取消' }) }
+  catch { return }
+  offliningId.value = job.id
+  try {
+    await $fetch(`/api/v1/jobs/${job.id}/offline`, { method: 'POST' })
+    ElMessage.success('岗位已移至下线区域。')
+    if (!filters.includeOffline) {
+      const remainingTotal = Math.max(0, total.value - 1)
+      page.value = Math.min(page.value, Math.max(1, Math.ceil(remainingTotal / 20)))
+    }
+    await fetchJobs()
+  }
+  catch { ElMessage.error('岗位下线失败，请稍后重试。') }
+  finally { offliningId.value = null }
+}
+
 function openJobDetail(job: JobItem) {
   selectedJob.value = job
   detailDialogVisible.value = true
@@ -231,12 +252,12 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()])
         <el-table v-loading="loading" :data="jobs" empty-text="还没有岗位。上传一份 Excel 或同步飞书公开表格开始整理。" class="w-full" :default-sort="{ prop: 'sourceUpdatedAt', order: 'descending' }" @row-click="openJobDetail" @sort-change="sortByUpdatedAt">
           <el-table-column label="更新时间" prop="sourceUpdatedAt" sortable="custom" :sort-orders="['descending', 'ascending']" width="132"><template #default="{ row }">{{ dateText(row.sourceUpdatedAt) }}</template></el-table-column>
           <el-table-column label="公司 / 招聘岗位" min-width="230">
-            <template #default="{ row }"><div class="job-library__role"><strong>{{ row.company.name }}</strong><span>{{ row.title }}</span><small v-if="row.offlineAt">已下线 · {{ dateText(row.offlineAt) }}</small></div></template>
+            <template #default="{ row }"><div class="job-library__role"><strong>{{ row.company.name }}</strong><span>{{ row.title }}</span><small v-if="jobOfflineAt(row)">已下线 · {{ dateText(jobOfflineAt(row)) }}</small></div></template>
           </el-table-column>
           <el-table-column label="工作地点" prop="location" min-width="110"><template #default="{ row }">{{ row.location || '—' }}</template></el-table-column>
           <el-table-column label="行业 / 性质" min-width="150"><template #default="{ row }"><span>{{ row.company.industry || '未分类' }}</span><small class="job-library__secondary">{{ row.company.companyType || '—' }}</small></template></el-table-column>
           <el-table-column label="公告 / 投递" width="126"><template #default="{ row }"><div class="job-library__links"><a v-if="row.announcementUrl" :href="row.announcementUrl" target="_blank" rel="noopener noreferrer" @click.stop>公告</a><span v-else>—</span><a v-if="row.url" :href="row.url" target="_blank" rel="noopener noreferrer" @click.stop>投递</a><span v-else>—</span></div></template></el-table-column>
-          <el-table-column label="操作" fixed="right" width="112"><template #default="{ row }"><div class="job-library__actions"><el-button class="job-library__action-button" size="small" :type="row.applicationId ? 'success' : 'primary'" plain :loading="convertingId === row.id" @click.stop="convertJob(row)">{{ row.applicationId ? '查看面板' : '加入面板' }}</el-button></div></template></el-table-column>
+          <el-table-column label="操作" fixed="right" width="160"><template #default="{ row }"><div class="job-library__actions"><el-button class="job-library__compact-action" size="small" type="warning" plain :disabled="Boolean(jobOfflineAt(row))" :loading="offliningId === row.id" @click.stop="offlineJob(row)">{{ jobOfflineAt(row) ? '已下线' : '下线' }}</el-button><el-button class="job-library__compact-action" size="small" :type="row.applicationId ? 'success' : 'primary'" plain :loading="convertingId === row.id" @click.stop="convertJob(row)">{{ row.applicationId ? '查看面板' : '加入面板' }}</el-button></div></template></el-table-column>
         </el-table>
       </div>
       <el-pagination v-if="total > 20" class="job-library__pagination" layout="prev, pager, next" :current-page="page" :page-size="20" :total="total" @current-change="page = $event; fetchJobs()" />
@@ -257,7 +278,7 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()])
 
     <el-dialog v-model="detailDialogVisible" title="岗位详情" width="min(760px, calc(100vw - 32px))" destroy-on-close>
       <div v-if="selectedJob" class="job-detail">
-        <header class="job-detail__header"><div><span>{{ selectedJob.company.name }}</span><h2>{{ selectedJob.title }}</h2></div><span v-if="selectedJob.offlineAt" class="job-detail__offline">已下线</span></header>
+        <header class="job-detail__header"><div><span>{{ selectedJob.company.name }}</span><h2>{{ selectedJob.title }}</h2></div><span v-if="jobOfflineAt(selectedJob)" class="job-detail__offline">已下线</span></header>
         <dl class="job-detail__facts">
           <div><dt>更新时间</dt><dd>{{ dateText(selectedJob.sourceUpdatedAt) }}</dd></div>
           <div><dt>工作地点</dt><dd>{{ selectedJob.location || '—' }}</dd></div>

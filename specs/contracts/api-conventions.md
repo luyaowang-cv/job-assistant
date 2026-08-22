@@ -148,10 +148,12 @@
 | GET | `/api/v1/jobs` | `page`, `pageSize`, `search`, `location`, `industry`, `companyType`, `recruitmentType`, `hasWrittenTest`, `includeOffline` | `{ items, page, pageSize, total, filters }` |
 | POST | `/api/v1/jobs/imports/feishu` | `{ shareUrl }` | `{ created, updated, offlined, skipped, total }` |
 | POST | `/api/v1/jobs/:id/application` | path `id` | `{ application, created }` |
+| POST | `/api/v1/jobs/:id/offline` | path `id` | `{ id, offlineAt, manualOfflineAt }` |
 
 - 所有输入均由 Zod 校验。浏览器仅提供飞书公开分享链接，不得传入来源行、userId、飞书凭据、时间戳或投递状态。
 - 飞书凭据只存在于服务端环境变量。凭据缺失、来源无法读取或任一行校验失败时导入返回明确错误且不写入数据库。导入在一个最长三分钟的数据库事务内执行，保证失败时不留下半同步数据。
 - 搜索匹配公司名称与岗位名称；location / industry / companyType / recruitmentType 筛选为包含匹配（不区分大小写）；hasWrittenTest 支持 true / false / null（null 表示未标注）；`includeOffline` 默认 false；每次查询都返回分页元数据。
+- 默认岗位列表同时排除来源下线 `offlineAt` 与用户手动下线 `manualOfflineAt`；`includeOffline=true` 返回两类下线记录。手动下线在事务中写入 Job 与 `JOB_MANUALLY_OFFLINED` 审计事件，飞书同步不得清空该字段。
 - 导入仅返回统计，不返回凭据或分享链接；只映射 F-020 明确字段，绝不持久化薪资列。
 - 转投递检查当前 local user 并事务性创建投递/事件。已存在投递的重复请求幂等，返回 `created: false`。
 
