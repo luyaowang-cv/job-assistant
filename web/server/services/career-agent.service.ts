@@ -1,6 +1,6 @@
 import type { CareerAgentChatInput } from '../schemas/career-agent'
 import { prisma } from '../lib/prisma'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { streamTextAi } from './openai-compatible-text.service'
 
 export class CareerAgentContextError extends Error {
@@ -12,7 +12,7 @@ export class CareerAgentContextError extends Error {
 const clip = (value: string | null | undefined, max: number) => (value ?? '').trim().slice(0, max)
 
 export async function streamCareerAgent(input: CareerAgentChatInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const [application, resumeVersion] = await Promise.all([
     input.applicationId
       ? prisma.application.findFirst({ where: { id: input.applicationId, userId: user.id, deletedAt: null }, include: { job: { include: { company: true } } } })

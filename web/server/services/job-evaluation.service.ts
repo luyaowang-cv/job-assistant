@@ -4,7 +4,7 @@ import { AgentRunStatus, AgentRunType } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { JobEvaluationResult, JobPreferenceInput, ResumeDigest } from '../schemas/job-evaluation'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 const defaultPreference: JobPreferenceInput = {
   targetRoles: ['前端工程师', 'AI 前端工程师'],
@@ -29,7 +29,7 @@ export function digestResume(resumeText: string): ResumeDigest {
 }
 
 export async function getJobPreference() {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.jobPreference.upsert({
     where: { userId: user.id },
@@ -39,7 +39,7 @@ export async function getJobPreference() {
 }
 
 export async function updateJobPreference(input: JobPreferenceInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.jobPreference.upsert({
     where: { userId: user.id },
@@ -49,7 +49,7 @@ export async function updateJobPreference(input: JobPreferenceInput) {
 }
 
 export async function getEvaluableApplication(applicationId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.application.findFirst({
     where: { id: applicationId, userId: user.id, deletedAt: null },
@@ -64,7 +64,7 @@ export async function createPendingEvaluationRun(
   model: string,
 ) {
   const [user, preference, application] = await Promise.all([
-    getLocalUser(),
+    getCurrentUser(),
     getJobPreference(),
     getEvaluableApplication(applicationId),
   ])
@@ -90,7 +90,7 @@ export async function createPendingEvaluationRun(
 }
 
 export async function completeEvaluationRun(runId: string, output: JobEvaluationResult) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.agentRun.updateMany({
     where: { id: runId, userId: user.id, status: AgentRunStatus.PENDING },
@@ -103,7 +103,7 @@ export async function completeEvaluationRun(runId: string, output: JobEvaluation
 }
 
 export async function failEvaluationRun(runId: string, errorMessage: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.agentRun.updateMany({
     where: { id: runId, userId: user.id, status: AgentRunStatus.PENDING },
@@ -116,7 +116,7 @@ export async function failEvaluationRun(runId: string, errorMessage: string) {
 }
 
 export async function listEvaluationRuns(applicationId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.agentRun.findMany({
     where: {

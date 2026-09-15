@@ -100,13 +100,24 @@ async function createCard() {
 }
 async function addVariant() {
   if (!selected.value) return
+  const existingVariant = selected.value.variants.find(item => item.name === variant.name.trim())
+  if (existingVariant) {
+    try {
+      await ElMessageBox.confirm(`“${existingVariant.name}”已存在。覆盖后，所有引用该版本的简历和网申在后续读取时都会使用新文案。是否覆盖旧版本？`, '覆盖旧版本', {
+        confirmButtonText: '覆盖',
+        cancelButtonText: '取消',
+        type: 'warning',
+      })
+    }
+    catch { return }
+  }
   saving.value = true
   try {
-    await $fetch(`/api/v1/material-cards/${selected.value.id}/variants`, { method: 'POST', body: variant })
+    await $fetch(`/api/v1/material-cards/${selected.value.id}/variants`, { method: 'POST', body: { ...variant, overwrite: Boolean(existingVariant) } })
     Object.assign(variant, { name: '网申版', content: '' })
     await load()
-    ElMessage.success('新文案版本已保存。')
-  } catch { ElMessage.error('保存失败；版本名称不能重复。') } finally { saving.value = false }
+    ElMessage.success(existingVariant ? '旧文案版本已覆盖。' : '新文案版本已保存。')
+  } catch { ElMessage.error('保存失败，请检查版本名称和文案。') } finally { saving.value = false }
 }
 async function removeCard() {
   if (!selected.value) return
@@ -154,9 +165,9 @@ onMounted(() => void load())
             <div class="card-detail__heading"><div class="card-detail__title"><span>{{ typeLabels[selected.type] }}</span><h2>{{ displayCardTitle(selected) }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><div class="card-detail__actions"><el-button plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div></div>
             <div class="variant-history"><article v-for="item in selected.variants" :key="item.id"><b>{{ item.name }}</b><small>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small><p>{{ item.content }}</p></article></div>
             <el-form label-position="top">
-              <el-form-item label="新增文案版本"><el-select v-model="variant.name" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
+              <el-form-item label="新增或覆盖文案版本"><el-select v-model="variant.name" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
               <el-form-item label="文案"><el-input v-model="variant.content" type="textarea" :rows="5" show-word-limit maxlength="20000" /></el-form-item>
-              <div class="card-actions"><el-button type="primary" :loading="saving" @click="addVariant">保存新版本</el-button></div>
+              <div class="card-actions"><el-button type="primary" :loading="saving" @click="addVariant">保存文案版本</el-button></div>
             </el-form>
           </template>
           <el-empty v-else description="选择一张素材查看版本" />

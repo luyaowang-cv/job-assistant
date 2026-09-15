@@ -2,7 +2,7 @@ import { DocumentMutationType, ResumeVersionType } from '../generated/prisma/cli
 import type { Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { CompositionInput, CreateApplicationProfileVersionInput } from '../schemas/document-composition'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { resolveDocument } from './document-resolver'
 
 const json = (value: unknown) => value as Prisma.InputJsonValue
@@ -33,7 +33,7 @@ function referenceCreates(composition: CompositionInput) {
 }
 
 export async function resolveResumeVersion(resumeId: string, versionId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const version = await prisma.resumeVersion.findFirst({
     where: { id: versionId, resumeId, resume: { userId: user.id } },
     include: { composition: { include: compositionInclude } },
@@ -54,7 +54,7 @@ export async function resolveResumeVersion(resumeId: string, versionId: string) 
 }
 
 export async function resolveResumeDraft(resumeId: string, composition: CompositionInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const resume = await prisma.resume.findFirst({ where: { id: resumeId, userId: user.id } })
   if (!resume || !await validateReferences(user.id, composition)) return null
   const [profile, variants] = await Promise.all([
@@ -75,7 +75,7 @@ export async function resolveResumeDraft(resumeId: string, composition: Composit
 }
 
 export async function createComposedResumeVersion(resumeId: string, composition: CompositionInput, name?: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const resume = await prisma.resume.findFirst({ where: { id: resumeId, userId: user.id } })
   if (!resume || !await validateReferences(user.id, composition)) return null
   const profile = await prisma.personalProfile.findUnique({ where: { userId: user.id } })
@@ -106,7 +106,7 @@ export async function createComposedResumeVersion(resumeId: string, composition:
 }
 
 export async function listApplicationProfileVersions(profileId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id } })
   if (!profile) return null
   return prisma.applicationProfileVersion.findMany({
@@ -115,7 +115,7 @@ export async function listApplicationProfileVersions(profileId: string) {
 }
 
 export async function createApplicationProfileVersion(profileId: string, input: CreateApplicationProfileVersionInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id } })
   if (!profile || !await validateReferences(user.id, input.composition)) return null
   return prisma.$transaction(async (tx) => {
@@ -136,7 +136,7 @@ export async function createApplicationProfileVersion(profileId: string, input: 
 }
 
 export async function resolveApplicationProfileVersion(profileId: string, versionId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const version = await prisma.applicationProfileVersion.findFirst({
     where: { id: versionId, applicationProfileId: profileId, applicationProfile: { userId: user.id } },
     include: { composition: { include: compositionInclude } },

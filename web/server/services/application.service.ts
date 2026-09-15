@@ -7,10 +7,10 @@ import type {
   UpdateApplicationStatusInput,
 } from '../schemas/application'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 export async function createApplication(input: CreateApplicationInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.$transaction(async (transaction) => {
     const company = await transaction.company.upsert({
@@ -84,7 +84,7 @@ export async function createApplication(input: CreateApplicationInput) {
 }
 
 export async function listApplications(query: ListApplicationsQuery) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const where: Prisma.ApplicationWhereInput = {
     userId: user.id,
     deletedAt: null,
@@ -105,22 +105,34 @@ export async function listApplications(query: ListApplicationsQuery) {
     ]
   }
 
-  const [items, total] = await prisma.$transaction([
-    prisma.application.findMany({
+  const { items, total } = await prisma.$transaction(async (transaction) => {
+    const totalPromise = transaction.application.count({ where })
+    const listArguments = {
       where,
       include: { job: { include: { company: true } } },
       orderBy: { updatedAt: query.updatedSort },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-    }),
-    prisma.application.count({ where }),
-  ])
+    }
+    const items = query.view === 'kanban'
+      ? await transaction.application.findMany(listArguments)
+      : await transaction.application.findMany({
+          ...listArguments,
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+        })
 
-  return { items, page: query.page, pageSize: query.pageSize, total }
+    return { items, total: await totalPromise }
+  })
+
+  return {
+    items,
+    page: query.view === 'kanban' ? 1 : query.page,
+    pageSize: query.view === 'kanban' ? items.length : query.pageSize,
+    total,
+  }
 }
 
 export async function getApplication(applicationId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.application.findFirst({
     where: { id: applicationId, userId: user.id, deletedAt: null },

@@ -4,7 +4,7 @@ import { prisma } from '../lib/prisma'
 import type { ApplicationProfileInput, ApplicationStrategy } from '../schemas/application-profile'
 import type { CommonBasics, Education } from '../schemas/personal-profile'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { resolveBasics, resolveEducations } from './application-profile-resolution'
 import { resolveApplicationProfileVersion } from './document-composition.service'
 
@@ -68,13 +68,13 @@ async function resolveProfile(userId: string, profile: Prisma.ApplicationProfile
 }
 
 export async function listApplicationProfiles() {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profiles = await prisma.applicationProfile.findMany({ where: { userId: user.id }, orderBy: { updatedAt: 'desc' }, select: publicProfileSelect })
   return Promise.all(profiles.map(profile => resolveProfile(user.id, profile)))
 }
 
 export async function getApplicationProfileFillContext(profileId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id }, select: publicProfileSelect })
   if (!profile) return null
   const resolved = await resolveProfile(user.id, profile)
@@ -130,7 +130,7 @@ async function resolveResumeVersionId(userId: string, resumeVersionId: string | 
 }
 
 export async function createApplicationProfile(input: ApplicationProfileInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const duplicate = await prisma.applicationProfile.findFirst({ where: { userId: user.id, name: input.name } })
   if (duplicate) return { profile: null, duplicateName: true }
   const resumeVersionId = await resolveResumeVersionId(user.id, input.resumeVersionId)
@@ -155,7 +155,7 @@ export async function createApplicationProfile(input: ApplicationProfileInput) {
 }
 
 export async function updateApplicationProfile(profileId: string, input: ApplicationProfileInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const current = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id }, select: { id: true } })
   if (!current) return { profile: null, duplicateName: false, invalidResumeVersion: false }
   const duplicate = await prisma.applicationProfile.findFirst({ where: { userId: user.id, name: input.name, id: { not: current.id } } })
@@ -178,7 +178,7 @@ export async function updateApplicationProfile(profileId: string, input: Applica
 }
 
 export async function deleteApplicationProfile(profileId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id }, select: { id: true, name: true } })
   if (!profile) return null
   return prisma.$transaction(async (tx) => {

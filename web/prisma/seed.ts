@@ -1,45 +1,13 @@
 import 'dotenv/config'
 
-import { PrismaPg } from '@prisma/adapter-pg'
-
-import { PrismaClient } from '../server/generated/prisma/client'
-
-const databaseUrl = process.env.DATABASE_URL
-
-if (!databaseUrl) {
-  throw new Error('DATABASE_URL is required to seed the local user.')
-}
-
-const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: databaseUrl }),
-})
-
+// 数据初始化已由 `pnpm auth:bootstrap` 完成（创建所有者账号并迁移旧 local user 数据）。
+// 此 seed 保留为占位，避免 `prisma db seed` 重建已废弃的 local@job-assistant.local 用户。
 async function main() {
-  const user = await prisma.user.upsert({
-    where: { email: 'local@job-assistant.local' },
-    update: { displayName: '本地用户' },
-    create: {
-      email: 'local@job-assistant.local',
-      displayName: '本地用户',
-    },
-  })
-
-  await prisma.jobPreference.upsert({
-    where: { userId: user.id },
-    update: {},
-    create: {
-      userId: user.id,
-      targetRoles: ['前端工程师', 'AI 前端工程师'],
-      targetCities: ['北京'],
-      companyTypes: [],
-      technicalFocus: ['Vue', 'TypeScript', 'Agent'],
-    },
-  })
+  console.log('数据初始化请使用 `pnpm auth:bootstrap`。')
 }
 
 main()
-  .then(() => prisma.$disconnect())
   .catch(async (error: unknown) => {
-    await prisma.$disconnect()
-    throw error
+    console.error(error)
+    process.exit(1)
   })

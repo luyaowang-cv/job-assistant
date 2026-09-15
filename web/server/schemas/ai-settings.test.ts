@@ -10,7 +10,8 @@ test('accepts HTTPS and local OpenAI-compatible base URLs', () => {
   assert.equal(aiProviderSettingSchema.safeParse({ ...valid, baseUrl: 'http://127.0.0.1:11434/v1' }).success, true)
 })
 
-test('rejects insecure remote URLs and API keys in the request body', () => {
+test('rejects insecure remote URLs and accepts an optional user API key', () => {
   assert.equal(aiProviderSettingSchema.safeParse({ ...valid, baseUrl: 'http://example.com/v1' }).success, false)
-  assert.equal(aiProviderSettingSchema.safeParse({ ...valid, apiKey: 'secret' }).success, false)
+  assert.equal(aiProviderSettingSchema.safeParse({ ...valid, apiKey: 'sk-user-provided' }).success, true)
+  assert.equal(aiProviderSettingSchema.safeParse({ ...valid, apiKey: '' }).success, true)
 })

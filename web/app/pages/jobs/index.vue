@@ -22,7 +22,18 @@ interface JobItem {
 }
 interface JobFilters { locations: string[], industries: string[], companyTypes: string[], recruitmentTypes: string[] }
 interface JobListData { items: JobItem[], page: number, pageSize: number, total: number, filters: JobFilters }
-interface FeishuConnection { connected: boolean, expiresAt: string | null, scopes: string[] }
+interface FeishuAutoSyncSource {
+  id: string
+  sourceType: 'BITABLE' | 'SHEET_EXPORT'
+  enabled: boolean
+  lastSuccessfulSyncAt: string | null
+  lastAutomaticSyncAt: string | null
+  lastAttemptAt: string | null
+  lastError: string | null
+  syncing: boolean
+}
+interface FeishuAutoSync { enabled: boolean, timeZone: string, scheduledTime: string, nextScheduledAt: string, sources: FeishuAutoSyncSource[] }
+interface FeishuConnection { connected: boolean, expiresAt: string | null, scopes: string[], autoSync: FeishuAutoSync }
 
 const filters = reactive({ search: '', location: '', companyType: '', includeOffline: false })
 const jobs = ref<JobItem[]>([])
@@ -40,7 +51,8 @@ const databaseError = ref(false)
 const syncDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
 const selectedJob = ref<JobItem | null>(null)
-const feishuConnection = ref<FeishuConnection>({ connected: false, expiresAt: null, scopes: [] })
+const emptyAutoSync: FeishuAutoSync = { enabled: true, timeZone: 'Asia/Shanghai', scheduledTime: '08:00', nextScheduledAt: '', sources: [] }
+const feishuConnection = ref<FeishuConnection>({ connected: false, expiresAt: null, scopes: [], autoSync: emptyAutoSync })
 const wikiReadScopes = ['wiki:wiki', 'wiki:wiki:readonly', 'wiki:node:read']
 const needsFeishuReconnect = computed(() => feishuConnection.value.connected && (!wikiReadScopes.some(scope => feishuConnection.value.scopes.includes(scope)) || !feishuConnection.value.scopes.includes('drive:export:readonly')))
 const defaultFeishuShareUrl = 'https://yal2at57cvq.feishu.cn/base/GtSLbyyR3aCENOsJYC6cdlsVnih?table=tblH4au5rnBcqHgJ&view=vewMjMLWkM'
@@ -60,7 +72,22 @@ function dateText(value: string | null) {
   const date = new Date(value)
   return `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()}`
 }
+function dateTimeText(value: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
 function jobOfflineAt(job: JobItem) { return job.manualOfflineAt || job.offlineAt }
+const autoSyncSummary = computed(() => {
+  const autoSync = feishuConnection.value.autoSync
+  const source = autoSync.sources.find(item => item.enabled)
+  if (!feishuConnection.value.connected) return '连接后首次同步会建立数据源；之后每天北京时间 08:00 自动增量同步。'
+  if (!autoSync.enabled) return '自动同步已由服务端暂停。'
+  if (!source) return '请先完成一次飞书 Bitable 同步，系统会自动登记为每日增量来源。'
+  if (source.syncing) return '飞书岗位正在同步中。'
+  if (source.lastError) return `上次自动同步失败：${source.lastError}`
+  return `已开启每天 ${autoSync.scheduledTime} 自动增量同步；下次：${dateTimeText(autoSync.nextScheduledAt)}。`
+})
 
 function resetFilters() {
   Object.assign(filters, { search: '', location: '', companyType: '', includeOffline: false })
@@ -87,7 +114,7 @@ function connectFeishu() { window.location.assign('/api/v1/integrations/feishu/a
 async function disconnectFeishu() {
   try {
     await $fetch('/api/v1/integrations/feishu', { method: 'DELETE' })
-    feishuConnection.value = { connected: false, expiresAt: null, scopes: [] }
+    feishuConnection.value = { connected: false, expiresAt: null, scopes: [], autoSync: emptyAutoSync }
     ElMessage.success('已断开飞书账号，本地授权令牌已删除。')
   }
   catch { ElMessage.error('断开飞书账号失败，请稍后重试。') }
@@ -112,13 +139,13 @@ async function syncJobs() {
   if (!shareUrl.value.trim()) { ElMessage.warning('请粘贴飞书多维表格公开分享链接。'); return }
   syncing.value = true
   try {
-    const response = await $fetch<{ data: { created: number, updated: number, offlined: number, skipped: number, total: number } }>('/api/v1/jobs/imports/feishu', { method: 'POST', body: { shareUrl: shareUrl.value.trim() } })
-    const { created, updated, offlined, skipped, total } = response.data
-    ElMessage.success(`同步完成：导入 ${total} 条，新增 ${created} 条，更新 ${updated} 条${skipped ? `，跳过 ${skipped} 条非岗位记录` : ''}${offlined ? `，标记 ${offlined} 条已下线` : ''}。`)
+    const response = await $fetch<{ data: { created: number, updated: number, offlined: number, skipped: number, total: number, mode: 'FULL' | 'INCREMENTAL', cutoffAt: string | null } }>('/api/v1/jobs/imports/feishu', { method: 'POST', body: { shareUrl: shareUrl.value.trim() } })
+    const { created, updated, offlined, skipped, total, mode } = response.data
+    ElMessage.success(`${mode === 'INCREMENTAL' ? '增量' : '首次完整'}同步完成：读取 ${total} 条，新增 ${created} 条，更新 ${updated} 条${skipped ? `，跳过 ${skipped} 条非岗位记录` : ''}${offlined ? `，标记 ${offlined} 条已下线` : ''}。`)
     syncDialogVisible.value = false
     shareUrl.value = selectedSyncSource.value.url
     page.value = 1
-    await fetchJobs()
+    await Promise.all([fetchJobs(), loadFeishuConnection()])
   }
   catch (error: unknown) {
     const message = typeof error === 'object' && error !== null && 'data' in error
@@ -264,13 +291,13 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()])
     </section>
 
     <section class="job-library__connection" :class="{ 'job-library__connection--connected': feishuConnection.connected && !needsFeishuReconnect }">
-      <div><strong>{{ needsFeishuReconnect ? '需要更新飞书授权' : feishuConnection.connected ? '飞书账号已连接' : '尚未连接飞书账号' }}</strong><span>{{ needsFeishuReconnect ? '新增 Wiki 表格数据源需要知识库读取和云文档导出只读权限，更新授权后即可同步。' : feishuConnection.connected ? '同步将使用你个人账号可读取的表格权限。' : '连接后可读取你本人已获访问权限的飞书表格。' }}</span></div>
+      <div><strong>{{ needsFeishuReconnect ? '需要更新飞书授权' : feishuConnection.connected ? '飞书账号已连接' : '尚未连接飞书账号' }}</strong><span>{{ needsFeishuReconnect ? '新增 Wiki 表格数据源需要知识库读取和云文档导出只读权限，更新授权后即可同步。' : autoSyncSummary }}</span></div>
       <el-button v-if="feishuConnection.connected" size="small" plain @click="disconnectFeishu">断开连接</el-button>
       <el-button v-else size="small" plain type="primary" @click="connectFeishu">去连接</el-button>
     </section>
 
     <el-dialog v-model="syncDialogVisible" title="同步飞书岗位表格" width="min(520px, calc(100vw - 32px))" destroy-on-close>
-      <p class="job-library__dialog-copy">选择岗位来源后，系统只提取岗位库所需字段并增量更新本地数据。</p>
+      <p class="job-library__dialog-copy">首次同步会建立本地基线；之后只拉取飞书中发生变化的记录，并在每天北京时间 08:00 自动增量更新。</p>
       <el-form label-position="top"><el-form-item label="岗位数据源" required><el-select v-model="syncSource" class="w-full"><el-option v-for="source in syncSources" :key="source.value" :label="source.label" :value="source.value" /></el-select><p class="job-library__source-help">{{ selectedSyncSource.description }}</p></el-form-item><el-form-item label="飞书表格链接" required><el-input v-model="shareUrl" placeholder="https://...feishu.cn/base/app?table=tbl..." /></el-form-item></el-form>
       <el-alert type="info" :closable="false" show-icon>将使用你已连接飞书账号的只读权限。授权令牌仅加密保存在本地数据库，绝不会展示或发送至浏览器。</el-alert>
       <template #footer><el-button @click="syncDialogVisible = false">取消</el-button><el-button type="primary" :loading="syncing" @click="syncJobs">同步飞书文档</el-button></template>

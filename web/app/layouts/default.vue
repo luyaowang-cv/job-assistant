@@ -17,6 +17,13 @@ const routeMeta: Record<string, { group: string, label: string }> = {
 }
 
 const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工作台', label: '工作区' })
+
+const { user, logout } = useAuthSession()
+
+async function handleLogout() {
+  await logout()
+  await navigateTo('/login')
+}
 </script>
 
 <template>
@@ -65,7 +72,10 @@ const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工�
         <div class="flex items-center gap-2 text-sm">
           <span class="text-[#7b899a]">{{ currentMeta.group }}</span><span class="text-[#a2adba]">/</span><strong class="font-medium text-[#31445b]">{{ currentMeta.label }}</strong>
         </div>
-        <span class="workbench-mode"><i />本地单用户模式</span>
+        <div class="flex items-center gap-3">
+          <span class="workbench-mode"><i />{{ user?.email ?? '未登录' }}</span>
+          <el-button size="small" text @click="handleLogout">退出</el-button>
+        </div>
       </el-header>
       <el-main class="workbench-main">
         <slot />

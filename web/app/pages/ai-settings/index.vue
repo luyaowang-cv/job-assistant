@@ -16,6 +16,7 @@ const settings = reactive<AiSettings>({
 })
 const loading = ref(false)
 const saving = ref(false)
+const apiKey = ref('')
 
 async function load() {
   loading.value = true
@@ -30,11 +31,14 @@ async function load() {
 async function save() {
   saving.value = true
   try {
+    const body: Record<string, string> = { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model }
+    if (apiKey.value.trim()) body.apiKey = apiKey.value.trim()
     const response = await $fetch<{ data: AiSettings }>('/api/v1/ai-settings', {
       method: 'PUT',
-      body: { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model },
+      body,
     })
     Object.assign(settings, response.data)
+    apiKey.value = ''
     ElMessage.success('API 设置已保存；本次不会调用模型。')
   }
   catch { ElMessage.error('保存失败：请检查服务地址和模型名称。') }
@@ -53,14 +57,15 @@ onMounted(() => { void load() })
         <p>配置工作台所使用的 AI 接口地址和模型；保存设置不会发起调用。</p>
       </div>
       </div>
-      <el-alert class="mb-5" type="info" :closable="false" show-icon title="API Key 仅保存在服务端环境变量中：DeepSeek 可用 DEEPSEEK_API_KEY，其他兼容服务可用 OPENAI_API_KEY，通用回退为 AI_API_KEY。密钥不会显示、写入数据库或发送给浏览器扩展。" />
+      <el-alert class="mb-5" type="info" :closable="false" show-icon title="可填写你自己的 API Key（服务端加密存储、不返回明文）；留空保持原值，未配置时回退服务端环境变量。密钥不会显示或发送给浏览器扩展。" />
       <el-form label-position="top">
         <el-form-item label="接口类型"><el-input model-value="OpenAI Compatible" disabled /></el-form-item>
         <el-form-item label="Base URL"><el-input v-model="settings.baseUrl" placeholder="https://api.openai.com/v1" /></el-form-item>
         <el-form-item label="模型名称"><el-input v-model="settings.model" placeholder="例如：gpt-4o-mini" /></el-form-item>
+        <el-form-item label="API Key"><el-input v-model="apiKey" type="password" show-password :placeholder="settings.apiKeyConfigured ? '已配置，留空保持不变' : '输入你的 API Key'" /></el-form-item>
       </el-form>
       <div class="settings-page__status">
-        <span>服务端 API Key 状态</span>
+        <span>当前 API Key 状态</span>
         <el-tag :type="settings.apiKeyConfigured ? 'success' : 'warning'" effect="plain">{{ settings.apiKeyConfigured ? '已配置' : '未配置' }}</el-tag>
       </div>
       <p class="settings-page__note">本页目前只保存后续 Agent 共用的接口地址和模型；不会测试连通性或产生调用费用。</p>

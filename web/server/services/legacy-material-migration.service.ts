@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { MaterialCardType } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { createMaterialCard } from './material-card.service'
 
 type Candidate = {
@@ -35,7 +35,7 @@ function candidate(profileId: string, sourceField: string, index: number, type: 
 }
 
 export async function previewLegacyMaterialMigration(profileId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id } })
   if (!profile) return null
   const sources: Array<[string, MaterialCardType, unknown[]]> = [

@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEq
 
 import { prisma } from '../lib/prisma'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 const authorizationScopes = ['bitable:app:readonly', 'wiki:wiki', 'wiki:wiki:readonly', 'wiki:node:read', 'drive:export:readonly', 'offline_access']
 const stateMaxAgeMs = 10 * 60 * 1_000
@@ -75,12 +75,11 @@ async function requestToken(body: Record<string, string>) {
   return token as Required<Pick<FeishuTokenResponse, 'access_token' | 'expires_in' | 'refresh_token'>> & FeishuTokenResponse
 }
 
-async function persistTokens(tokens: Awaited<ReturnType<typeof requestToken>>) {
-  const user = await getLocalUser()
+async function persistTokens(tokens: Awaited<ReturnType<typeof requestToken>>, userId: string) {
   const now = Date.now()
   return prisma.feishuConnection.upsert({
-    where: { userId: user.id },
-    create: { userId: user.id, encryptedAccessToken: encrypt(tokens.access_token), accessTokenExpiresAt: new Date(now + tokens.expires_in * 1_000), encryptedRefreshToken: encrypt(tokens.refresh_token), refreshTokenExpiresAt: tokens.refresh_token_expires_in ? new Date(now + tokens.refresh_token_expires_in * 1_000) : null, scopes: tokens.scope?.split(' ').filter(Boolean) ?? authorizationScopes },
+    where: { userId },
+    create: { userId, encryptedAccessToken: encrypt(tokens.access_token), accessTokenExpiresAt: new Date(now + tokens.expires_in * 1_000), encryptedRefreshToken: encrypt(tokens.refresh_token), refreshTokenExpiresAt: tokens.refresh_token_expires_in ? new Date(now + tokens.refresh_token_expires_in * 1_000) : null, scopes: tokens.scope?.split(' ').filter(Boolean) ?? authorizationScopes },
     update: { encryptedAccessToken: encrypt(tokens.access_token), accessTokenExpiresAt: new Date(now + tokens.expires_in * 1_000), encryptedRefreshToken: encrypt(tokens.refresh_token), refreshTokenExpiresAt: tokens.refresh_token_expires_in ? new Date(now + tokens.refresh_token_expires_in * 1_000) : null, scopes: tokens.scope?.split(' ').filter(Boolean) ?? authorizationScopes },
   })
 }
@@ -97,30 +96,31 @@ export const feishuOAuthScopes = authorizationScopes
 export async function completeFeishuAuthorization(code: string, state: string | undefined) {
   validateState(state)
   const tokens = await requestToken({ grant_type: 'authorization_code', client_id: requiredEnv('FEISHU_APP_ID'), client_secret: requiredEnv('FEISHU_APP_SECRET'), code, redirect_uri: requiredEnv('FEISHU_OAUTH_REDIRECT_URI') })
-  await persistTokens(tokens)
+  const user = await getCurrentUser()
+  await persistTokens(tokens, user.id)
 }
 
 export async function getFeishuConnectionStatus() {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const connection = await prisma.feishuConnection.findUnique({ where: { userId: user.id }, select: { accessTokenExpiresAt: true, scopes: true } })
   return { connected: Boolean(connection), expiresAt: connection?.accessTokenExpiresAt ?? null, scopes: connection?.scopes ?? [] }
 }
 
 export async function disconnectFeishu() {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   await prisma.feishuConnection.deleteMany({ where: { userId: user.id } })
   return { disconnected: true }
 }
 
-export async function getFeishuUserAccessToken() {
-  const user = await getLocalUser()
-  const connection = await prisma.feishuConnection.findUnique({ where: { userId: user.id } })
+export async function getFeishuUserAccessToken(userId?: string) {
+  const id = userId ?? (await getCurrentUser()).id
+  const connection = await prisma.feishuConnection.findUnique({ where: { userId: id } })
   if (!connection) throw new FeishuOAuthError('请先连接你的飞书账号，然后再同步岗位。', 'FEISHU_NOT_CONNECTED')
   if (connection.accessTokenExpiresAt.getTime() > Date.now() + 60_000) return decrypt(connection.encryptedAccessToken)
   if (connection.refreshTokenExpiresAt && connection.refreshTokenExpiresAt.getTime() <= Date.now()) throw new FeishuOAuthError('飞书授权已过期，请重新连接账号。', 'FEISHU_REAUTH_REQUIRED')
   try {
     const tokens = await requestToken({ grant_type: 'refresh_token', client_id: requiredEnv('FEISHU_APP_ID'), client_secret: requiredEnv('FEISHU_APP_SECRET'), refresh_token: decrypt(connection.encryptedRefreshToken) })
-    await persistTokens(tokens)
+    await persistTokens(tokens, id)
     return tokens.access_token
   }
   catch (error) {

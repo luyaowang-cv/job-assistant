@@ -6,7 +6,7 @@ import type {
   CareerAgentSaveToInterviewInput,
   CareerAgentStoredMessageInput,
 } from '../schemas/career-agent-conversation'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 const conversationContext = {
   application: { select: { id: true, job: { select: { title: true, company: { select: { name: true } } } } } },
@@ -14,7 +14,7 @@ const conversationContext = {
 } satisfies Prisma.CareerAgentConversationInclude
 
 async function ownedConversation(id: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.careerAgentConversation.findFirst({ where: { id, userId: user.id }, include: conversationContext })
 }
 
@@ -27,7 +27,7 @@ async function validBindings(userId: string, input: CareerAgentConversationCreat
 }
 
 export async function listCareerAgentConversations() {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.careerAgentConversation.findMany({
     where: { userId: user.id },
     orderBy: { updatedAt: 'desc' },
@@ -37,7 +37,7 @@ export async function listCareerAgentConversations() {
 }
 
 export async function createCareerAgentConversation(input: CareerAgentConversationCreateInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   if (!(await validBindings(user.id, input))) return null
   return prisma.careerAgentConversation.create({
     data: { userId: user.id, applicationId: input.applicationId ?? null, resumeVersionId: input.resumeVersionId ?? null },
@@ -46,7 +46,7 @@ export async function createCareerAgentConversation(input: CareerAgentConversati
 }
 
 export async function getCareerAgentConversation(id: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.careerAgentConversation.findFirst({
     where: { id, userId: user.id },
     include: { ...conversationContext, messages: { orderBy: { createdAt: 'asc' }, take: 200 } },
@@ -91,7 +91,7 @@ function json(value: unknown): Prisma.InputJsonValue {
 }
 
 export async function saveAgentMessageToInterview(messageId: string, input: CareerAgentSaveToInterviewInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const message = await prisma.careerAgentMessage.findFirst({
     where: { id: messageId, role: 'assistant', conversation: { userId: user.id } },
     include: { conversation: { include: { application: { include: { job: { include: { company: true } } } } } } },

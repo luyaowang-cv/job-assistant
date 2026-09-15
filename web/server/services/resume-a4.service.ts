@@ -4,7 +4,7 @@ import type { BrowserType } from 'playwright-core'
 import { resumeLayoutConfigSchema, type CompositionInput } from '../schemas/document-composition'
 import { prisma } from '../lib/prisma'
 import { resolveResumeDraft, resolveResumeVersion } from './document-composition.service'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 type Draft = NonNullable<Awaited<ReturnType<typeof resolveResumeDraft>>>
 type Resolved = Draft['resolved']
@@ -255,7 +255,7 @@ export class ResumePdfError extends Error {
 export async function exportResumePdf(resumeId: string, versionId: string) {
   const result = await resolveResumeVersion(resumeId, versionId)
   if (!result) return null
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const profile = await prisma.personalProfile.findUnique({ where: { userId: user.id } })
   const executablePath = browserPath()
   if (!executablePath) throw new ResumePdfError('未找到 Chrome 或 Edge；可设置 RESUME_CHROMIUM_PATH。', 'PDF_BROWSER_NOT_FOUND', 503)

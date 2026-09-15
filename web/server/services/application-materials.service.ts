@@ -4,7 +4,7 @@ import { AgentRunStatus, AgentRunType } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { ResumeDigest, SaveApplicationMaterialsInput } from '../schemas/application-materials'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 export function digestMaterialResume(resumeText: string): ResumeDigest {
   const normalized = resumeText.trim().replace(/\s+/g, ' ')
@@ -21,7 +21,7 @@ export function digestMaterialResume(resumeText: string): ResumeDigest {
 }
 
 export async function getMaterialApplicationContext(applicationId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
 
   return prisma.application.findFirst({
     where: { id: applicationId, userId: user.id, deletedAt: null },
@@ -37,7 +37,7 @@ export async function getMaterialApplicationContext(applicationId: string) {
 }
 
 export async function saveApplicationMaterials(applicationId: string, input: SaveApplicationMaterialsInput, provider: string, model: string) {
-  const [user, application] = await Promise.all([getLocalUser(), getMaterialApplicationContext(applicationId)])
+  const [user, application] = await Promise.all([getCurrentUser(), getMaterialApplicationContext(applicationId)])
   if (!application) return null
 
   const evaluationRunId = input.evaluationRunId ?? application.agentRuns[0]?.id ?? null
@@ -62,7 +62,7 @@ export async function saveApplicationMaterials(applicationId: string, input: Sav
 }
 
 export async function listApplicationMaterials(applicationId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.applicationMaterial.findMany({
     where: { applicationId, userId: user.id },
     orderBy: { createdAt: 'desc' },

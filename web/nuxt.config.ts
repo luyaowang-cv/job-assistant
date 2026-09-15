@@ -59,6 +59,10 @@ export default defineNuxtConfig({
   compatibilityDate: '2024-08-14',
 
   nitro: {
+    experimental: {
+      // 让 useEvent() 基于 AsyncLocalStorage，保证并发请求下"当前用户"不串。
+      asyncContext: true,
+    },
     externals: {
       external: ['playwright-core', 'xlsx'],
     },
@@ -69,7 +73,6 @@ export default defineNuxtConfig({
     },
     prerender: {
       crawlLinks: false,
-      routes: ['/'],
       ignore: ['/hi'],
     },
   },

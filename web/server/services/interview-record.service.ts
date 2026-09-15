@@ -12,7 +12,7 @@ import {
 } from '../schemas/interview-record'
 import { interviewRecordProvider } from './interview-record-provider'
 import { buildInterviewRecordMarkdown } from './interview-record-markdown'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 const recordInclude = {
   application: { include: { job: { include: { company: true } } } },
@@ -57,7 +57,7 @@ function asReview(value: Prisma.JsonValue | null | undefined): InterviewReviewEn
 }
 
 async function requireOwnedRecord(id: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.interviewRecord.findFirst({
     where: { id, userId: user.id },
     include: recordInclude,
@@ -65,7 +65,7 @@ async function requireOwnedRecord(id: string) {
 }
 
 async function validateBindings(applicationId?: string | null, resumeVersionId?: string | null) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   if (applicationId) {
     const app = await prisma.application.findFirst({
       where: { id: applicationId, userId: user.id, deletedAt: null },
@@ -107,7 +107,7 @@ export async function getInterviewRecord(id: string) {
 }
 
 export async function listInterviewRecords(applicationId?: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.interviewRecord.findMany({
     where: { userId: user.id, ...(applicationId ? { applicationId } : {}) },
     orderBy: { updatedAt: 'desc' },
@@ -116,7 +116,7 @@ export async function listInterviewRecords(applicationId?: string) {
 }
 
 export async function createInterviewRecord(input: InterviewRecordCreateInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   if (!(await validateBindings(input.applicationId, input.resumeVersionId))) return null
   return prisma.$transaction(async (tx) => {
     const record = await tx.interviewRecord.create({
@@ -158,7 +158,7 @@ export async function createInterviewRecord(input: InterviewRecordCreateInput) {
 }
 
 export async function updateInterviewRecord(id: string, input: InterviewRecordUpdateInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const existing = await prisma.interviewRecord.findFirst({
     where: { id, userId: user.id },
     select: { id: true, applicationId: true, result: true, round: true },
@@ -206,7 +206,7 @@ export async function updateInterviewRecord(id: string, input: InterviewRecordUp
 }
 
 export async function generateInterviewRecordPreview(input: InterviewRecordGenerateInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   let jdText = input.jdText ?? null
   let companyName: string | null | undefined
   let jobTitle: string | null | undefined
@@ -256,7 +256,7 @@ export async function previewInterviewRecordReview(id: string, transcript: strin
 }
 
 export async function confirmInterviewRecordReview(id: string, input: InterviewReviewConfirmInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const existing = await prisma.interviewRecord.findFirst({
     where: { id, userId: user.id },
     select: { review: true },

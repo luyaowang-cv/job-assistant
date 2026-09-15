@@ -153,22 +153,26 @@ function finishTypewriter(state: TypewriterState) {
   state.wake = null
 }
 
-function isIncompleteMarkdownPrefix(value: string) {
-  return /^(?:#{1,3}\s?|\*{1,2})$/.test(value)
-}
-
 async function runTypewriter(message: Message, state: TypewriterState) {
   while (!state.ended || state.buffer) {
-    if (!state.buffer || (!message.content && !state.ended && isIncompleteMarkdownPrefix(state.buffer))) {
+    if (!state.buffer) {
       await new Promise<void>((resolve) => { state.wake = resolve })
       continue
     }
-    const take = Math.min(48, Math.max(2, Math.ceil(state.buffer.length / 24)))
+    const take = Math.min(160, Math.max(6, Math.ceil(state.buffer.length / 4)))
     message.content += state.buffer.slice(0, take)
     state.buffer = state.buffer.slice(take)
     scheduleScrollToBottom()
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    await waitForNextFrame()
   }
+}
+
+function waitForNextFrame() {
+  return new Promise<void>((resolve) => {
+    const frame = requestAnimationFrame(() => resolve())
+    // rAF may be throttled or paused in background or occluded tabs; timeout fallback keeps the typewriter progressing
+    setTimeout(() => { cancelAnimationFrame(frame); resolve() }, 80)
+  })
 }
 
 async function ensureConversation() {

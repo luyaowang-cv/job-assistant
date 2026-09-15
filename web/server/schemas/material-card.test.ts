@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createMaterialCardSchema, materialCardListQuerySchema, updateMaterialCardSchema } from './material-card'
+import { createMaterialCardSchema, materialCardListQuerySchema, saveMaterialVariantSchema, updateMaterialCardSchema } from './material-card'
 
 test('accepts all material card types', () => {
   for (const type of ['PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE', 'SKILL', 'SELF_EVALUATION', 'CUSTOM_ANSWER']) {
@@ -39,4 +39,11 @@ test('normalizes list query and enforces page limits', () => {
   assert.deepEqual(parsed.tags, ['前端', '校招'])
   assert.equal(parsed.includeArchived, true)
   assert.equal(materialCardListQuerySchema.safeParse({ pageSize: '101' }).success, false)
+})
+
+test('requires explicit overwrite authorization for a saved material variant', () => {
+  assert.deepEqual(saveMaterialVariantSchema.parse({ name: '网申版', content: '更新后的正文' }), { name: '网申版', content: '更新后的正文', overwrite: false })
+  assert.equal(saveMaterialVariantSchema.parse({ name: '网申版', content: '更新后的正文', overwrite: true }).overwrite, true)
+  assert.equal(saveMaterialVariantSchema.safeParse({ name: '网申版', content: '更新后的正文', overwrite: 'true' }).success, false)
+  assert.equal(saveMaterialVariantSchema.safeParse({ name: '网申版', content: '更新后的正文', force: true }).success, false)
 })

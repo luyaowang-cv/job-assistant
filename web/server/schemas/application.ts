@@ -118,6 +118,7 @@ export const listApplicationsQuerySchema = z.object({
   status: applicationStatusSchema.optional(),
   channel: applicationChannelSchema.optional(),
   updatedSort: z.enum(['asc', 'desc']).default('desc'),
+  view: z.enum(['list', 'kanban']).default('list'),
 })
 
 export const applicationIdSchema = z.object({

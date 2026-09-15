@@ -26,3 +26,4 @@ artifacts/
 # 本地数据与进程文件（不提交）
 *.xlsx
 *.pid
+backup-*.sql

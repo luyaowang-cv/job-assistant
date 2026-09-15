@@ -45,6 +45,7 @@ const channelOptions: Array<{ value: ApplicationChannel, label: string }> = [
 
 const filters = reactive({ search: '', status: undefined as ApplicationStatus | undefined })
 const applications = ref<ApplicationItem[]>([])
+const kanbanApplications = ref<ApplicationItem[]>([])
 const total = ref(0)
 const page = ref(1)
 const applicationPageSize = 20
@@ -98,8 +99,13 @@ function resetFilters() {
   Object.assign(filters, { search: '', status: undefined })
   refreshFromFirstPage()
 }
-function refreshFromFirstPage() { page.value = 1; void fetchApplications() }
+function refreshFromFirstPage() { page.value = 1; void fetchActiveApplications() }
 function changePage(value: number) { page.value = value; void fetchApplications() }
+function setViewMode(mode: 'list' | 'kanban') {
+  if (viewMode.value === mode) return
+  viewMode.value = mode
+  void fetchActiveApplications()
+}
 function applicationPayload() {
   return {
     companyName: form.companyName.trim(), companyDescription: optional(form.companyDescription), jobTitle: form.jobTitle.trim(), department: optional(form.department), location: optional(form.location),
@@ -135,12 +141,28 @@ async function fetchApplications() {
   finally { loading.value = false }
 }
 
+async function fetchKanbanApplications() {
+  loading.value = true
+  databaseError.value = false
+  try {
+    const response = await $fetch<{ data: ApplicationListData }>('/api/v1/applications', { query: { view: 'kanban', search: filters.search || undefined, status: filters.status, updatedSort: 'desc' } })
+    total.value = response.data.total
+    kanbanApplications.value = response.data.items
+  }
+  catch { kanbanApplications.value = []; total.value = 0; databaseError.value = true }
+  finally { loading.value = false }
+}
+
+function fetchActiveApplications() {
+  return viewMode.value === 'kanban' ? fetchKanbanApplications() : fetchApplications()
+}
+
 async function createApplication() {
   if (!form.companyName.trim() || !form.jobTitle.trim()) { ElMessage.warning('请至少填写公司名称和岗位名称。'); return }
   submitting.value = true
   try {
     await $fetch('/api/v1/applications', { method: 'POST', body: { ...applicationPayload(), status: form.status } })
-    ElMessage.success('投递记录已创建'); createDialogVisible.value = false; resetForm(); page.value = 1; await fetchApplications()
+    ElMessage.success('投递记录已创建'); createDialogVisible.value = false; resetForm(); page.value = 1; await fetchActiveApplications()
   }
   catch { ElMessage.error('保存失败，请检查必填信息和本地数据库连接。') }
   finally { submitting.value = false }
@@ -182,7 +204,7 @@ async function saveDetail() {
   try {
     await $fetch(`/api/v1/applications/${selectedApplication.value.id}`, { method: 'PATCH', body: applicationPayload() })
     if (form.status !== originalStatus.value) await $fetch(`/api/v1/applications/${selectedApplication.value.id}/status`, { method: 'PATCH', body: { status: form.status, source: 'DETAIL' } })
-    ElMessage.success('投递信息已保存'); detailVisible.value = false; await fetchApplications()
+    ElMessage.success('投递信息已保存'); detailVisible.value = false; await fetchActiveApplications()
   }
   catch { ElMessage.error('保存失败，请检查输入内容。') }
   finally { submitting.value = false }
@@ -199,7 +221,7 @@ async function removeApplicationItem(application: ApplicationItem, closeDetail =
     if (closeDetail || selectedApplication.value?.id === application.id) detailVisible.value = false
     const remainingTotal = Math.max(0, total.value - 1)
     page.value = Math.min(page.value, Math.max(1, Math.ceil(remainingTotal / applicationPageSize)))
-    await fetchApplications()
+    await fetchActiveApplications()
   }
   catch { ElMessage.error('删除失败，请稍后重试。') }
   finally { deleting.value = false; deletingId.value = null }
@@ -211,11 +233,31 @@ async function removeApplication() {
 
 async function moveApplication(application: ApplicationItem, status: ApplicationStatus) {
   if (application.status === status) return
-  const previousStatus = application.status; application.status = status
-  try { await $fetch(`/api/v1/applications/${application.id}/status`, { method: 'PATCH', body: { status, source: 'KANBAN' } }); ElMessage.success(`已移动到「${statusLabel(status)}」`) }
-  catch { application.status = previousStatus; ElMessage.error('状态更新失败，请确认本地数据库已经启动。') }
+  const previousKanbanApplications = kanbanApplications.value
+  const remainingApplications = kanbanApplications.value.filter(item => item.id !== application.id)
+  const optimisticApplication = { ...application, status, updatedAt: new Date().toISOString() }
+  kanbanApplications.value = filters.status && filters.status !== status
+    ? remainingApplications
+    : [
+        optimisticApplication,
+        ...remainingApplications.filter(item => item.status === status),
+        ...remainingApplications.filter(item => item.status !== status),
+      ]
+  try {
+    const response = await $fetch<{ data: ApplicationItem }>(`/api/v1/applications/${application.id}/status`, { method: 'PATCH', body: { status, source: 'KANBAN' } })
+    kanbanApplications.value = kanbanApplications.value.map(item => item.id === application.id ? response.data : item)
+    ElMessage.success(`已移动到「${statusLabel(status)}」`)
+  }
+  catch {
+    kanbanApplications.value = previousKanbanApplications
+    ElMessage.error('状态更新失败，请确认本地数据库已经启动。')
+  }
 }
-function dropOnStatus(status: ApplicationStatus) { const application = applications.value.find(item => item.id === draggedApplicationId.value); draggedApplicationId.value = null; if (application) void moveApplication(application, status) }
+function dropOnStatus(status: ApplicationStatus) {
+  const application = kanbanApplications.value.find(item => item.id === draggedApplicationId.value)
+  draggedApplicationId.value = null
+  if (application) void moveApplication(application, status)
+}
 
 onMounted(() => { void loadResumeVersions(); void fetchApplications() })
 </script>
@@ -236,8 +278,8 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
       <el-input v-model="filters.search" style="width: 180px" clearable placeholder="搜索公司或岗位" @input="refreshFromFirstPage" @clear="refreshFromFirstPage" />
       <el-select v-model="filters.status" style="width: 104px" clearable placeholder="状态" @change="refreshFromFirstPage" @clear="refreshFromFirstPage"><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
       <el-button class="application-records__reset" plain @click="resetFilters">重置</el-button>
-      <el-button-group class="application-records__view-toggle ml-auto"><el-button :class="{ 'is-active': viewMode === 'list' }" @click="viewMode = 'list'">列表</el-button>
-        <el-button :class="{ 'is-active': viewMode === 'kanban' }" @click="viewMode = 'kanban'">看板</el-button></el-button-group>
+      <el-button-group class="application-records__view-toggle ml-auto"><el-button :class="{ 'is-active': viewMode === 'list' }" @click="setViewMode('list')">列表</el-button>
+        <el-button :class="{ 'is-active': viewMode === 'kanban' }" @click="setViewMode('kanban')">看板</el-button></el-button-group>
     </div>
 
     <div v-if="viewMode === 'list'" class="workbench-table-shell workbench-table-shell--transparent"><el-table v-loading="loading" :data="applications" empty-text="还没有投递记录，先创建第一条吧。" class="w-full" :default-sort="{ prop: 'updatedAt', order: 'descending' }" @row-click="openDetail" @sort-change="sortByUpdatedAt">
@@ -251,11 +293,11 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
 
     <div v-else v-loading="loading" class="grid gap-3 overflow-x-auto pb-2" style="grid-template-columns: repeat(8, minmax(200px, 1fr))">
       <section v-for="status in statusOptions" :key="status.value" class="min-h-96 rounded-[20px] border border-white/70 bg-white/48 p-3 shadow-[0_10px_24px_rgba(100,114,148,.06)] backdrop-blur-xl" @dragover.prevent @drop="dropOnStatus(status.value)">
-        <div class="mb-3 flex items-center justify-between"><span :class="['application-status', `application-status--${statusTone(status.value)}`]">{{ status.label }}</span><el-tag size="small" effect="plain">{{ applications.filter(item => item.status === status.value).length }}</el-tag></div>
-        <div class="space-y-2"><article v-for="item in applications.filter(application => application.status === status.value)" :key="item.id" draggable="true" class="application-kanban-card cursor-grab rounded-[14px] border border-white/80 bg-white/78 p-3 shadow-[0_7px_16px_rgba(100,114,148,.08)]" @click="openDetail(item)" @dragstart="draggedApplicationId = item.id"><strong class="block text-sm text-slate-800">{{ item.job.company.name }}</strong><p class="my-1 text-sm text-slate-600">{{ item.job.title }}</p><p class="m-0 text-xs text-slate-400">{{ item.job.location || '地点待定' }} · {{ salaryText(item) }}</p><p v-if="item.nextAction" class="mb-0 mt-2 border-t border-slate-100 pt-2 text-xs text-[#6385be]">下一步：{{ item.nextAction }}</p></article></div>
+        <div class="mb-3 flex items-center justify-between"><span :class="['application-status', `application-status--${statusTone(status.value)}`]">{{ status.label }}</span><el-tag size="small" effect="plain">{{ kanbanApplications.filter(item => item.status === status.value).length }}</el-tag></div>
+        <div class="space-y-2"><article v-for="item in kanbanApplications.filter(application => application.status === status.value)" :key="item.id" draggable="true" class="application-kanban-card cursor-grab rounded-[14px] border border-white/80 bg-white/78 p-3 shadow-[0_7px_16px_rgba(100,114,148,.08)]" @click="openDetail(item)" @dragstart="draggedApplicationId = item.id" @dragend="draggedApplicationId = null"><strong class="block text-sm text-slate-800">{{ item.job.company.name }}</strong><p class="my-1 text-sm text-slate-600">{{ item.job.title }}</p><p class="m-0 text-xs text-slate-400">{{ item.job.location || '地点待定' }} · {{ salaryText(item) }}</p><p v-if="item.nextAction" class="mb-0 mt-2 border-t border-slate-100 pt-2 text-xs text-[#6385be]">下一步：{{ item.nextAction }}</p></article></div>
       </section>
     </div>
-    <el-pagination v-if="total > applicationPageSize" v-model:current-page="page" class="mt-5 flex justify-end" background layout="prev, pager, next" :page-size="applicationPageSize" :total="total" @current-change="changePage" />
+    <el-pagination v-if="viewMode === 'list' && total > applicationPageSize" v-model:current-page="page" class="mt-5 flex justify-end" background layout="prev, pager, next" :page-size="applicationPageSize" :total="total" @current-change="changePage" />
     </section>
 
     <el-dialog v-model="createDialogVisible" title="新增投递" width="620px" destroy-on-close @closed="resetForm">
