@@ -1,6 +1,7 @@
-# 生产部署编排：Postgres + 迁移 + 初始化所有者账号 + Web 服务
-# 用法：在项目根目录创建 .env（填密钥，见下方变量），然后执行
-#   docker compose -f docker-compose.prod.yml up -d --build
+# 生产部署编排：镜像在开发机构建好（docker build + docker save）上传到服务器加载，
+# 服务器只负责运行，不再自己编译，避免 2G 小内存服务器构建时 OOM。
+# 用法：镜像 docker load 后，在项目根目录创建 .env，然后执行
+#   docker compose -f docker-compose.prod.yml up -d
 
 services:
   db:
@@ -18,38 +19,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
-    # 不对外暴露 5432，只在 Docker 内网供应用访问
-
-  migrate:
-    build:
-      context: ./web
-      target: build-stage
-    command: sh -c "pnpm prisma migrate deploy"
-    environment:
-      DATABASE_URL: postgresql://job_assistant:${POSTGRES_PASSWORD}@db:5432/job_assistant?schema=public
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: "no"
-
-  bootstrap:
-    build:
-      context: ./web
-      target: build-stage
-    command: sh -c "pnpm auth:bootstrap"
-    environment:
-      DATABASE_URL: postgresql://job_assistant:${POSTGRES_PASSWORD}@db:5432/job_assistant?schema=public
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-      OWNER_EMAIL: ${OWNER_EMAIL:?请在 .env 设置 OWNER_EMAIL（所有者登录邮箱）}
-      OWNER_PASSWORD: ${OWNER_PASSWORD:?请在 .env 设置 OWNER_PASSWORD（所有者登录密码）}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    restart: "no"
 
   web:
-    build:
-      context: ./web
+    image: job-assistant-web:latest
+    container_name: job-assistant-web
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://job_assistant:${POSTGRES_PASSWORD}@db:5432/job_assistant?schema=public
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?请在 .env 设置 BETTER_AUTH_SECRET}
@@ -66,9 +40,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-    restart: unless-stopped
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:
