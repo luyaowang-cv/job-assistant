@@ -1,9 +1,11 @@
 import { prisma } from '../lib/prisma'
+import { isAdminEmail } from '../utils/admin'
 
 export interface CurrentUser {
   id: string
   email: string
   displayName: string
+  isAdmin: boolean
 }
 
 // 不依赖 h3/nitropack 静态导入的 401 错误（便于服务层在单测环境被直接引用）。
@@ -31,10 +33,16 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   return user
 }
 
+// 当前登录用户是否为管理员（未登录时由 getCurrentUser 抛 401）。
+export async function isCurrentUserAdmin(): Promise<boolean> {
+  const user = await getCurrentUser()
+  return user.isAdmin
+}
+
 // 后台任务（如飞书定时同步）没有请求上下文，解析数据库里唯一的真实用户（所有者）。
 // 多用户化后应改为按用户遍历，而非取首个用户。
 export async function getOwnerUser(): Promise<CurrentUser> {
   const user = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
   if (!user) throw new UnauthorizedError()
-  return { id: user.id, email: user.email, displayName: user.displayName }
+  return { id: user.id, email: user.email, displayName: user.displayName, isAdmin: isAdminEmail(user.email) }
 }

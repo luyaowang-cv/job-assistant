@@ -26,6 +26,7 @@
     "test:profiles": "tsx --test server/services/application-profile-resolution.test.ts",
     "test:personal-profile": "tsx --test server/schemas/personal-profile.test.ts",
     "test:settings": "tsx --test server/schemas/ai-settings.test.ts",
+    "test:auth": "tsx --test server/utils/admin.test.ts",
     "test:form-fill": "tsx --test server/schemas/form-fill.test.ts server/services/form-fill-provider.service.test.ts",
     "test:jobs": "tsx --test server/schemas/job-library.test.ts server/services/job-library-sync.test.ts",
     "test:materials": "tsx --test server/schemas/material-card.test.ts",

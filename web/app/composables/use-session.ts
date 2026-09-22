@@ -1,6 +1,6 @@
 type SessionUser = { id: string; email: string; displayName: string }
 
-// 当前登录用户与登录/退出动作。better-auth 的 user 字段里 name 即我们的 displayName。
+// 当前登录用户与登录/注册/退出动作。better-auth 的 user 字段里 name 即我们的 displayName。
 export function useAuthSession() {
   const user = useState<SessionUser | null>('auth-user', () => null)
   const checked = useState<boolean>('auth-checked', () => false)
@@ -24,11 +24,18 @@ export function useAuthSession() {
     await fetchSession()
   }
 
+  async function signup(email: string, password: string, name?: string) {
+    await $fetch('/api/auth/sign-up/email', { method: 'POST', body: { email, password, name } })
+    await fetchSession()
+    // better-auth 若未自动建立会话，则补一次登录兜底。
+    if (!user.value) await login(email, password)
+  }
+
   async function logout() {
     await $fetch('/api/auth/sign-out', { method: 'POST' }).catch(() => undefined)
     user.value = null
     checked.value = true
   }
 
-  return { user, checked, fetchSession, login, logout }
+  return { user, checked, fetchSession, login, signup, logout }
 }

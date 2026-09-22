@@ -48,6 +48,13 @@
 - 除 `/api/auth/**` 外，所有 `/api/v1/**` 未登录一律返回 `401 UNAUTHENTICATED`。
 - `PUT /api/v1/ai-settings` 可额外接受可选 `apiKey`（服务端加密存储）；`GET /api/v1/ai-settings` 仅返回 `apiKeyConfigured`，永不返回明文。
 
+## F-043 公开注册与岗位库写权限
+
+- `POST /api/auth/sign-up/email` 为公开注册接口，输入 `email` / `password` / 可选 `name`（映射 displayName）。是否开放由服务端环境变量 `ALLOW_PUBLIC_SIGNUP` 控制，关闭时注册接口拒绝；本次不验证邮箱。
+- `GET /api/signup-config` 为公开只读接口，返回 `{ enabled: boolean }`，供登录页决定是否显示注册入口。
+- `GET /api/v1/me` 返回当前登录用户 `{ id, email, displayName, isAdmin }`；`isAdmin` 由环境变量 `ADMIN_EMAILS`（逗号分隔邮箱）判定。
+- 岗位库写接口（`POST /api/v1/jobs/imports/feishu`、`POST /api/v1/jobs/imports/excel`、`POST /api/v1/jobs/:id/offline`、`DELETE /api/v1/jobs`）仅管理员可调用，非管理员返回 `403 FORBIDDEN`；`POST /api/v1/jobs/:id/application` 仍对任意登录用户开放（按用户创建投递）。
+
 ## F-002 Job Evaluation API
 
 | Method | Path | Input | Success data |

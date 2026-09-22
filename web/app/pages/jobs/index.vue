@@ -48,6 +48,7 @@ const clearing = ref(false)
 const convertingId = ref<string | null>(null)
 const offliningId = ref<string | null>(null)
 const databaseError = ref(false)
+const isAdmin = ref(false)
 const syncDialogVisible = ref(false)
 const detailDialogVisible = ref(false)
 const selectedJob = ref<JobItem | null>(null)
@@ -107,6 +108,15 @@ async function loadFeishuConnection() {
     feishuConnection.value = response.data
   }
   catch { ElMessage.error('无法读取飞书连接状态。') }
+}
+
+// 读取当前用户身份，决定是否展示岗位库的管理员写操作。
+async function loadMe() {
+  try {
+    const response = await $fetch<{ data: { user: { isAdmin: boolean } } }>('/api/v1/me')
+    isAdmin.value = response.data.user.isAdmin
+  }
+  catch { isAdmin.value = false }
 }
 
 function connectFeishu() { window.location.assign('/api/v1/integrations/feishu/authorize') }
@@ -240,7 +250,7 @@ function sortByUpdatedAt({ order }: { order: 'ascending' | 'descending' | null }
 }
 
 watch(() => [filters.location, filters.companyType, filters.includeOffline], () => { page.value = 1; void fetchJobs() })
-onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()]); oauthMessage() })
+onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection(), loadMe()]); oauthMessage() })
 </script>
 
 <template>
@@ -266,13 +276,15 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()])
         <el-select v-model="filters.companyType" clearable filterable placeholder="企业性质" aria-label="按企业性质筛选"><el-option v-for="value in options.companyTypes" :key="value" :label="value" :value="value" /></el-select>
         <el-checkbox v-model="filters.includeOffline" class="job-library__offline-toggle">显示已下线</el-checkbox>
         <el-button plain class="application-records__reset" @click="resetFilters">重置</el-button>
-        <el-upload :auto-upload="false" :show-file-list="false" accept=".xlsx" :on-change="onExcelChange" class="job-library__upload">
+        <el-upload v-if="isAdmin" :auto-upload="false" :show-file-list="false" accept=".xlsx" :on-change="onExcelChange" class="job-library__upload">
           <el-button plain :loading="uploading">上传 Excel</el-button>
         </el-upload>
-        <el-button v-if="!feishuConnection.connected" type="primary" @click="connectFeishu">连接飞书账号</el-button>
-        <el-button v-else-if="needsFeishuReconnect" type="primary" @click="connectFeishu">更新飞书授权</el-button>
-        <el-button v-else type="primary" @click="syncDialogVisible = true">同步飞书文档</el-button>
-        <el-button type="danger" plain :loading="clearing" @click="clearAllJobs">清空岗位库</el-button>
+        <template v-if="isAdmin">
+          <el-button v-if="!feishuConnection.connected" type="primary" @click="connectFeishu">连接飞书账号</el-button>
+          <el-button v-else-if="needsFeishuReconnect" type="primary" @click="connectFeishu">更新飞书授权</el-button>
+          <el-button v-else type="primary" @click="syncDialogVisible = true">同步飞书文档</el-button>
+          <el-button type="danger" plain :loading="clearing" @click="clearAllJobs">清空岗位库</el-button>
+        </template>
       </div>
 
       <div class="workbench-table-shell job-library__table">
@@ -284,13 +296,13 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection()])
           <el-table-column label="工作地点" prop="location" min-width="110"><template #default="{ row }">{{ row.location || '—' }}</template></el-table-column>
           <el-table-column label="行业 / 性质" min-width="150"><template #default="{ row }"><span>{{ row.company.industry || '未分类' }}</span><small class="job-library__secondary">{{ row.company.companyType || '—' }}</small></template></el-table-column>
           <el-table-column label="公告 / 投递" width="126"><template #default="{ row }"><div class="job-library__links"><a v-if="row.announcementUrl" :href="row.announcementUrl" target="_blank" rel="noopener noreferrer" @click.stop>公告</a><span v-else>—</span><a v-if="row.url" :href="row.url" target="_blank" rel="noopener noreferrer" @click.stop>投递</a><span v-else>—</span></div></template></el-table-column>
-          <el-table-column label="操作" fixed="right" width="160"><template #default="{ row }"><div class="job-library__actions"><el-button class="job-library__compact-action" size="small" type="warning" plain :disabled="Boolean(jobOfflineAt(row))" :loading="offliningId === row.id" @click.stop="offlineJob(row)">{{ jobOfflineAt(row) ? '已下线' : '下线' }}</el-button><el-button class="job-library__compact-action" size="small" :type="row.applicationId ? 'success' : 'primary'" plain :loading="convertingId === row.id" @click.stop="convertJob(row)">{{ row.applicationId ? '查看面板' : '加入面板' }}</el-button></div></template></el-table-column>
+          <el-table-column label="操作" fixed="right" width="160"><template #default="{ row }"><div class="job-library__actions"><el-button v-if="isAdmin" class="job-library__compact-action" size="small" type="warning" plain :disabled="Boolean(jobOfflineAt(row))" :loading="offliningId === row.id" @click.stop="offlineJob(row)">{{ jobOfflineAt(row) ? '已下线' : '下线' }}</el-button><el-button class="job-library__compact-action" size="small" :type="row.applicationId ? 'success' : 'primary'" plain :loading="convertingId === row.id" @click.stop="convertJob(row)">{{ row.applicationId ? '查看面板' : '加入面板' }}</el-button></div></template></el-table-column>
         </el-table>
       </div>
       <el-pagination v-if="total > 20" class="job-library__pagination" layout="prev, pager, next" :current-page="page" :page-size="20" :total="total" @current-change="page = $event; fetchJobs()" />
     </section>
 
-    <section class="job-library__connection" :class="{ 'job-library__connection--connected': feishuConnection.connected && !needsFeishuReconnect }">
+    <section v-if="isAdmin" class="job-library__connection" :class="{ 'job-library__connection--connected': feishuConnection.connected && !needsFeishuReconnect }">
       <div><strong>{{ needsFeishuReconnect ? '需要更新飞书授权' : feishuConnection.connected ? '飞书账号已连接' : '尚未连接飞书账号' }}</strong><span>{{ needsFeishuReconnect ? '新增 Wiki 表格数据源需要知识库读取和云文档导出只读权限，更新授权后即可同步。' : autoSyncSummary }}</span></div>
       <el-button v-if="feishuConnection.connected" size="small" plain @click="disconnectFeishu">断开连接</el-button>
       <el-button v-else size="small" plain type="primary" @click="connectFeishu">去连接</el-button>

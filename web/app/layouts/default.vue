@@ -30,10 +30,10 @@ async function handleLogout() {
   <el-container class="workbench-shell">
     <el-aside width="248px" class="workbench-sidebar p-5">
       <NuxtLink to="/applications" class="mb-8 flex items-center gap-3 px-2 pt-2 no-underline">
-        <span class="grid h-10 w-10 place-items-center rounded-[14px] bg-[linear-gradient(145deg,#a6bce6,#7898d0)] text-lg text-white shadow-[0_8px_18px_rgba(93,125,182,.25)]">求</span>
+        <span class="grid h-10 w-10 place-items-center rounded-[14px] bg-[linear-gradient(145deg,#a6bce6,#7898d0)] text-lg text-white shadow-[0_8px_18px_rgba(93,125,182,.25)]">✓</span>
         <span>
-          <strong class="block text-[15px] tracking-wide text-[#3b4657]">求职小助手</strong>
-          <small class="font-mono text-[11px] tracking-wide text-[#8c98ab]">PERSONAL CAREER OS</small>
+          <strong class="block text-[15px] tracking-wide text-[#3b4657]">Offer来</strong>
+          <small class="font-mono text-[11px] tracking-wide text-[#8c98ab]">OFFER ON THE WAY</small>
         </span>
       </NuxtLink>
 

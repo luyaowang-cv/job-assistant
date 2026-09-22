@@ -1,4 +1,4 @@
-# 秋招求职工作台（Job Assistant）
+# Offer来（Job Assistant）
 
 > 一个面向个人秋招的求职管理系统：用 Web 工作台沉淀机会、投递、材料与复盘，用 Chrome 插件降低岗位录入成本，并用受控的 AI 工作流（LangGraph.js）辅助准备简历与面试。
 

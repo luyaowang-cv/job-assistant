@@ -8,8 +8,8 @@ export const auth = betterAuth({
   database: prismaAdapter(prisma, { provider: 'postgresql' }),
   emailAndPassword: {
     enabled: true,
-    // 本次只服务所有者账号，关闭公开注册；账号由 auth:bootstrap 命令创建。
-    disableSignUp: true,
+    // 公开注册由 ALLOW_PUBLIC_SIGNUP 总开关控制；未设置时默认关闭。
+    disableSignUp: process.env.ALLOW_PUBLIC_SIGNUP !== 'true',
   },
   user: {
     // better-auth 的 name 字段映射到现有 displayName 列。
