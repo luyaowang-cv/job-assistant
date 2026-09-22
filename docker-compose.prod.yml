@@ -21,7 +21,7 @@ services:
       retries: 12
 
   web:
-    image: job-assistant-web:latest
+    image: ghcr.io/luyaowang-cv/job-assistant-web:latest
     container_name: job-assistant-web
     restart: unless-stopped
     environment:
