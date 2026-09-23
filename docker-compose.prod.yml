@@ -27,6 +27,7 @@ services:
     environment:
       DATABASE_URL: postgresql://job_assistant:${POSTGRES_PASSWORD}@db:5432/job_assistant?schema=public
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?请在 .env 设置 BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: https://offerscoming.cn
       ALLOW_PUBLIC_SIGNUP: ${ALLOW_PUBLIC_SIGNUP:-false}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       AI_KEY_ENCRYPTION_KEY: ${AI_KEY_ENCRYPTION_KEY:-}
