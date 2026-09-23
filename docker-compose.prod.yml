@@ -38,7 +38,7 @@ services:
       FEISHU_AUTO_SYNC_ENABLED: ${FEISHU_AUTO_SYNC_ENABLED:-true}
       RESUME_CHROMIUM_PATH: ${RESUME_CHROMIUM_PATH:-}
     ports:
-      - "3000:3000"
+      - "80:3000"
     depends_on:
       db:
         condition: service_healthy
