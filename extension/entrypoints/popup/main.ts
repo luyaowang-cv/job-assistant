@@ -23,7 +23,7 @@ const fillCurrentPageButton = document.querySelector<HTMLButtonElement>('#fill-c
 const fillResultElement = document.querySelector<HTMLElement>('#fill-result')
 const fillReportElement = document.querySelector<HTMLElement>('#fill-report')
 
-const workbenchOrigin = 'http://127.0.0.1:3000'
+const workbenchOrigin = 'https://offerscoming.cn'
 
 type CaptureResult = {
   companyName?: string
@@ -313,11 +313,11 @@ async function checkWorkbench() {
 
   try {
     await readApi('/api/v1/applications?page=1&pageSize=1')
-    statusElement.textContent = '本地工作台已连接'
+    statusElement.textContent = '工作台已连接'
     statusElement.dataset.state = 'connected'
   }
   catch {
-    statusElement.textContent = '未连接本地工作台，请确认 http://127.0.0.1:3000 正在运行。'
+    statusElement.textContent = '未连接工作台，请确认 https://offerscoming.cn 可正常访问。'
     statusElement.dataset.state = 'disconnected'
   }
 }
