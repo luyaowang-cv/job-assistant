@@ -25,7 +25,8 @@ export function useAuthSession() {
   }
 
   async function signup(email: string, password: string, name?: string) {
-    await $fetch('/api/auth/sign-up/email', { method: 'POST', body: { email, password, name } })
+    // better-auth 要求 name 必须是 string；未填昵称时用邮箱前缀兜底。
+    await $fetch('/api/auth/sign-up/email', { method: 'POST', body: { email, password, name: name || email.split('@')[0] } })
     await fetchSession()
     // better-auth 若未自动建立会话，则补一次登录兜底。
     if (!user.value) await login(email, password)
