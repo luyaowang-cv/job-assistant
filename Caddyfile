@@ -1,0 +1,15 @@
+# 生产环境反向代理：由 Caddy 终结 HTTPS，自动向 Let's Encrypt 申请并续期证书。
+#
+# 为什么不再走 Cloudflare 代理：
+#   Cloudflare 免费版没有中国大陆节点，大陆用户会被路由到美西（实测 colo=LAX / SJC），
+#   请求路径变成「中国 → 洛杉矶 → 香港」，比直连香港慢 3 倍以上，且间歇性超时。
+#   香港本身就是离大陆最近的机房（实测 RTT 约 50ms），直连才是最快的。
+#
+# 切换前提：必须先在 Cloudflare DNS 里把 A 记录改成 DNS Only（灰云），
+#   否则 Caddy 无法通过 80 端口完成 ACME 域名验证，签不出证书。
+offerscoming.cn {
+	# 压缩。Nitro 自己也会压缩，但静态资源直接由 Caddy 发时这里更省 CPU。
+	encode gzip zstd
+
+	reverse_proxy web:3000
+}

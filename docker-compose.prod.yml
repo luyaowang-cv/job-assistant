@@ -1,6 +1,6 @@
-# 生产部署编排：镜像在开发机构建好（docker build + docker save）上传到服务器加载，
-# 服务器只负责运行，不再自己编译，避免 2G 小内存服务器构建时 OOM。
-# 用法：镜像 docker load 后，在项目根目录创建 .env，然后执行
+# 生产部署编排。镜像由 GitHub Actions 构建并推送到 ghcr，服务器只负责拉取运行，
+# 不在 2G 小内存服务器上编译（本地 nuxi build 的内存峰值会超过 2G 导致 OOM）。
+# 用法：在项目根目录创建 .env，然后执行
 #   docker compose -f docker-compose.prod.yml up -d
 
 services:
@@ -19,6 +19,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+    # Docker 默认的 json-file 日志没有大小上限，长期运行会把小磁盘吃满
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   web:
     image: ghcr.io/luyaowang-cv/job-assistant-web:latest
@@ -38,11 +44,42 @@ services:
       FEISHU_TOKEN_ENCRYPTION_KEY: ${FEISHU_TOKEN_ENCRYPTION_KEY:-}
       FEISHU_AUTO_SYNC_ENABLED: ${FEISHU_AUTO_SYNC_ENABLED:-true}
       RESUME_CHROMIUM_PATH: ${RESUME_CHROMIUM_PATH:-}
-    ports:
-      - "80:3000"
+    # 不再对外暴露端口：HTTPS 由 caddy 终结，caddy 通过内部网络访问 web:3000
+    expose:
+      - "3000"
     depends_on:
       db:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 反向代理 + HTTPS 终结。证书自动申请、自动续期，无需手工维护。
+  # 取代 Cloudflare 代理的原因见 Caddyfile 顶部注释。
+  caddy:
+    image: caddy:2-alpine
+    container_name: job-assistant-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   pgdata:
+  # 证书存在这里。这个卷不能删，否则每次重建容器都要重新向 Let's Encrypt 申请，
+  # 而 Let's Encrypt 对同一域名有签发频率限制。
+  caddy_data:
+  caddy_config:
