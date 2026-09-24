@@ -27,3 +27,5 @@ artifacts/
 *.xlsx
 *.pid
 backup-*.sql
+# 数据库导出（如 deploy-data.sql）。不要写成 *.sql，会连 Prisma 迁移一起忽略掉。
+*-data.sql
