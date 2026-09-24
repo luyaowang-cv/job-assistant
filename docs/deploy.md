@@ -68,6 +68,8 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 
 - **注册失败**：确认 `BETTER_AUTH_URL=https://offerscoming.cn` 已配置（better-auth 需要知道公网地址）；确认 `ALLOW_PUBLIC_SIGNUP=true`。
 - **HTTPS 证书签不出来**：`docker logs job-assistant-caddy`。常见原因是 Cloudflare 的 A 记录还是橙色云（代理状态），导致 Let's Encrypt 的 80 端口验证走不到源站；也可能是安全组没放行 80/443。
+- **全站 `ERR_TOO_MANY_REDIRECTS`（死循环）**：典型成因是 **Cloudflare 的 SSL 模式是 `Flexible`，而源站 Caddy 强制 HTTPS 跳转**——Cloudflare 用 HTTP 回源、源站要求 HTTPS，一来一回就无限重定向。修法：Cloudflare → SSL/TLS → 概述，把加密模式改成 **`Full`**（我们的证书是 Let's Encrypt 签的，Full/Full-strict 都可用）。
+  - **诊断方法**：用 `curl -sIL --resolve "offerscoming.cn:443:<Cloudflare的IP>" https://offerscoming.cn/` 绕过 DNS 强制走 Cloudflare，看跳转次数；再对比多个 DNS 的解析结果（`nslookup` vs 公共 DoH），判断是否 DNS 传播未完成。
 - **网站间歇性超时、SSH 却正常**：先确认 `https://www.cloudflare.com/cdn-cgi/trace` 的 `colo=` 是不是被路由到了 HKG/NRT/SIN 这类亚洲节点。如果 A 记录已经是灰云还出现超时，问题在线路而非服务器。
 - **简历 PDF 导出**：服务器未装 Chrome，需设 `RESUME_CHROMIUM_PATH` 指向浏览器。
 - **飞书同步/登录**：OAuth 回调需改成线上域名 `https://offerscoming.cn/api/v1/integrations/feishu/callback`。
