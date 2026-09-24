@@ -79,5 +79,17 @@ const blocks = computed<Block[]>(() => {
 </template>
 
 <style scoped>
-.agent-markdown{color:#26364f;font-size:14px;line-height:1.78}.agent-markdown :is(h1,h2,h3){margin:18px 0 8px;color:#1f3b61;line-height:1.35}.agent-markdown h1{font-size:21px}.agent-markdown h2{font-size:18px}.agent-markdown h3{font-size:16px}.agent-markdown p{margin:8px 0;white-space:pre-line}.agent-markdown :is(ul,ol){display:grid;gap:6px;margin:8px 0;padding-left:22px}.agent-markdown blockquote{margin:10px 0;padding:8px 12px;border-left:3px solid #8aa59a;background:#eff5f1;color:#52675e;white-space:pre-line}.agent-markdown pre{overflow:auto;margin:10px 0;padding:12px;border-radius:10px;background:#202b3a;color:#dce6f3;font-size:12px}.agent-markdown :not(pre)>code{padding:2px 5px;border-radius:5px;background:#edf1f7;color:#5c527e;font-size:.9em}.agent-markdown strong{font-weight:700;color:#1d2d44}
+/* 颜色统一走 --workbench-* 设计令牌：原来的冷蓝色（#26364f / #1f3b61）放在绿色系的
+   消息底色上会显得突兀。字号只出现 12/14/16/18/20，圆角只用 4px 和 10px。 */
+.agent-markdown{color:var(--workbench-ink);font-size:14px;line-height:1.78}
+.agent-markdown :is(h1,h2,h3){margin:var(--space-4) 0 var(--space-2);color:var(--workbench-ink);font-weight:600;line-height:1.35}
+.agent-markdown h1{font-size:20px}
+.agent-markdown h2{font-size:18px}
+.agent-markdown h3{font-size:16px}
+.agent-markdown p{margin:var(--space-2) 0;white-space:pre-line}
+.agent-markdown :is(ul,ol){display:grid;gap:var(--space-1);margin:var(--space-2) 0;padding-left:var(--space-6)}
+.agent-markdown blockquote{margin:var(--space-3) 0;padding:var(--space-2) var(--space-3);border-left:3px solid var(--workbench-blue);background:rgba(228,239,232,.72);color:var(--workbench-subtle);white-space:pre-line}
+.agent-markdown pre{overflow:auto;margin:var(--space-3) 0;padding:var(--space-3);border-radius:var(--radius-control);background:#202b3a;color:#dce6f3;font-size:12px}
+.agent-markdown :not(pre)>code{padding:2px var(--space-1);border-radius:var(--space-1);background:rgba(228,239,232,.6);color:var(--workbench-blue-deep);font-size:.9em}
+.agent-markdown strong{font-weight:700;color:var(--workbench-ink)}
 </style>

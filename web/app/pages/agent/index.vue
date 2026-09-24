@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Expand, Fold } from '@element-plus/icons-vue'
 
 type Application = { id: string; job: { title: string; description?: string | null; company: { name: string } } }
 type ResumeVersion = { id: string; name: string; type: 'BASE' | 'TARGETED'; content: string; createdAt: string }
@@ -37,6 +38,26 @@ const saveDialogVisible = ref(false)
 const saveTarget = ref<Message | null>(null)
 const savingToInterview = ref(false)
 const saveForm = reactive({ kind: 'KNOWLEDGE' as 'KNOWLEDGE' | 'QUESTION_ASK' | 'ROLE_POINT', title: 'Agent 面试准备' })
+// 对话栏折叠状态。窄屏自动收起，用户手动点开的意愿优先保留（只有跨断点时才会被改写）。
+// 这里没有用 useMediaQuery：在 Nuxt SSR 下它的返回值不会随客户端窗口更新（实测恒为 false）。
+// 手写版本行为明确，也更容易排查。
+// 关键：初始值必须两边一致（都是 false）。服务端渲染时拿不到窗口宽度，若在 setup 阶段就把
+// collapsed 改成 true，客户端 class 会和服务端 HTML 对不上，Vue 判定 hydration mismatch 后
+// 不回写 class——而这个值之后又不再变化，窄屏下就永远收不起来。所以真正的判断放在 onMounted。
+const collapsed = ref(false)
+const narrowViewport = ref(false)
+// mounted 只用来给移动端样式加一道"已就绪"闸门：服务端渲染出来的侧栏在窄屏是覆盖层形态，
+// 若不加闸门，手机首屏会先闪一下盖住整页的侧栏，等 hydration 跑完才收起。
+const mounted = ref(false)
+let viewportQuery: MediaQueryList | null = null
+function syncNarrowViewport() { narrowViewport.value = viewportQuery?.matches ?? false }
+onMounted(() => {
+  viewportQuery = window.matchMedia('(max-width: 1400px)')
+  syncNarrowViewport()
+  collapsed.value = narrowViewport.value
+  mounted.value = true
+  viewportQuery.addEventListener('change', () => { syncNarrowViewport(); collapsed.value = narrowViewport.value })
+})
 let controller: AbortController | null = null
 let scrollFrame: number | null = null
 
@@ -54,6 +75,12 @@ const quickPrompts = [
 const optionLabel = (item: Application) => `${item.job.company.name} · ${item.job.title}`
 const versionLabel = (item: ResumeVersion) => item.name || `${item.type === 'BASE' ? '基础版' : '定制版'} · ${new Date(item.createdAt).toLocaleDateString('zh-CN')}`
 const conversationLabel = (item: Conversation) => `${item.title}${item.application ? ` · ${item.application.job.company.name}` : ''}`
+// 历史对话行的副信息：公司 · 消息数 · 日期。数据列表接口已经返回，不需要额外请求。
+const conversationMeta = (item: Conversation) => [
+  item.application?.job.company.name,
+  item._count?.messages ? `${item._count.messages} 条` : '',
+  new Date(item.updatedAt).toLocaleDateString('zh-CN'),
+].filter(Boolean).join(' · ')
 const queryValue = (key: string) => typeof route.query[key] === 'string' ? String(route.query[key]) : ''
 
 async function loadConversations() {
@@ -279,34 +306,66 @@ onBeforeUnmount(() => { controller?.abort(); if (scrollFrame !== null) cancelAni
 
 <template>
   <section v-loading="loading" class="agent-page">
-    <header class="agent-heading">
-      <div><span>CAREER AGENT · QUICK DESK</span><h1>带着岗位和简历，直接聊</h1><p>对话自动保存；需要沉淀的回答，再明确加入面试准备。</p></div>
-      <div class="agent-status"><i :class="{ active: generating }" /><span>{{ generating ? '正在生成' : providerLabel || '模型待连接' }}</span></div>
-    </header>
+    <!-- 移动端专用：对话栏作为覆盖层打开时，点遮罩关闭。桌面端这段样式被置为 display:none -->
+    <div class="agent-page__scrim" :class="{ 'agent-page__scrim--visible': mounted && !collapsed }" @click="collapsed = true" />
 
-    <div class="session-strip">
-      <label><span>最近对话</span><el-select v-model="conversationId" clearable filterable placeholder="新对话" :disabled="generating" @change="openConversation"><el-option v-for="item in conversations" :key="item.id" :label="conversationLabel(item)" :value="item.id" /></el-select></label>
-      <button type="button" :disabled="generating" @click="startNewConversation(true)">＋ 新对话</button>
-      <button type="button" class="danger-link" :disabled="!conversationId || generating" @click="removeConversation">删除当前对话</button>
-    </div>
+    <!-- 左侧对话栏：新建对话 / 岗位与简历上下文 / 历史对话 / 当前对话操作 -->
+    <aside class="agent-rail material-surface" :class="{ 'agent-rail--collapsed': collapsed, 'agent-rail--ready': mounted }">
+      <header class="agent-rail__head">
+        <button v-if="!collapsed" type="button" class="agent-rail__new" :disabled="generating" @click="startNewConversation(true)">＋ 新建对话</button>
+        <button v-else type="button" class="agent-rail__icon" title="新建对话" :disabled="generating" @click="startNewConversation(true)">＋</button>
+        <button type="button" class="agent-rail__toggle" :title="collapsed ? '展开对话栏' : '收起对话栏'" :aria-expanded="!collapsed" @click="collapsed = !collapsed">
+          <el-icon><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
+        </button>
+      </header>
 
-    <div class="context-docket">
-      <label><span>当前岗位</span><el-select v-model="applicationId" clearable filterable placeholder="选择含 JD 的岗位" :disabled="generating || contextLocked"><el-option v-for="item in applications" :key="item.id" :label="optionLabel(item)" :value="item.id" /></el-select></label>
-      <label><span>当前简历</span><el-select v-model="resumeVersionId" clearable filterable placeholder="选择简历版本" :disabled="generating || contextLocked"><el-option v-for="item in resume?.versions || []" :key="item.id" :label="versionLabel(item)" :value="item.id" /></el-select></label>
-      <div class="context-summary"><small>本次上下文</small><strong>{{ selectedApplication ? optionLabel(selectedApplication) : '未选择岗位' }}</strong><span>{{ selectedVersion ? versionLabel(selectedVersion) : '未选择简历' }}</span></div>
-    </div>
+      <template v-if="!collapsed">
+        <label class="agent-rail__field"><span>当前岗位</span><el-select v-model="applicationId" clearable filterable placeholder="选择含 JD 的岗位" :disabled="generating || contextLocked"><el-option v-for="item in applications" :key="item.id" :label="optionLabel(item)" :value="item.id" /></el-select></label>
+        <label class="agent-rail__field"><span>当前简历</span><el-select v-model="resumeVersionId" clearable filterable placeholder="选择简历版本" :disabled="generating || contextLocked"><el-option v-for="item in resume?.versions || []" :key="item.id" :label="versionLabel(item)" :value="item.id" /></el-select></label>
 
-    <div class="prompt-rack" aria-label="快捷提问"><button v-for="item in quickPrompts" :key="item.mode" type="button" :disabled="generating" @click="applyPrompt(item.text)"><span>↗</span>{{ item.label }}</button></div>
+        <div class="agent-rail__section"><span>历史对话</span><small>{{ conversations.length }}</small></div>
+        <nav class="agent-rail__history" aria-label="历史对话">
+          <button v-for="item in conversations" :key="item.id" type="button" class="agent-rail__item" :class="{ 'agent-rail__item--active': item.id === conversationId }" :disabled="generating" @click="openConversation(item.id)">
+            <strong>{{ item.title }}</strong>
+            <small>{{ conversationMeta(item) }}</small>
+          </button>
+          <p v-if="!conversations.length" class="agent-rail__empty">还没有历史对话，直接提问就会自动建立。</p>
+        </nav>
 
-    <main class="conversation-shell">
-      <div ref="conversation" class="conversation-stream" aria-live="polite">
-        <div v-if="!messages.length" class="conversation-empty"><span>求</span><h2>{{ contextReady ? '上下文已就绪' : '先选岗位或简历，也可以直接提问' }}</h2><p>例如：这个岗位最看重什么？我的简历哪里最需要调整？</p></div>
+        <footer class="agent-rail__foot">
+          <span class="agent-rail__status"><i :class="{ active: generating }" />{{ generating ? '正在生成' : providerLabel || '模型待连接' }}</span>
+          <el-button type="danger" plain size="small" :disabled="!conversationId || generating" @click="removeConversation">删除当前对话</el-button>
+        </footer>
+      </template>
+
+      <nav v-else class="agent-rail__history agent-rail__history--rail" aria-label="历史对话">
+        <button v-for="item in conversations" :key="item.id" type="button" class="agent-rail__item agent-rail__item--rail" :class="{ 'agent-rail__item--active': item.id === conversationId }" :title="conversationLabel(item)" :disabled="generating" @click="openConversation(item.id)">{{ item.title.slice(0, 1) }}</button>
+      </nav>
+    </aside>
+
+    <!-- 对话区：空态是一张居中卡片，发出第一条消息后撑满可用高度 -->
+    <div class="agent-chat" :class="{ 'agent-chat--empty': !messages.length }">
+      <button type="button" class="agent-chat__rail-trigger" @click="collapsed = false">对话</button>
+
+      <div ref="conversation" class="agent-chat__stream" aria-live="polite">
+        <div v-if="!messages.length" class="agent-chat__empty">
+          <span class="agent-chat__mark">求</span>
+          <h2>{{ contextReady ? '上下文已就绪，可以直接提问' : '先选岗位或简历，也可以直接提问' }}</h2>
+          <p>例如：这个岗位最看重什么？我的简历哪里最需要调整？</p>
+        </div>
         <article v-for="message in messages" :key="message.id" class="message" :class="[`message--${message.role}`, { 'message--error': message.error }]">
           <div class="message-body"><header><strong>{{ message.role === 'user' ? '我的问题' : '求职 Agent' }}</strong><div v-if="message.role === 'assistant' && message.content" class="message-actions"><button v-if="message.persistedId" type="button" :disabled="message.savedToInterview" @click="openSaveDialog(message)">{{ message.savedToInterview ? '已存入面试准备' : '存入面试准备' }}</button><button type="button" @click="copyMessage(message.content)">复制</button></div></header><AgentMarkdown v-if="message.content" :content="message.content" /><p v-else class="message-thinking"><i /><i /><i /> 正在组织回答</p></div>
         </article>
       </div>
-      <footer class="composer"><el-input v-model="input" type="textarea" :rows="3" resize="none" maxlength="50000" placeholder="继续追问，Shift + Enter 换行" :disabled="generating" @keydown.enter.exact.prevent="send" /><div><el-button v-if="generating" type="danger" plain @click="stop">停止生成</el-button><el-button v-else type="primary" :disabled="!input.trim()" @click="send">发送问题</el-button></div></footer>
-    </main>
+
+      <footer class="agent-chat__composer">
+        <div class="agent-chat__prompts" aria-label="快捷提问"><button v-for="item in quickPrompts" :key="item.mode" type="button" class="agent-chat__prompt" :disabled="generating" @click="applyPrompt(item.text)">{{ item.label }}</button></div>
+        <div class="agent-chat__field">
+          <el-input v-model="input" type="textarea" :rows="3" resize="none" maxlength="50000" placeholder="继续追问，Shift + Enter 换行" :disabled="generating" @keydown.enter.exact.prevent="send" />
+          <div class="agent-chat__actions"><el-button v-if="generating" type="danger" plain @click="stop">停止生成</el-button><el-button v-else type="primary" :disabled="!input.trim()" @click="send">发送问题</el-button></div>
+        </div>
+      </footer>
+    </div>
 
     <el-dialog v-model="saveDialogVisible" title="保存到面试准备" width="440px">
       <el-form label-position="top">
@@ -319,6 +378,112 @@ onBeforeUnmount(() => { controller?.abort(); if (scrollFrame !== null) cancelAni
 </template>
 
 <style scoped>
-.agent-page{width:min(1480px,100%);margin:0 auto}.agent-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:14px}.agent-heading>div:first-child>span,.session-strip label>span{font:600 11px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.12em;color:#7288a8}.agent-heading h1{margin:7px 0 5px;color:#26364f;font-family:"Songti SC","STSong",serif;font-size:31px;letter-spacing:.02em}.agent-heading p{margin:0;color:#748195;font-size:13px}.agent-status{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid rgba(130,151,179,.25);border-radius:999px;background:rgba(255,255,255,.45);color:#67788d;font-size:12px}.agent-status i{width:7px;height:7px;border-radius:50%;background:#87a696}.agent-status i.active{animation:pulse 1.2s ease-in-out infinite}.session-strip{display:flex;align-items:end;gap:9px;padding:10px 14px;border:1px solid rgba(126,146,174,.2);border-bottom:0;border-radius:16px 16px 0 0;background:rgba(249,251,253,.65)}.session-strip label{display:grid;flex:1;max-width:520px;gap:6px}.session-strip button{height:32px;padding:0 11px;border:1px solid rgba(126,146,174,.25);border-radius:8px;background:transparent;color:#52677f;font-size:12px;cursor:pointer}.session-strip button:disabled{cursor:not-allowed;opacity:.45}.session-strip .danger-link{border-color:transparent;color:#a56666}.context-docket{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) minmax(260px,1.1fr);gap:12px;padding:15px;border:1px solid rgba(126,146,174,.22);border-radius:0 0 10px 10px;background:linear-gradient(135deg,rgba(250,252,255,.82),rgba(239,245,242,.78));box-shadow:0 12px 30px rgba(73,91,118,.07)}.context-docket label{display:grid;gap:7px}.context-docket label>span,.context-summary small{font:600 11px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.08em;color:#74869e}.context-summary{display:grid;align-content:center;gap:4px;padding:4px 8px 4px 14px;border-left:1px solid rgba(116,137,164,.24)}.context-summary strong{overflow:hidden;color:#30445d;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.context-summary span{overflow:hidden;color:#718092;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.prompt-rack{display:flex;gap:8px;overflow-x:auto;padding:11px 2px}.prompt-rack button{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:8px 12px;border:1px solid rgba(124,142,166,.25);border-radius:9px;background:rgba(255,255,255,.4);color:#52677f;font-size:12px;cursor:pointer}.prompt-rack button:hover{border-color:#8fa2c0;background:#fff}.prompt-rack button span{color:#7c6f9d}.conversation-shell{overflow:hidden;border:1px solid rgba(126,146,174,.22);border-radius:8px 8px 20px 20px;background:rgba(252,253,254,.82);box-shadow:0 22px 52px rgba(62,80,106,.09)}.conversation-stream{height:clamp(460px,61vh,760px);overflow-y:auto;padding:28px clamp(18px,4vw,58px)}.conversation-empty{display:grid;justify-items:center;align-content:center;height:100%;text-align:center;color:#758296}.conversation-empty>span{display:grid;place-items:center;width:54px;height:54px;margin-bottom:13px;border-radius:18px;background:linear-gradient(145deg,#a7bce2,#7998cf);color:#fff;font-family:"Songti SC",serif;font-size:24px;box-shadow:0 12px 26px rgba(89,120,174,.22)}.conversation-empty h2{margin:0 0 7px;color:#394c65;font-size:17px}.conversation-empty p{margin:0;font-size:13px}.message{display:flex;max-width:900px;margin:0 auto 26px}.message--assistant{justify-content:flex-start}.message--user{justify-content:flex-end}.message-body{width:min(100%,900px);min-width:0;padding:15px 18px;border:1px solid rgba(130,148,173,.18);border-radius:5px 17px 17px;background:#fff;box-shadow:0 8px 20px rgba(56,73,98,.05)}.message--user .message-body{width:min(82%,760px);border-radius:17px 5px 17px 17px;background:#f0f5f1}.message--error .message-body{border-color:#dfb6b1}.message-body>header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#5f7086;font-size:12px}.message-actions{display:flex;gap:12px}.message-body>header button{border:0;background:transparent;color:#7c6f9d;font-size:12px;cursor:pointer}.message-body>header button:disabled{color:#8b9b91;cursor:default}.message-thinking{display:flex;align-items:center;gap:4px;margin:10px 0;color:#8290a1;font-size:12px}.message-thinking i{width:5px;height:5px;border-radius:50%;background:#8297b6;animation:dots 1s ease-in-out infinite}.message-thinking i:nth-child(2){animation-delay:.15s}.message-thinking i:nth-child(3){animation-delay:.3s}.composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:end;padding:16px 18px;border-top:1px solid rgba(126,146,174,.17);background:rgba(240,244,248,.78);backdrop-filter:blur(12px)}.composer>div:last-child{display:flex;align-items:center;gap:8px}.prompt-rack button:disabled{cursor:not-allowed;opacity:.5}@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(135,166,150,.14)}}@keyframes dots{50%{transform:translateY(-3px);opacity:.5}}@media(prefers-reduced-motion:reduce){.agent-status i.active,.message-thinking i{animation:none}}@media(max-width:820px){.agent-heading{align-items:flex-start;flex-direction:column}.session-strip{align-items:stretch;flex-wrap:wrap}.session-strip label{flex-basis:100%;max-width:none}.context-docket{grid-template-columns:1fr}.context-summary{padding:8px 0 0;border-top:1px solid rgba(116,137,164,.24);border-left:0}.conversation-stream{height:58vh;padding:20px 14px}.composer{grid-template-columns:1fr}.composer>div:last-child{justify-content:flex-end}.message--user .message-body{width:92%}}
-.agent-page{width:100%;max-width:none;margin:0}.conversation-stream{padding-inline:clamp(14px,2.5vw,44px)}.message{width:100%;max-width:none}.message--assistant .message-body{width:100%;max-width:none}
+/* ---- 页面骨架 ----------------------------------------------------------
+   高度必须写成确定的算式，不能用 height:100%。
+   原因：.workbench-main（el-main）是 flex-basis:auto 的列项，而外层 .workbench-shell
+   只有 min-height、没有确定高度。用百分比时"父级高度取决于内容、内容又取决于父级高度"
+   形成循环，浏览器按 auto 处理，页面就被消息撑到几千像素，输入框被顶出视口。
+   --agent-chrome 是页面上方固定占位的高度合计，实测：
+     20(外壳上内边距) + 60(顶栏) + 10(顶栏下外边距) + 20(外壳下内边距) + 40(主区内边距) = 150
+   顶栏是 60px 而非 h-14 的 56px——Element Plus 的 --el-header-height 赢了。
+   若顶栏高度或外壳内边距以后有改动，这里要跟着改。 */
+.agent-page{--agent-chrome:150px;display:flex;gap:var(--space-6);height:calc(100dvh - var(--agent-chrome));min-height:0;overflow:hidden;position:relative}
+.agent-page__scrim{display:none}
+
+/* ---- 左侧对话栏 ---- */
+.agent-rail.material-surface{padding:var(--space-4)}
+.agent-rail{display:flex;min-height:0;flex:none;flex-direction:column;gap:var(--space-4);width:260px;overflow:hidden;transition:width 180ms ease}
+.agent-rail--collapsed{width:56px;padding:var(--space-3) var(--space-2);gap:var(--space-2)}
+.agent-rail__head{display:flex;align-items:center;gap:var(--space-2)}
+.agent-rail--collapsed .agent-rail__head{flex-direction:column}
+/* 新建对话是描边按钮而非实心绿：本视图唯一的主按钮留给「发送问题」。 */
+.agent-rail__new{flex:1;min-height:40px;border:1px solid var(--workbench-border);border-radius:var(--radius-control);background:var(--workbench-control);color:var(--workbench-subtle);font-size:13px;font-weight:600;cursor:pointer;transition:border-color 180ms ease,color 180ms ease}
+.agent-rail__new:hover:not(:disabled){border-color:var(--workbench-blue);color:var(--workbench-blue-deep)}
+.agent-rail__new:disabled{cursor:not-allowed;opacity:.5}
+.agent-rail__icon,.agent-rail__toggle{display:grid;flex:none;place-items:center;width:32px;height:32px;padding:0;border:1px solid var(--workbench-border);border-radius:var(--radius-control);background:var(--workbench-control);color:var(--workbench-subtle);font-size:14px;cursor:pointer;transition:border-color 180ms ease,color 180ms ease}
+.agent-rail__toggle{background:transparent}
+.agent-rail__icon:hover:not(:disabled),.agent-rail__toggle:hover{border-color:var(--workbench-blue);color:var(--workbench-blue-deep)}
+.agent-rail__icon:disabled{cursor:not-allowed;opacity:.5}
+.agent-rail__field{display:grid;gap:var(--space-2)}
+.agent-rail__field>span{color:var(--workbench-subtle);font-size:13px;font-weight:600}
+.agent-rail__section{display:flex;align-items:center;justify-content:space-between;padding-top:var(--space-3);border-top:1px solid rgba(190,204,195,.7);color:var(--workbench-subtle);font-size:13px;font-weight:600}
+.agent-rail__section small{color:var(--workbench-slate);font-size:12px;font-weight:400}
+.agent-rail__history{display:grid;min-height:0;flex:1;align-content:start;gap:var(--space-1);overflow-y:auto}
+.agent-rail__history--rail{justify-items:center;gap:var(--space-2)}
+.agent-rail__item{display:grid;gap:var(--space-1);padding:var(--space-2) var(--space-3);border:1px solid transparent;border-radius:var(--radius-control);background:transparent;text-align:left;cursor:pointer;transition:background-color 180ms ease,border-color 180ms ease}
+.agent-rail__item strong{overflow:hidden;color:var(--workbench-ink);font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.agent-rail__item small{overflow:hidden;color:var(--workbench-slate);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.agent-rail__item:hover:not(:disabled){border-color:var(--workbench-border);background:rgba(255,255,255,.5)}
+/* 激活态只用边框+底色区分，沿用 .application-records__view-toggle 的既有做法。 */
+.agent-rail__item--active,.agent-rail__item--active:hover:not(:disabled){border-color:var(--workbench-blue);background:rgba(228,239,232,.78)}
+.agent-rail__item--active strong{color:#3e6853}
+.agent-rail__item:disabled{cursor:not-allowed;opacity:.5}
+.agent-rail__item--rail{display:grid;place-items:center;width:32px;height:32px;padding:0;font-size:12px;color:var(--workbench-subtle)}
+.agent-rail__empty{margin:0;padding:var(--space-4) 0;color:var(--workbench-slate);font-size:12px;line-height:1.6;text-align:center}
+.agent-rail__foot{display:grid;flex:none;gap:var(--space-2);margin-top:auto;padding-top:var(--space-3);border-top:1px solid rgba(190,204,195,.7)}
+.agent-rail__status{display:inline-flex;align-items:center;gap:var(--space-2);color:var(--workbench-slate);font-size:12px}
+.agent-rail__status i{width:8px;height:8px;flex:none;border-radius:999px;background:var(--workbench-green)}
+.agent-rail__status i.active{animation:agent-pulse 1.2s ease-in-out infinite}
+
+/* ---- 对话区 ---- */
+.agent-chat{display:flex;min-width:0;min-height:0;flex:1;flex-direction:column;overflow:hidden}
+/* 空态：内容整体垂直居中；发出第一条消息后 messages 非空，这两个类自动失效。 */
+.agent-chat--empty{justify-content:center}
+.agent-chat__rail-trigger{display:none}
+.agent-chat--empty .agent-chat__stream{flex:0 1 auto;padding:var(--space-6);border:1px solid rgba(255,255,255,.78);border-bottom:0;border-radius:var(--radius-surface) var(--radius-surface) 0 0;background:rgba(255,254,250,.7);backdrop-filter:blur(13px) saturate(108%)}
+.agent-chat--empty .agent-chat__composer{padding:var(--space-4) var(--space-6) var(--space-6);border:1px solid rgba(255,255,255,.78);border-top:0;border-radius:0 0 var(--radius-surface) var(--radius-surface);background:rgba(255,254,250,.7);backdrop-filter:blur(13px) saturate(108%)}
+/* min-height:0 不能省：flex 子项默认 min-height:auto 等于内容高，消息一长会把 composer 顶出屏幕。 */
+.agent-chat__stream{width:min(100%,800px);min-height:0;flex:1;margin-inline:auto;padding:var(--space-6) var(--space-4);overflow-y:auto}
+.agent-chat__empty{display:grid;justify-items:center;gap:var(--space-3);color:var(--workbench-slate);text-align:center}
+.agent-chat__mark{display:grid;place-items:center;width:48px;height:48px;border-radius:var(--radius-surface);background:linear-gradient(145deg,#a6bce6,#7898d0);color:#fff;font-family:"Noto Serif SC","Songti SC",serif;font-size:20px}
+.agent-chat__empty h2{margin:0;color:var(--workbench-ink);font-size:16px}
+.agent-chat__empty p{margin:0;font-size:13px}
+
+/* ---- 消息 ---- */
+.message{display:flex;margin-bottom:var(--space-6)}
+.message:last-child{margin-bottom:0}
+.message--user{justify-content:flex-end}
+.message-body{min-width:0;max-width:100%;padding:var(--space-3) var(--space-4);border:1px solid var(--workbench-border);border-radius:var(--radius-surface);background:var(--workbench-solid);box-shadow:0 10px 23px rgba(89,96,98,.07)}
+.message--user .message-body{max-width:82%;border-color:rgba(122,150,137,.32);background:rgba(228,239,232,.72)}
+.message--error .message-body{border-color:rgba(190,100,92,.5);background:rgba(248,230,229,.6)}
+.message-body>header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);margin-bottom:var(--space-1)}
+.message-body>header strong{color:var(--workbench-subtle);font-size:13px;font-weight:600}
+.message-actions{display:flex;gap:var(--space-3)}
+.message-actions button{border:0;background:transparent;color:var(--workbench-blue-deep);font-size:12px;cursor:pointer}
+.message-actions button:disabled{color:var(--workbench-slate);cursor:default}
+.message-thinking{display:flex;align-items:center;gap:var(--space-1);margin:var(--space-3) 0;color:var(--workbench-slate);font-size:12px}
+.message-thinking i{width:4px;height:4px;border-radius:999px;background:var(--workbench-blue);animation:agent-dots 1s ease-in-out infinite}
+.message-thinking i:nth-child(2){animation-delay:.15s}
+.message-thinking i:nth-child(3){animation-delay:.3s}
+
+/* ---- 输入区 ---- */
+.agent-chat__composer{display:grid;width:min(100%,800px);flex:none;gap:var(--space-3);margin-inline:auto;padding:var(--space-3) var(--space-4) var(--space-4);border-top:1px solid var(--workbench-border);background:rgba(247,249,247,.72);backdrop-filter:blur(12px)}
+.agent-chat__prompts{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+.agent-chat__prompt{display:inline-flex;align-items:center;min-height:32px;padding-inline:var(--space-3);border:1px solid var(--workbench-border);border-radius:var(--radius-control);background:var(--workbench-control);color:var(--workbench-subtle);font-size:13px;cursor:pointer;transition:border-color 180ms ease,color 180ms ease}
+.agent-chat__prompt:hover:not(:disabled){border-color:var(--workbench-blue);color:var(--workbench-blue-deep)}
+.agent-chat__prompt:disabled{cursor:not-allowed;opacity:.5}
+.agent-chat__field{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:var(--space-3)}
+.agent-chat__actions{display:flex;align-items:center;gap:var(--space-2)}
+
+@keyframes agent-pulse{50%{box-shadow:0 0 0 6px rgba(143,186,158,.16)}}
+@keyframes agent-dots{50%{transform:translateY(-3px);opacity:.5}}
+
+/* ---- 移动端：全局导航变横向滚动条、顶栏改为 static，页面高度不再固定 ----
+   此处放弃撑满高度，改用 sticky composer 保证输入框始终可达。 */
+@media(max-width:767px){
+  .agent-page{display:block;height:auto;min-height:0;overflow:visible}
+  /* overflow:hidden 会让 sticky 失效，必须放开 */
+  .agent-chat{overflow:visible}
+  .agent-chat__rail-trigger{display:inline-flex;align-items:center;min-height:32px;margin-bottom:var(--space-3);padding-inline:var(--space-3);border:1px solid var(--workbench-border);border-radius:var(--radius-control);background:var(--workbench-control);color:var(--workbench-subtle);font-size:13px;cursor:pointer}
+  .agent-chat__stream,.agent-chat__composer{width:100%}
+  .agent-chat__stream{padding:var(--space-4) 0}
+  .agent-chat__composer{position:sticky;bottom:0;padding:var(--space-3) 0 var(--space-4)}
+  .message--user .message-body{max-width:92%}
+  /* 遮罩只在侧栏真的打开时才出现，否则窄屏下会一直盖着一层灰挡住点击 */
+  .agent-page__scrim--visible{display:block;position:fixed;inset:0;z-index:15;background:rgba(61,70,75,.28)}
+  .agent-rail{display:none}
+  /* --ready 由 onMounted 挂上，用来挡住 hydration 之前那一帧：服务端渲染的侧栏在窄屏是覆盖层
+     形态，没有这道闸门的话手机首屏会先闪一下盖住整页的侧栏。 */
+  .agent-rail--ready:not(.agent-rail--collapsed){position:fixed;inset:0 auto 0 0;z-index:16;display:flex;width:min(260px,84vw);height:100dvh;padding:var(--space-4);border-radius:0 var(--radius-surface) var(--radius-surface) 0;background:rgba(255,254,251,.97)}
+}
 </style>
