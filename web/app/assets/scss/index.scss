@@ -256,8 +256,7 @@ select {
 .el-button { min-height: 32px; border-radius: var(--radius-control); font-weight: 600; transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease; }
 .el-button--large { min-height: 40px; }
 .el-button:focus-visible,
-.el-menu-item:focus-visible,
-.dashboard-resource:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 2px; }
+.el-menu-item:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 2px; }
 .el-button.el-button--primary { min-height: 40px; padding-inline: 16px; box-shadow: 0 6px 14px rgba(91, 117, 104, 0.16); }
 .el-button.el-button--primary:active { transform: translateY(1px); box-shadow: none; }
 
@@ -452,9 +451,10 @@ select {
 .dashboard-primary-action:hover { background: #668476; color: #fff; }
 .application-board__eyebrow { margin: 0 0 7px; color: #7e958b; font-size: 10px; font-weight: 700; letter-spacing: .11em; }
 
+/* 三张卡等宽。原来重点卡占 1.75 份、统计卡各 1 份；「最近推进」已删除。 */
 .dashboard-metrics {
   display: grid;
-  grid-template-columns: 1.75fr repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -488,23 +488,58 @@ select {
 .dashboard-stat i::after { display: block; width: 65%; height: 100%; border-radius: inherit; background: #79ad93; content: ''; }
 .dashboard-stat--amber i::after { width: 43%; background: #caa367; }.dashboard-stat--blue i::after { width: 72%; background: #88a3be; }
 
-.dashboard-work { display: grid; grid-template-columns: minmax(510px, 1.52fr) minmax(300px, .9fr); align-items: stretch; gap: 16px; }
-.dashboard-focus, .dashboard-track { min-height: 0; padding: 24px; }.dashboard-focus { box-shadow: 0 18px 32px rgba(89, 96, 98, .09), inset 0 1px rgba(255,255,255,.7); }
-.dashboard-section-title, .dashboard-table-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.dashboard-section-title h2, .dashboard-track h2, .dashboard-table-head h2 { margin: 0; color: #414a48; font-size: 18px; letter-spacing: -0.045em; }
-.dashboard-section-title span { color: #3e725a; font-size: 12px; }.dashboard-focus > p { margin: 7px 0 14px; color: var(--workbench-slate); font-size: 13px; }
-.dashboard-task { display: grid; width: 100%; grid-template-columns: 23px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 14px 0; border: 0; border-top: 1px solid rgba(221, 226, 223, .7); background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
-.dashboard-task:hover b, .dashboard-record:hover b { color: #5e7f70; }.dashboard-check { width: 18px; height: 18px; border: 1.5px solid #d1d8d4; border-radius: 50%; }.dashboard-task b { display: block; color: #414a48; font-size: 13px; }.dashboard-task small { display: block; margin-top: 3px; color: #97a89f; font-size: 11px; }.dashboard-task em { padding: 4px 7px; border-radius: 7px; background: rgba(226, 240, 231, .72); color: #6c927e; font-size: 10px; font-style: normal; }
-.dashboard-track { align-self: start; }.dashboard-track-list { margin-top: 10px; }.dashboard-record { display: block; width: 100%; padding: 14px 0; border: 0; border-bottom: 1px solid rgba(224,229,226,.68); background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }.dashboard-stage { color: #617d70; font-size: 11px; letter-spacing: .07em; }.dashboard-record b { display: block; margin-top: 5px; color: #414a48; font-size: 13px; }.dashboard-record p { margin: 4px 0 0; color: #72857d; font-size: 12px; }.dashboard-record footer { display: flex; justify-content: space-between; margin-top: 8px; color: #6b8177; font-size: 11px; }.dashboard-record footer em { padding: 4px 6px; border-radius: 6px; background: rgba(229,241,233,.73); color: #527a65; font-style: normal; }.dashboard-empty { color: #6c8177 !important; font-size: 13px !important; line-height: 1.7; }
+/* 今日重点 + 投递转化并排。左栏给今日重点（标题长、条目多），右栏漏斗只需要够放条形。 */
+/* 不写 align-items:start，让两栏等高：右栏底边会自动跟左栏的今日重点对齐。
+   今日重点的条目数会变（最多 8 条），写死图表高度对不齐，靠拉伸才稳。 */
+.dashboard-insight { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(330px, 1fr); gap: 16px; margin-top: 16px; }
+.dashboard-insight .dashboard-card { margin-top: 0; }
+/* 右栏纵向堆叠：漏斗在上（按内容高），每日投递在下并吃掉剩余高度 */
+.dashboard-insight__side { display: flex; min-width: 0; flex-direction: column; gap: 16px; }
 
-.dashboard-db-alert { margin-top: 20px; }.dashboard-opportunities { margin-top: 20px; padding: 24px; }.dashboard-table-head { padding-bottom: 12px; border-bottom: 1px solid rgba(221,228,224,.7); }.dashboard-table-head a { color: #3e725a; font-size: 13px; text-decoration: none; }.dashboard-opportunity-table { display: grid; grid-template-columns: 1.5fr .8fr 1.1fr .6fr; }.dashboard-table-row { display: contents; }.dashboard-table-row > * { padding: 14px 0; border-bottom: 1px solid rgba(226,231,228,.7); color: #4b5652; font-size: 13px; text-decoration: none; }.dashboard-table-row > strong { font-weight: 700; }.dashboard-table-row--head > * { color: #60766d; font-size: 12px; }.dashboard-table-empty { grid-column: 1 / -1; margin: 0; padding: 20px 0; }
+/* 每日投递柱状图：每根柱子自带浅色底槽，没投递的那天也会显示成空格子 */
+.dashboard-daily { display: flex; flex: 1; flex-direction: column; padding: 24px; }
+.dashboard-daily__lead { margin: 7px 0 18px; color: var(--workbench-slate); font-size: 13px; }
+/* flex:1 + min-height：柱子高度跟着卡片剩余空间走，卡片被拉伸时图也会变高 */
+.dashboard-daily__chart { display: flex; flex: 1; align-items: flex-end; gap: var(--space-1); min-height: 84px; }
+.dashboard-daily__col { display: flex; min-width: 0; flex: 1; align-items: flex-end; height: 100%; overflow: hidden; border-radius: 2px; background: rgba(224, 233, 225, .55); }
+.dashboard-daily__col i { display: block; width: 100%; border-radius: inherit; background: linear-gradient(180deg, var(--workbench-blue), var(--workbench-green)); }
+.dashboard-daily__axis { display: flex; justify-content: space-between; margin-top: var(--space-2); color: #84928c; font-size: 12px; font-variant-numeric: tabular-nums; }
+.dashboard-focus { min-height: 0; padding: 24px; box-shadow: 0 18px 32px rgba(89, 96, 98, .09), inset 0 1px rgba(255,255,255,.7); }
+.dashboard-section-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dashboard-section-title h2 { margin: 0; color: #414a48; font-size: 18px; letter-spacing: -0.045em; }
+.dashboard-section-title span, .dashboard-focus__more { color: #3e725a; font-size: 12px; }.dashboard-focus__more { text-decoration: none; }.dashboard-focus__more:hover { color: #365f48; text-decoration: underline; }.dashboard-focus > p { margin: 7px 0 14px; color: var(--workbench-slate); font-size: 13px; }
+.dashboard-task { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 14px 0; border: 0; border-top: 1px solid rgba(221, 226, 223, .7); background: transparent; color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.dashboard-task:hover b { color: #5e7f70; }.dashboard-task b { display: block; overflow: hidden; color: #414a48; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.dashboard-task small { display: block; margin-top: 3px; color: #7d8b84; font-size: 12px; }.dashboard-task em { padding: 4px 7px; border-radius: 7px; background: rgba(226, 240, 231, .72); color: #6c927e; font-size: 12px; font-style: normal; white-space: nowrap; }
+.dashboard-empty { color: #6c8177 !important; font-size: 13px !important; line-height: 1.7; }
 
-.dashboard-resources { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }.dashboard-resource { min-height: 148px; padding: 20px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--radius-surface); background: rgba(255,254,250,.5); box-shadow: 0 7px 16px rgba(89,96,98,.04), inset 0 1px rgba(255,255,255,.7); color: inherit; text-decoration: none; transition: transform 180ms ease, background-color 180ms ease, box-shadow 180ms ease; }.dashboard-resource:hover { background: rgba(255,254,250,.78); box-shadow: 0 12px 24px rgba(89,96,98,.08); transform: translateY(-2px); }.dashboard-resource i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(225,234,247,.68); color: #6d82a1; font-style: normal; }.dashboard-resource h2 { margin: 12px 0 4px; color: #414a48; font-size: 16px; }.dashboard-resource p { margin: 0; color: var(--workbench-slate); font-size: 13px; }.dashboard-resource footer { display: flex; justify-content: space-between; margin-top: 18px; color: #62746c; font-size: 12px; }.dashboard-resource--planned { opacity: .78; }
+.dashboard-db-alert { margin-top: 20px; }
 
 .application-board__heading { margin-bottom: 16px; }.application-board__heading h1 { font-size: 38px; }.application-board__create { min-height: 40px; font-size: 13px; }.application-records { margin-top: 0; padding: 20px; }.application-records__header { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding-bottom: 13px; border-bottom: 1px solid rgba(221,228,224,.6); }.application-records__header h2 { margin: 4px 0 0; color: #414a48; font-size: 18px; letter-spacing: -.045em; }.application-records__toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid rgba(221,228,224,.6); }.application-records__toolbar .el-input__wrapper, .application-records__toolbar .el-select__wrapper { min-height: 32px; }.application-records__toolbar .el-button { min-height: 32px; padding-inline: 11px; }.application-records__reset { border-color: rgba(115, 137, 128, .4); background: rgba(247,250,248,.72); color: #536d61; }.application-records__reset:hover { border-color: #7a9689; background: rgba(228,239,232,.78); color: #456354; }.application-records__view-toggle .el-button { border-color: rgba(115, 137, 128, .28); background: rgba(255,255,255,.42); color: #64736d; box-shadow: none; }.application-records__view-toggle .el-button.is-active { border-color: #7a9689; background: #e4efe7; color: #3e6853; }.application-records__count { margin: 0; color: #879a91; font-size: 12px; }.application-kanban-card { transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease; }.application-kanban-card:hover { border-color: #8caf9c !important; background: rgba(246,251,247,.9) !important; box-shadow: 0 9px 18px rgba(83, 112, 95, .1) !important; }.workbench-table-shell { border-color: rgba(255,255,255,.64); border-radius: 14px; background: rgba(255,254,250,.34); box-shadow: none; }.workbench-table-shell .el-table { --el-table-header-bg-color: transparent; --el-table-tr-bg-color: transparent; --el-table-row-hover-bg-color: rgba(255,255,255,.34); --el-table-border-color: rgba(226,231,228,.64); --el-table-text-color: #4b5652; --el-table-header-text-color: #879a91; }.workbench-table-shell .el-table__cell { padding: 12px 0; }.workbench-table-shell .el-table__header-wrapper th.el-table__cell { font-size: 11px; font-weight: 500; }.workbench-table-shell .el-table__body tr { cursor: pointer; }.application-cell-company { color: #414a48; font-size: 13px; font-weight: 700; }.application-cell-next { color: #5e6964; font-size: 12px; }.application-cell-channel, .application-cell-meta { color: #74847d; font-size: 12px; }.application-status { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: 6px; font-size: 11px; line-height: 1; white-space: nowrap; }.application-status--neutral { background: rgba(232, 235, 234, .72); color: #73807d; }.application-status--amber { background: rgba(248, 238, 222, .82); color: #a88a61; }.application-status--blue { background: rgba(229, 237, 248, .82); color: #7087a7; }.application-status--violet { background: rgba(237, 231, 247, .86); color: #8874a7; }.application-status--green { background: rgba(226, 240, 231, .82); color: #5f9179; }.application-status--success { background: rgba(220, 240, 224, .9); color: #4f8a62; }.application-status--danger { background: rgba(248, 230, 229, .86); color: #ad6f6b; }
 
+/* 投递转化漏斗：条形宽度直接编码数量。宽度和数字由页面里的 0→1 进度驱动，
+   属于设计规范允许的"辅助理解"型动效，不做缩放放大。 */
+.dashboard-funnel { padding: 24px; }
+.dashboard-funnel__lead { margin: 7px 0 18px; color: var(--workbench-slate); font-size: 13px; }
+.dashboard-funnel__rows { display: grid; gap: var(--space-3); }
+.dashboard-funnel__row { display: grid; grid-template-columns: 88px minmax(0, 1fr) 48px 52px; align-items: center; gap: var(--space-3); }
+.dashboard-funnel__label { color: var(--workbench-subtle); font-size: 13px; }
+.dashboard-funnel__track { overflow: hidden; height: var(--space-3); border-radius: 999px; background: rgba(224, 233, 225, .62); }
+.dashboard-funnel__bar { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--workbench-green), var(--workbench-blue)); }
+.dashboard-funnel__count { color: var(--workbench-ink); font-size: 16px; font-variant-numeric: tabular-nums; font-weight: 700; text-align: right; }
+.dashboard-funnel__rate { color: #84928c; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+
 .dashboard-detail-dialog { --el-dialog-bg-color: rgba(255, 254, 250, .94); border: 1px solid rgba(255,255,255,.82); border-radius: 20px; box-shadow: 0 20px 45px rgba(89,96,98,.16); backdrop-filter: blur(20px); }
-.dashboard-detail-dialog .el-dialog__header { margin-right: 0; padding: 20px 22px 0; }.dashboard-detail-dialog .el-dialog__body { padding: 18px 22px; }.dashboard-detail-dialog .el-dialog__footer { padding: 0 22px 20px; }.dashboard-dialog-title { margin: 0; color: #414a48; font-size: 18px; }.dashboard-dialog-body { min-height: 180px; }.dashboard-dialog-job { padding-bottom: 16px; border-bottom: 1px solid rgba(221,228,224,.7); }.dashboard-dialog-job span { color: #6e927d; font-size: 12px; }.dashboard-dialog-job h3 { margin: 7px 0 3px; color: #414a48; font-size: 20px; }.dashboard-dialog-job p { margin: 0; color: #7d9188; font-size: 13px; }.dashboard-dialog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 18px 0; }.dashboard-dialog-grid div { min-width: 0; }.dashboard-dialog-grid dt { color: #8a9b93; font-size: 11px; }.dashboard-dialog-grid dd { margin: 5px 0 0; color: #48534f; font-size: 13px; }.dashboard-dialog-notes { margin: 0; padding: 12px; border-radius: 10px; background: rgba(235,242,237,.58); color: #61756b; font-size: 12px; line-height: 1.7; }.dashboard-dialog-link { display: inline-flex; min-height: 36px; align-items: center; padding: 0 12px; border-radius: 9px; background: #7a9689; color: #fff; font-size: 12px; text-decoration: none; }
+.dashboard-detail-dialog .el-dialog__header { margin-right: 0; padding: 20px 22px 0; }.dashboard-detail-dialog .el-dialog__body { padding: 18px 22px; }.dashboard-detail-dialog .el-dialog__footer { padding: 0 22px 20px; }.dashboard-dialog-title { margin: 0; color: #414a48; font-size: 18px; }
+/* Element Plus 的 .el-select 默认 width:100%，同优先级下会压过单类选择器，所以这里加一层限定 */
+.dashboard-detail-dialog .dashboard-dialog-status { flex: none; width: 118px; }
+/* 头部左侧是公司名 + 岗位名。原来靠 space-between 分配空间，加了右侧下拉框后会被挤成竖排，
+   这里用 flex:1 让它确定性地占满剩余宽度。
+   注意必须用类名而不是 `> div`：el-select 的根元素也是 div，用标签选择器会连它一起命中。 */
+.dashboard-detail-dialog .dashboard-dialog-heading { flex: 1; min-width: 0; }
+.dashboard-detail-dialog .job-detail__header h2 { overflow-wrap: anywhere; }
+/* .job-detail__header span 会把选择器内部的 span 也刷成 12px 灰字，这里改回来 */
+.dashboard-dialog-status :is(.el-select__placeholder, .el-select__selected-item) { color: var(--workbench-ink); font-size: 13px; }/* JD 可能很长，给它一个高度上限自己滚，别把弹窗撑出视口 */
+.dashboard-dialog-body { min-height: 180px; max-height: min(68vh, 720px); overflow-y: auto; }.dashboard-dialog-notes { margin: 0; padding: 12px; border-radius: 10px; background: rgba(235,242,237,.58); color: #61756b; font-size: 12px; line-height: 1.7; }.dashboard-dialog-link { display: inline-flex; min-height: 36px; align-items: center; padding: 0 12px; border-radius: 9px; background: #7a9689; color: #fff; font-size: 12px; text-decoration: none; }
 
 /* Shared material page primitives. */
 .material-page { padding: 20px 3px 56px; }
@@ -647,15 +682,13 @@ select {
 .application-cell-role { display: grid; gap: 3px; }.application-cell-role strong { color: #414a48; font-size: 13px; font-weight: 700; }.application-cell-role span { color: #596863; font-size: 12px; font-weight: 400; }.application-cell-apply { color: #547864; font-size: 12px; font-weight: 600; text-decoration: none; }.application-cell-apply:hover, .application-cell-apply:focus-visible { color: #365f48; text-decoration: underline; }.application-cell-apply:focus-visible { border-radius: 3px; outline: 2px solid rgba(84, 120, 100, .35); outline-offset: 3px; }.application-cell-empty { color: #9aa39f; }
 
 /* Dashboard: preserve card rhythm when the fixed sidebar narrows the content rail. */
-@media (max-width: 1280px) {
-  .dashboard-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .dashboard-hero { grid-column: 1 / -1; min-height: 138px; }
-  .dashboard-work { grid-template-columns: minmax(0, 1fr) minmax(280px, .82fr); }
-}
+/* 原本这里有一条「≤1280px 时重点卡整行」的规则（来自 F-016/F-017 的首页三档布局），
+   效果是窗口一窄重点卡就横铺整行、另两张被挤到下一行。已按需求移除：
+   概览区始终是 grid 三列一行，只在 900px 以下才改单列。 */
 
+/* 两栏并排放不下时改单列，间距由 grid 的 gap 接管 */
 @media (max-width: 1120px) {
-  .dashboard-work { grid-template-columns: 1fr; }
-  .dashboard-track { min-height: auto; }
+  .dashboard-insight { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 900px) {
@@ -707,7 +740,10 @@ select {
   .profile-form-note { margin-left: 0; }
 
   .application-overview { grid-template-columns: 1fr 1fr; }
-  .dashboard-work { grid-template-columns: 1fr; }
+  /* 窄屏下标签列收窄，把宽度让给条形和数字 */
+  .dashboard-funnel { padding: 16px; }
+  .dashboard-funnel__row { grid-template-columns: 72px minmax(0, 1fr) 40px; }
+  .dashboard-funnel__rate { display: none; }
   .application-workbench__heading { align-items: flex-start; flex-direction: column; gap: 16px; }
   .application-overview__hero { grid-column: span 2; }
   .application-focus-grid { grid-template-columns: 1fr; }
