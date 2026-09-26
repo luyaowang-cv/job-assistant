@@ -74,3 +74,4 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 - **简历 PDF 导出**：服务器未装 Chrome，需设 `RESUME_CHROMIUM_PATH` 指向浏览器。
 - **飞书同步/登录**：OAuth 回调需改成线上域名 `https://offerscoming.cn/api/v1/integrations/feishu/callback`。
 - **浏览器插件**：连 `https://offerscoming.cn`（`extension/wxt.config.ts` 与 `popup/main.ts`）；打包用 `pnpm zip`。
+  - **改插件不需要部署。** 开发者模式加载的是 `extension/.output/chrome-mv3`，`pnpm build` 重写该目录后 Chrome 会自动重载扩展。只有改 `web/` 的服务端代码（含 `/api/v1/**` 接口）才需要走上面的 pull + `up -d`。判断依据很简单：改动落在 `extension/` 还是 `web/`。
