@@ -34,6 +34,7 @@
     "test:resume-a4": "tsx --test server/services/resume-a4.test.ts server/schemas/resume-variant-suggestion.test.ts",
     "test:ai-workflows": "tsx --test server/services/openai-compatible-json.test.ts",
     "test:career-agent": "tsx --test server/services/career-agent-stream.test.ts",
+    "test:open-question": "tsx --test server/schemas/open-question.test.ts",
     "test:interview-prep": "tsx --test server/schemas/interview-prep.test.ts server/services/interview-prep-markdown.test.ts server/services/interview-prep-provider.test.ts",
     "test:interview-record": "tsx --test server/schemas/interview-record.test.ts server/services/interview-record-markdown.test.ts server/services/interview-record-provider.test.ts server/services/interview-record-result.test.ts",
     "db:generate": "prisma generate",
