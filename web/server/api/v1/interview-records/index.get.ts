@@ -9,6 +9,5 @@ export default defineEventHandler(async (event) => {
   if (!query.success) return validationError(event, query.error.issues)
   const { id, applicationId } = query.data
   if (id) return apiSuccess(event, await getInterviewRecord(id))
-  if (applicationId) return apiSuccess(event, await listInterviewRecords(applicationId))
-  return apiSuccess(event, null)
+  return apiSuccess(event, await listInterviewRecords(applicationId))
 })

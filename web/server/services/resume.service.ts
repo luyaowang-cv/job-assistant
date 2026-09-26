@@ -2,11 +2,11 @@ import { DocumentMutationType, Prisma, ResumeVersionType } from '../generated/pr
 import { prisma } from '../lib/prisma'
 import type { CreateBaseResumeInput, SaveResumeVersionInput } from '../schemas/resume'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { getAiProviderSetting } from './ai-provider-setting.service'
 
 export async function getResume() {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.resume.findUnique({
     where: { userId: user.id },
     include: { versions: { include: { application: { include: { job: { include: { company: true } } } } }, orderBy: { createdAt: 'desc' } } },
@@ -14,7 +14,7 @@ export async function getResume() {
 }
 
 export async function createBaseResume(input: CreateBaseResumeInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const existing = await prisma.resume.findUnique({ where: { userId: user.id } })
   if (existing) return null
 
@@ -22,14 +22,14 @@ export async function createBaseResume(input: CreateBaseResumeInput) {
     data: {
       userId: user.id,
       name: input.name,
-      versions: { create: { type: ResumeVersionType.BASE, content: input.content, provider: 'MANUAL', model: 'manual-base-v1' } },
+      versions: { create: { name: input.name, type: ResumeVersionType.BASE, content: input.content, provider: 'MANUAL', model: 'manual-base-v1' } },
     },
     include: { versions: true },
   })
 }
 
 export async function replaceBaseResume(input: CreateBaseResumeInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const resume = await prisma.resume.findUnique({
     where: { userId: user.id },
     include: { versions: { where: { type: ResumeVersionType.BASE }, take: 1 } },
@@ -41,13 +41,13 @@ export async function replaceBaseResume(input: CreateBaseResumeInput) {
     await transaction.resume.update({ where: { id: resume.id }, data: { name: input.name } })
     return transaction.resumeVersion.update({
       where: { id: baseVersion.id },
-      data: { content: input.content, aiDraft: null, changeSummary: Prisma.JsonNull, wasEdited: false, provider: 'MANUAL', model: 'manual-base-v1' },
+      data: { name: input.name, content: input.content, aiDraft: null, changeSummary: Prisma.JsonNull, wasEdited: false, provider: 'MANUAL', model: 'manual-base-v1' },
     })
   })
 }
 
 export async function getResumeOptimizationContext(applicationId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const resume = await getResume()
   if (!resume) return { resume: null, application: null }
   const baseVersion = resume.versions.find(version => version.type === ResumeVersionType.BASE)
@@ -59,7 +59,7 @@ export async function getResumeOptimizationContext(applicationId: string) {
 }
 
 export async function createTargetedResumeVersion(input: SaveResumeVersionInput) {
-  const [user, identity] = await Promise.all([getLocalUser(), getAiProviderSetting()])
+  const [user, identity] = await Promise.all([getCurrentUser(), getAiProviderSetting()])
   const resume = await prisma.resume.findUnique({ where: { userId: user.id } })
   if (!resume) return null
 
@@ -72,6 +72,7 @@ export async function createTargetedResumeVersion(input: SaveResumeVersionInput)
     data: {
       resumeId: resume.id,
       applicationId: input.applicationId ?? null,
+      name: input.name,
       type: ResumeVersionType.TARGETED,
       aiDraft: input.aiDraft,
       content: input.content,
@@ -86,7 +87,7 @@ export async function createTargetedResumeVersion(input: SaveResumeVersionInput)
 const json = (value: unknown) => value as Prisma.InputJsonValue
 
 export async function deleteResumeVersion(resumeId: string, versionId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const version = await prisma.resumeVersion.findFirst({
     where: { id: versionId, resumeId, resume: { userId: user.id }, type: ResumeVersionType.TARGETED },
     select: { id: true },

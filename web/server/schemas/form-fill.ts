@@ -2,6 +2,8 @@ import { z } from 'zod'
 
 const text = (max: number) => z.string().trim().max(max).optional()
 const fieldId = z.string().trim().min(1).max(120)
+const formOptions = z.array(z.string().trim().max(500)).max(1_000).default([])
+  .transform(options => options.filter(Boolean))
 
 // The user explicitly chooses Fill in this local single-user product, so the
 // complete saved candidate profile may be sent to their configured AI provider.
@@ -10,25 +12,30 @@ const excludedFieldLabel = /(?:密码|口令|验证码|校验码|动态码|短�
 
 export const formFillFieldSchema = z.object({
   id: fieldId,
-  label: text(180),
-  context: text(240),
-  name: text(160),
-  placeholder: text(180),
+  label: text(500),
+  context: text(1_000),
+  name: text(500),
+  placeholder: text(500),
   inputType: text(40),
   controlType: z.enum(['input', 'textarea', 'select', 'radio-group', 'custom-select']),
-  options: z.array(z.string().trim().min(1).max(160)).max(80).default([]),
+  options: formOptions,
   multiple: z.boolean().default(false),
-}).strict().superRefine((field, ctx) => {
-  const identity = [field.label, field.context, field.name, field.placeholder].filter(Boolean).join(' | ')
-  if (excludedFieldLabel.test(identity) || ['password', 'file', 'checkbox'].includes(field.inputType ?? '')) {
-    ctx.addIssue({ code: 'custom', message: 'Field is excluded from AI form filling.' })
-  }
-  if (field.multiple) ctx.addIssue({ code: 'custom', message: 'Multiple-select fields are excluded from AI form filling.' })
-})
+}).strict()
+
+export type FormFillField = z.infer<typeof formFillFieldSchema>
+
+export function isAiFillEligibleField(field: FormFillField) {
+  // Context contains neighbouring labels and may mention a consent field next
+  // to an ordinary input. Only the field's own identity controls exclusion.
+  const identity = [field.label, field.name, field.placeholder].filter(Boolean).join(' | ')
+  return !excludedFieldLabel.test(identity)
+    && !['password', 'file', 'checkbox'].includes(field.inputType ?? '')
+    && !field.multiple
+}
 
 export const formFillPreviewSchema = z.object({
   profileId: z.string().trim().min(1).max(64),
-  fields: z.array(formFillFieldSchema).min(1).max(100),
+  fields: z.array(formFillFieldSchema).min(1).max(500),
 }).strict()
 
 const modelFillSchema = z.object({
@@ -37,8 +44,8 @@ const modelFillSchema = z.object({
 }).strict()
 
 export const modelFormFillResponseSchema = z.object({
-  fills: z.array(modelFillSchema).max(100).default([]),
-  unresolvedIds: z.array(fieldId).max(100).default([]),
+  fills: z.array(modelFillSchema).max(250).default([]),
+  unresolvedIds: z.array(fieldId).max(250).default([]),
 }).strict()
 
 export type FormFillPreviewInput = z.infer<typeof formFillPreviewSchema>

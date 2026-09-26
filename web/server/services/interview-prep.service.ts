@@ -8,7 +8,7 @@ import {
   type InterviewReflectionConfirmInput,
   type InterviewPrepSection,
 } from '../schemas/interview-prep'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { interviewPrepProvider } from './interview-prep-provider'
 import { buildInterviewPrepMarkdown, type InterviewReflectionEntry } from './interview-prep-markdown'
 import { getAiProviderSetting } from './ai-provider-setting.service'
@@ -26,10 +26,7 @@ function today(): string {
 }
 
 function versionLabel(version: VersionWithApplication): string {
-  const typeLabel = version.type === 'BASE' ? '基础版' : '定制版'
-  const job = version.application?.job
-  if (job) return `${typeLabel}（${job.company?.name ?? ''}-${job.title ?? ''}）`
-  return typeLabel
+  return version.name
 }
 
 function asReflection(value: Prisma.JsonValue | null | undefined): InterviewReflectionEntry[] {
@@ -43,7 +40,7 @@ function asSections(value: Prisma.JsonValue | null | undefined): InterviewPrepSe
 }
 
 async function requireVersion(resumeVersionId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const version = await prisma.resumeVersion.findFirst({
     where: { id: resumeVersionId, resume: { userId: user.id } },
     include: { application: { include: { job: { include: { company: true } } } } },
@@ -52,7 +49,7 @@ async function requireVersion(resumeVersionId: string) {
 }
 
 export async function getInterviewPrep(resumeVersionId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const version = await prisma.resumeVersion.findFirst({
     where: { id: resumeVersionId, resume: { userId: user.id } },
     select: { id: true },
@@ -157,7 +154,7 @@ export async function confirmInterviewReflection(input: InterviewReflectionConfi
 }
 
 export async function exportInterviewPrepMarkdown(id: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const doc = await prisma.interviewPrepDocument.findFirst({
     where: { id, userId: user.id },
     include: { resumeVersion: { include: { resume: true, application: { include: { job: { include: { company: true } } } } } } },

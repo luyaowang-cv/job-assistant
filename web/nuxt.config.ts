@@ -59,6 +59,18 @@ export default defineNuxtConfig({
   compatibilityDate: '2024-08-14',
 
   nitro: {
+    // 按 CPU 核心数起多个 worker 进程。Node 执行 JS 只用一条线程，默认的
+    // node-server 预设只跑一个进程，2 核机器实际只用 1 核——页面渲染是计算
+    // 密集型（SSR），多个用户同时打开页面时会排队。node-cluster 把闲置的核
+    // 用起来，并发渲染数随核数线性提升。
+    // worker 数量默认取 os.cpus().length，可用 NITRO_CLUSTER_WORKERS 覆盖。
+    // 注意：每个 worker 是独立进程，Nitro 插件会在每个 worker 里各执行一次，
+    // 涉及定时任务/单例初始化时需要在插件里自己做去重（见 plugins/feishu-auto-sync.ts）。
+    preset: 'node-cluster',
+    experimental: {
+      // 让 useEvent() 基于 AsyncLocalStorage，保证并发请求下"当前用户"不串。
+      asyncContext: true,
+    },
     externals: {
       external: ['playwright-core', 'xlsx'],
     },
@@ -69,7 +81,6 @@ export default defineNuxtConfig({
     },
     prerender: {
       crawlLinks: false,
-      routes: ['/'],
       ignore: ['/hi'],
     },
   },

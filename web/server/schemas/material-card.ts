@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const materialCardTypeSchema = z.enum([
-  'PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'SKILL', 'SELF_EVALUATION', 'CUSTOM_ANSWER',
+  'PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE', 'SKILL', 'SELF_EVALUATION', 'CUSTOM_ANSWER',
 ])
 
 const tagsSchema = z.array(z.string().trim().min(1).max(40)).max(20).default([])
@@ -34,16 +34,26 @@ export const materialVariantInputSchema = z.object({
   content: z.string().trim().min(1).max(20_000),
 }).strict()
 
+export const saveMaterialVariantSchema = materialVariantInputSchema.extend({
+  overwrite: z.boolean().default(false),
+}).strict()
+
+const materialTitleSchema = z.string().trim().max(160)
+
 export const createMaterialCardSchema = z.object({
   type: materialCardTypeSchema,
-  title: z.string().trim().min(1).max(160),
+  title: materialTitleSchema,
   tags: tagsSchema,
   facts: factsSchema,
   variant: materialVariantInputSchema,
-}).strict()
+}).strict().superRefine((value, context) => {
+  if (value.type !== 'SELF_EVALUATION' && !value.title) {
+    context.addIssue({ code: 'custom', path: ['title'], message: 'Title is required for this material type.' })
+  }
+})
 
 export const updateMaterialCardSchema = z.object({
-  title: z.string().trim().min(1).max(160).optional(),
+  title: materialTitleSchema.optional(),
   tags: tagsSchema.optional(),
   facts: factsSchema.optional(),
 }).strict().refine(value => Object.keys(value).length > 0, 'At least one field is required.')
@@ -63,3 +73,4 @@ export const materialCardListQuerySchema = z.object({
 export type CreateMaterialCardInput = z.infer<typeof createMaterialCardSchema>
 export type UpdateMaterialCardInput = z.infer<typeof updateMaterialCardSchema>
 export type MaterialCardListQuery = z.infer<typeof materialCardListQuerySchema>
+export type SaveMaterialVariantInput = z.infer<typeof saveMaterialVariantSchema>

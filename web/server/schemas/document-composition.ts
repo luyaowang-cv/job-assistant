@@ -6,6 +6,17 @@ export const renderRulesSchema = z.object({
   hideTechnicalDetails: z.boolean().default(false),
 }).strict().default({ compact: false, hideTechnicalDetails: false })
 
+export const resumeLayoutConfigSchema = z.object({
+  verticalMarginMm: z.number().min(6).max(16).default(8),
+  paragraphGapMm: z.number().min(0).max(1.5).default(0.4),
+  sectionGapMm: z.number().min(1).max(6).default(2.4),
+}).strict()
+
+const documentConfigSchema = z.object({
+  templateId: z.string().trim().min(1).max(80).optional(),
+  layout: resumeLayoutConfigSchema.optional(),
+}).catchall(z.unknown()).default({})
+
 export const documentReferenceInputSchema = z.object({
   cardId: z.string().trim().min(1).max(64),
   variantId: z.string().trim().min(1).max(64),
@@ -18,7 +29,7 @@ export const documentReferenceInputSchema = z.object({
 
 export const compositionInputSchema = z.object({
   fieldVisibility: fieldVisibilitySchema,
-  config: z.record(z.string().max(80), z.unknown()).default({}),
+  config: documentConfigSchema,
   references: z.array(documentReferenceInputSchema).max(100).default([]),
 }).strict().superRefine((value, context) => {
   const keys = new Set<string>()
@@ -31,7 +42,7 @@ export const compositionInputSchema = z.object({
 
 export const createComposedResumeVersionSchema = z.object({
   composition: compositionInputSchema,
-  name: z.string().trim().min(1).max(80).optional(),
+  name: z.string().trim().min(1).max(80),
 }).strict()
 
 export const profileFieldSchema = z.object({

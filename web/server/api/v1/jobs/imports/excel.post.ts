@@ -1,11 +1,13 @@
 import { defineEventHandler, readMultipartFormData } from 'h3'
 
 import { importExcelJobs, JobLibraryImportError } from '../../../../services/job-library.service'
+import { isCurrentUserAdmin } from '../../../../services/current-user'
 import { apiError, apiSuccess } from '../../../../utils/api-response'
 
 const MAX_EXCEL_BYTES = 10 * 1024 * 1024
 
 export default defineEventHandler(async (event) => {
+  if (!(await isCurrentUserAdmin())) return apiError(event, 403, 'FORBIDDEN', '需要管理员权限。')
   const parts = await readMultipartFormData(event)
   const file = parts?.find(part => part.name === 'file' && part.filename)
   if (!file?.data) return apiError(event, 400, 'EXCEL_REQUIRED', '请选择要上传的 Excel 文件。')

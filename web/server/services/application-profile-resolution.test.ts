@@ -23,3 +23,24 @@ test('accepts a strategy-only application profile without legacy content', () =>
   assert.equal(result.success, true)
   if (result.success) assert.deepEqual(result.data.strategy.targetLocations, ['北京'])
 })
+
+test('accepts natural-language or exact availability and normalizes empty values', () => {
+  const immediate = applicationProfileSchema.safeParse({
+    name: '前端开发-大厂版',
+    targetTags: ['前端开发'],
+    strategy: { targetLocations: ['北京'], expectedSalary: '面议', availableDate: '可立即到岗', recruitmentSource: '', referralCode: '' },
+    resumeVersionId: null,
+  })
+  assert.equal(immediate.success, true)
+  if (immediate.success) assert.equal(immediate.data.strategy.availableDate, '可立即到岗')
+
+  const exactDate = applicationProfileSchema.safeParse({ name: '日期版', strategy: { targetLocations: [], availableDate: '2026-09-01' } })
+  assert.equal(exactDate.success, true)
+
+  const empty = applicationProfileSchema.safeParse({ name: '空值版', strategy: { targetLocations: [], availableDate: null } })
+  assert.equal(empty.success, true)
+  if (empty.success) assert.equal(empty.data.strategy.availableDate, undefined)
+
+  const tooLong = applicationProfileSchema.safeParse({ name: '超长版', strategy: { targetLocations: [], availableDate: '到'.repeat(81) } })
+  assert.equal(tooLong.success, false)
+})

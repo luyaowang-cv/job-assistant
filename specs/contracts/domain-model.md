@@ -17,7 +17,7 @@
 
 | Entity | Responsibility | Key fields |
 |---|---|---|
-| User | 数据隔离与身份 | id, email, displayName |
+| User | 数据隔离与身份 | id, email, displayName, emailVerified, passwordHash |
 | Company | 公司主数据 | id, name, website, industry, companyType, tags |
 | Job | 外部岗位事实 | id, companyId, title, department, location, salaryMin, salaryMax, source, url, description, deadlineAt |
 | Application | 用户对岗位的求职过程 | id, userId, jobId, status, channel, appliedAt, nextAction, nextActionAt, notes, deletedAt |
@@ -27,7 +27,7 @@
 | ResumeVersion | 可追溯简历版本 | id, resumeId, content, format, source, createdAt |
 | ApplicationProfile | 用户确认的结构化网申资料版本 | id, userId, name, targetTags, basics, educations, workExperiences, projects, skills, languages, certificates, campusExperiences, awards, createdAt, updatedAt |
 | PersonalProfile | 用户唯一的通用个人资料与教育主记录 | id, userId, basics, educations, createdAt, updatedAt |
-| AiProviderSetting | 用户选择的非敏感 OpenAI 兼容 Provider 元数据 | id, userId, provider, baseUrl, model, createdAt, updatedAt |
+| AiProviderSetting | 用户选择的 OpenAI 兼容 Provider 元数据（含服务端加密的用户自带 Key） | id, userId, provider, baseUrl, model, apiKeyEnc, createdAt, updatedAt |
 | Interview | 一次笔试或面试 | id, applicationId, stage, scheduledAt, result, reflection |
 | InterviewRecord | 一次面试的准备与复盘记录 | id, userId, applicationId?, resumeVersionId?, companyName?, jobTitle?, jdText?, round?, interviewAt?, methodAndAddress?, briefNote?, prepSections, prepNotes?, result?, review, provider, model |
 | AgentRun | 一次 AI 工作流运行 | id, userId, applicationId, type, status, preferenceSnapshot, resumeDigest, output, provider, model, startedAt, completedAt, errorMessage |
@@ -35,7 +35,7 @@
 
 ## MVP 用户边界
 
-F-001 采用单用户本地模式。服务端固定使用一个初始化的 local user；客户端不传 userId，也不提供注册、登录、多用户切换。保留 User 与 userId 关系是为了后续加入鉴权时不重构业务数据。
+F-001 采用单用户本地模式（固定 local user）。F-042 起改为真实账号登录：用户身份由服务端会话取得，客户端仍不得指定 `userId`。F-043 起开放公开注册（仍无邮箱验证），允许多账号自助注册；User 与 userId 关系保持不变，业务数据无需重构。Job/Company 为全局共享事实（无 userId），Application 等按 userId 隔离；岗位库写操作仅管理员可用，"管理员"由环境变量 `ADMIN_EMAILS`（逗号分隔邮箱）判定，User 表无需新增角色字段。
 
 ## 删除与审计
 
@@ -111,9 +111,9 @@ Application 是用户的状态与决策记录；Job 是岗位事实。不得把�
 
 ## F-009 AI Provider 设置约束
 
-- AiProviderSetting 一对一归属 User，仅保存 provider、baseUrl 与 model；不得保存 API Key、完整简历、页面 DOM 或表单值。
-- Provider Key 只来自服务端环境变量：DeepSeek 使用 `DEEPSEEK_API_KEY`，其他兼容服务使用 `OPENAI_API_KEY`，可选通用回退为 `AI_API_KEY`；禁止把一个具名 Provider 的凭据转发给另一个 Provider。它们永远不进入 Prisma、HTTP 请求/响应、前端状态、扩展或日志。
-- 现阶段所有 Agent Provider 仍为 Mock；真实 Adapter 只能从服务端设置服务读取元数据和环境变量 Key，不能从 Agent 输入读取凭据。
+- AiProviderSetting 一对一归属 User，保存 provider、baseUrl、model；自 F-042 起可额外保存用户自带、经服务端加密的 apiKey。不得保存完整简历、页面 DOM 或表单值。
+- Provider Key 取值顺序（F-042 起）：优先使用用户自带的加密 Key；未配置时回退服务端环境变量——DeepSeek 使用 `DEEPSEEK_API_KEY`，其他兼容服务使用 `OPENAI_API_KEY`，可选通用回退为 `AI_API_KEY`。禁止把一个具名 Provider 的凭据转发给另一个 Provider。Key 永远不进入 HTTP 请求/响应、前端状态、扩展或日志；设置接口只返回是否已配置。
+- 真实 Adapter 只能从服务端设置服务读取元数据和 Key，不能从 Agent 输入读取凭据。
 
 ## F-011 候选人资料层次约束
 
@@ -169,3 +169,55 @@ Application 是用户的状态与决策记录；Job 是岗位事实。不得把�
 - 生成与复盘提取均为 preview，零写库；保存、复盘确认写库并创建 `DocumentMutationEvent`（`INTERVIEW_RECORD_SAVED` / `INTERVIEW_RECORD_REVIEW_SAVED`，entityType=InterviewRecord）。
 - 面试结果取值 `UNDECIDED`(待定)/`PASSED`(通过)/`FAILED`(未通过)/`WITHDRAWN`(放弃)。绑定投递记录且结果发生变更时，服务端按映射常量同步 Application.status 并写 `STATUS_CHANGED` 事件；映射常量集中在服务端，客户端不得自行修改投递状态。
 - AI 输入可包含 JD、简历版本 content 与素材卡片（facts/变体摘要），但 InterviewRecord 不得持久化完整简历原文或素材卡片原文，仅保存生成的 prepSections/review 与用户编辑文本。
+
+## F-032 投递链接与插件 resolved context 约束
+
+- `Job.url` 继续作为岗位的唯一投递链接；岗位库导入、插件创建与投递详情编辑均写入同一字段，Application 不增加重复 URL 字段。
+- 投递列表的渠道来自 `Application.channel`，投递入口来自关联 `Job.url`。
+- 插件 AI 填写上下文是读取时派生的 resolved view，不新增持久化副本：组合网申版本使用 PersonalProfile + blocks/references，legacy 档案使用其全部结构化经历字段、策略与可选 ResumeVersion。
+- F-032 不产生新的数据写入类型；插件保存岗位继续由 Application API 创建 CREATE 事件，AI 表单 preview 与话术 preview 均保持零写库。
+
+## F-033 到岗时间策略约束
+
+- `ApplicationProfile.strategy.availableDate` 保持存储于 strategy JSON，不新增列；其语义是用户确认的“可到岗时间说明”，不是必须可解析的日历日期。
+- 经 trim 后的空字符串或 null 表示未填写；非空值最多 80 字符。AI 不得从该说明推断用户未承诺的更早到岗时间。
+
+## F-034 表单填写简历回退约束
+
+- ApplicationProfile.resumeVersionId 仍表示显式默认版本且不被自动写入。fill-context 在其为空时可只读派生当前 User 的 BASE ResumeVersion 作为 AI 补充事实来源。
+- BASE 回退不创建 ApplicationProfile/ResumeVersion/DocumentMutationEvent，也不改变文档版本关系；仅存在于用户本次明确点击填写所触发的 preview 上下文。
+
+## F-035 岗位详情补充字段约束
+
+- `Company.description?` 保存可复用于同一公司的公司介绍；`Job.referralCode?` 与 `Job.applicationNotes?` 分别保存岗位内推码和投递注意事项。
+- 三个字段均为用户或导入来源提供的可空文本，不由 AI 推断；历史记录不回填，migration 仅增加可空列。
+- 从岗位库创建 Application 仍只建立对原 Job 的引用，因此新增岗位事实会自然出现在投递看板，不创建字段副本。
+- 用户在投递详情保存上述信息时，沿用 Application 更新事务并写 `ApplicationEvent(type=UPDATE)`；纯查看岗位详情不产生事件。
+- 已知来源污染文本“婉清学姐冲冲冲的店唯一正版”不属于行业或企业性质事实；导入边界删除该文本，migration 同步清理存量 Company 分类字段。
+
+## F-039 飞书岗位增量自动同步约束
+
+- `FeishuJobSyncSource` 一对多归属 User，以 `(userId, sourceDocId)` 唯一识别一份已配置的岗位来源。它只保存经过 Zod 校验的分享链接、来源类型、自动同步状态、同步时间、同步占用与安全错误摘要；不得保存 OAuth token、App Secret 或任何加密密钥。
+- Bitable 来源首次同步为完整基线；后续增量同步以飞书记录自动字段 `last_modified_time` 的上次成功时间减一分钟为下界。增量只创建或更新被飞书返回的岗位，绝不以未返回记录推断岗位下线。
+- 只有完整对账可以维护来源 `offlineAt`；任何同步都不得清空或修改 `manualOfflineAt`。手动下线优先于来源状态，默认查询继续同时排除两者。
+- 成功同步为用户可见的岗位库变更，必须写入 `DocumentMutationEvent(type=JOB_LIBRARY_SYNCED, entityType=FeishuJobSyncSource)`，payload 只记录来源 ID、触发来源、同步模式和统计，不得包含分享链接或凭据。
+- 自动同步固定在 `Asia/Shanghai` 每日 08:00 执行；执行失败只更新来源的最近尝试时间与安全错误摘要，不覆盖最近成功同步时间。来源级同步占用防止并发执行，过期占用可安全恢复。
+
+## F-040 投递看板连续拖拽排序约束
+
+- F-040 不增加 Application 或关联实体的持久化排序字段。看板同一状态列的默认顺序继续由 `Application.updatedAt` 倒序派生；状态变更写入既有 Application 后会更新时间，从而使被拖入的卡片在下一次读取时位于目标列前端。
+- 列表分页与看板完整读取只是同一组未软删除 Application 的不同查询投影，不得改变 `deletedAt` 排除规则、Application 归属或既有 `ApplicationEvent(type=STATUS_CHANGED)` 审计语义。
+
+## F-041 素材文案版本确认覆盖约束
+
+- `MaterialCardVariant(cardId, name)` 唯一约束保持不变。F-041 是“variant 创建后不可更新”的唯一例外：用户通过明确确认的 `overwrite=true` 请求，可就地更新同一卡片同名 variant 的 `content`；不得修改它的 ID、cardId 或名称。
+- `DocumentCardReference.variantId` 仍是固定引用，不重定向、不新增文档版本。覆盖会使所有固定引用该 variant ID 的后续解析内容使用新的正文，因此必须由用户在界面二次确认后触发。
+- 覆盖写入 `DocumentMutationEvent(type=MATERIAL_UPDATED, entityType=MaterialCardVariant)`；payload 只保存 cardId、名称和覆盖动作，绝不复制 variant content。
+
+## F-042 用户认证、数据隔离与 BYOK 约束
+
+- 认证由 better-auth 提供：邮箱 + 密码，会话使用 httpOnly cookie；本次不做邮箱验证。User 增加 `emailVerified` 与密码哈希字段，新增 `Session`/`Account`/`Verification` 三张认证基础设施表。
+- 用户身份由服务端会话取得，客户端不得指定 `userId`；所有业务读写按当前会话用户的 `userId` 隔离。未登录访问受保护 API 返回 `401 UNAUTHENTICATED`，仅 `/api/auth/**` 等公开接口除外。
+- 首次启用时，一次性、幂等地把既有 `local@job-assistant.local` 名下全部数据迁移到所有者账号，迁移后删除该 local user。
+- `AiProviderSetting.apiKeyEnc` 保存经服务端 AES-GCM 加密的用户自带 Key；加密密钥独立于飞书令牌密钥并可回退；任何接口、日志、扩展或前端状态不得出现明文 Key。
+- 本次不开放公开注册，不包含邮箱验证、找回密码、第三方 OAuth、限流与多用户飞书。

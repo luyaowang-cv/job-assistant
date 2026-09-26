@@ -1,30 +1,39 @@
-import { ApplicationChannel, ApplicationEventType, ApplicationStatus, JobSource, type Prisma } from '../generated/prisma/client'
+import { ApplicationChannel, ApplicationEventType, ApplicationStatus, DocumentMutationType, FeishuJobSyncSourceType, JobSource, type Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
-import { importedJobRowSchema, type FeishuImportInput, type ImportedJobRow, type ListJobsQuery } from '../schemas/job-library'
+import { extractCompanyNameAndUpdatedAt, importedJobRowSchema, type FeishuImportInput, type ImportedJobRow, type ListJobsQuery } from '../schemas/job-library'
 
-import { getLocalUser } from './local-user'
+import { getCurrentUser, getOwnerUser } from './current-user'
 import { getFeishuUserAccessToken } from './feishu-oauth.service'
+import { FEISHU_AUTO_SYNC_TIME, FEISHU_AUTO_SYNC_TIME_ZONE, buildBitableRecordSearchBody, isFeishuAutoSyncEnabled, nextFeishuAutoSyncAt, shouldReconcileOffline, shouldRunMissedFeishuAutoSync, type JobLibrarySyncMode } from './job-library-sync'
 
 const fieldAliases = {
-  companyName: ['公司名称', '公司', 'company name'],
+  companyName: ['公司名称', '企业名称', '公司', 'company name'],
+  companyDescription: ['公司介绍', '企业介绍', '公司简介', 'company description'],
   title: ['招聘岗位', '岗位名称', '岗位', 'job title'],
   location: ['工作地点', '地点', 'location'],
-  industry: ['行业分类', '行业', 'industry'],
+  industry: ['行业分类', '所在行业', '行业', 'industry'],
   companyType: ['企业性质', '公司性质', 'company type'],
-  recruitmentType: ['批次', '招聘批次', 'recruitment type'],
+  recruitmentType: ['批次', '招聘批次', '内推类型', 'recruitment type'],
   announcementUrl: ['公告链接', '公告', 'announcement url'],
-  url: ['投递链接', '申请链接', '岗位链接', 'application url'],
+  url: ['投递链接', '申请链接', '岗位链接', '内推链接/官网', '（跳转之后复制到浏览器打开）内推链接/官网', '(跳转之后复制到浏览器打开)内推链接/官网', 'application url'],
+  referralCode: ['内推码', '内推码（区分大小码）', '内推码(区分大小码)', '推荐码', 'referral code'],
+  applicationNotes: ['投递注意事项', '投递须知', '申请注意事项', 'application notes'],
   sourceUpdatedAt: ['更新时间', '更新日期', 'updated at'],
   hasWrittenTest: ['是否笔试', '笔试', 'written test'],
   deadlineAt: ['截止时间', '截止日期', 'deadline'],
 } as const
 
 type FeishuValue = string | number | boolean | Array<unknown> | Record<string, unknown> | null | undefined
-type FeishuRecord = { record_id: string, fields: Record<string, FeishuValue> }
+type FeishuRecord = { record_id: string, fields: Record<string, FeishuValue>, last_modified_time?: number }
 type FeishuTable = { table_id: string, name: string }
 
+type FeishuSyncTrigger = 'MANUAL' | 'SCHEDULED'
+type ResolvedFeishuSource = { appToken: string, tableId: string, sourceDocId: string, sourceType: FeishuJobSyncSourceType, skipCampaignFilter: boolean }
+
+const sourceLockTimeoutMs = 10 * 60_000
+
 export class JobLibraryImportError extends Error {
-  constructor(message: string, readonly code: 'FEISHU_NOT_CONFIGURED' | 'FEISHU_READ_FAILED' | 'FEISHU_INVALID_DATA' | 'EXCEL_READ_FAILED' | 'EXCEL_INVALID_DATA') {
+  constructor(message: string, readonly code: 'FEISHU_NOT_CONFIGURED' | 'FEISHU_READ_FAILED' | 'FEISHU_INVALID_DATA' | 'FEISHU_SYNC_IN_PROGRESS' | 'EXCEL_READ_FAILED' | 'EXCEL_INVALID_DATA') {
     super(message)
   }
 }
@@ -69,20 +78,28 @@ function booleanValue(value: FeishuValue): boolean | null {
   return null
 }
 
+function normalizeFieldName(value: string) {
+  return value.replace(/\s/g, '').toLowerCase()
+}
+
 function fieldValue(fields: Record<string, FeishuValue>, aliases: readonly string[]) {
-  const entry = Object.entries(fields).find(([name]) => aliases.includes(name.replace(/\s/g, '').toLowerCase() as never))
+  const normalizedAliases = aliases.map(normalizeFieldName)
+  const entry = Object.entries(fields).find(([name]) => normalizedAliases.includes(normalizeFieldName(name)))
   return entry?.[1]
 }
 
 export function mapFeishuRecord(record: FeishuRecord): ImportedJobRow | null {
   const fields = record.fields
-  const companyName = textValue(fieldValue(fields, fieldAliases.companyName))
+  const rawCompanyName = textValue(fieldValue(fields, fieldAliases.companyName))
   const title = textValue(fieldValue(fields, fieldAliases.title))
   // The source Bitable contains child/link records with a company but no job title.
   // They are structural rows rather than job postings and must not abort a full sync.
-  if (!companyName || !title) return null
+  if (!rawCompanyName || !title) return null
+  const extractedCompany = extractCompanyNameAndUpdatedAt(rawCompanyName)
+  const explicitUpdatedAt = dateValue(fieldValue(fields, fieldAliases.sourceUpdatedAt))
   const parsed = importedJobRowSchema.safeParse({
-    companyName,
+    companyName: extractedCompany.companyName,
+    companyDescription: textValue(fieldValue(fields, fieldAliases.companyDescription)),
     title,
     location: textValue(fieldValue(fields, fieldAliases.location)),
     industry: textValue(fieldValue(fields, fieldAliases.industry)),
@@ -90,7 +107,9 @@ export function mapFeishuRecord(record: FeishuRecord): ImportedJobRow | null {
     recruitmentType: textValue(fieldValue(fields, fieldAliases.recruitmentType)),
     announcementUrl: linkValue(fieldValue(fields, fieldAliases.announcementUrl)),
     url: linkValue(fieldValue(fields, fieldAliases.url)),
-    sourceUpdatedAt: dateValue(fieldValue(fields, fieldAliases.sourceUpdatedAt)),
+    referralCode: textValue(fieldValue(fields, fieldAliases.referralCode)),
+    applicationNotes: textValue(fieldValue(fields, fieldAliases.applicationNotes)),
+    sourceUpdatedAt: explicitUpdatedAt ?? extractedCompany.sourceUpdatedAt,
     hasWrittenTest: booleanValue(fieldValue(fields, fieldAliases.hasWrittenTest)),
     deadlineAt: dateValue(fieldValue(fields, fieldAliases.deadlineAt)),
   })
@@ -106,15 +125,19 @@ function parseShareUrl(shareUrl: string) {
   const url = new URL(shareUrl)
   const parts = url.pathname.split('/').filter(Boolean)
   const baseIndex = parts.indexOf('base')
+  const wikiIndex = parts.indexOf('wiki')
   const appToken = (baseIndex >= 0 ? parts[baseIndex + 1] : undefined) ?? parts.find(part => /^app[a-zA-Z0-9]+$/.test(part))
+  const wikiToken = wikiIndex >= 0 ? parts[wikiIndex + 1] : undefined
   const tableId = url.searchParams.get('table') ?? parts.find(part => /^tbl[a-zA-Z0-9]+$/.test(part))
-  if (!appToken) throw new JobLibraryImportError('无法从分享链接识别飞书多维表格。请粘贴包含 base 的公开表格链接。', 'FEISHU_READ_FAILED')
-  return { appToken, tableId }
+  if (!appToken && !wikiToken) throw new JobLibraryImportError('无法从链接识别飞书多维表格。请粘贴包含 base 或 wiki 的表格链接。', 'FEISHU_READ_FAILED')
+  return { appToken, wikiToken, tableId }
 }
 
-async function feishuRequest<T>(path: string, accessToken: string): Promise<T> {
+async function feishuRequest<T>(path: string, accessToken: string, init: { method?: 'GET' | 'POST', body?: unknown } = {}): Promise<T> {
   const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    method: init.method,
+    headers: { Authorization: `Bearer ${accessToken}`, ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
   })
   const body = await response.json() as { code?: number, msg?: string, data?: T }
   if (!response.ok || body.code !== 0 || !body.data) {
@@ -137,23 +160,84 @@ function matchesFeishuFilter(fields: Record<string, FeishuValue>): boolean {
   return sessionOk && batchOk
 }
 
-async function readFeishuRecords(appToken: string, tableId: string, accessToken: string) {
+async function readBitableRecords(appToken: string, tableId: string, accessToken: string, skipCampaignFilter: boolean) {
   const records: FeishuRecord[] = []
   let pageToken: string | undefined
   do {
     const query = new URLSearchParams({ page_size: '500' })
     if (pageToken) query.set('page_token', pageToken)
-    const page = await feishuRequest<{ items: FeishuRecord[], has_more?: boolean, page_token?: string }>(`/bitable/v1/apps/${appToken}/tables/${tableId}/records?${query}`, accessToken)
+    const page = await feishuRequest<{ items: FeishuRecord[], has_more?: boolean, page_token?: string }>(`/bitable/v1/apps/${appToken}/tables/${tableId}/records/search?${query}`, accessToken, { method: 'POST', body: buildBitableRecordSearchBody() })
     records.push(...page.items)
     pageToken = page.has_more ? page.page_token : undefined
   } while (pageToken)
-  const filtered = records.filter(record => matchesFeishuFilter(record.fields))
+  const filtered = skipCampaignFilter ? records : records.filter(record => matchesFeishuFilter(record.fields))
   const mappedRows = filtered.map(mapFeishuRecord)
   const rows = mappedRows.filter((row): row is ImportedJobRow => row !== null)
   return { sourceDocId: `${appToken}:${tableId}`, rows, skipped: records.length - rows.length }
 }
 
-async function importRows(sourceDocId: string, rows: ImportedJobRow[], skipped: number) {
+async function exportFeishuSheet(spreadsheetToken: string, accessToken: string) {
+  const createResponse = await fetch('https://open.feishu.cn/open-apis/drive/v1/export_tasks', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_extension: 'xlsx', token: spreadsheetToken, type: 'sheet' }),
+  })
+  const createBody = await createResponse.json() as { code?: number, msg?: string, data?: { ticket?: string } }
+  const ticket = createBody.data?.ticket
+  if (!createResponse.ok || createBody.code !== 0 || !ticket) throw new JobLibraryImportError(`创建飞书表格导出任务失败：${createBody.msg ?? createResponse.statusText}`, 'FEISHU_READ_FAILED')
+
+  let fileToken: string | undefined
+  for (let attempt = 0; attempt < 20 && !fileToken; attempt += 1) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 500))
+    const task = await feishuRequest<{ result?: { file_token?: string, job_status?: number, job_error_msg?: string } }>(`/drive/v1/export_tasks/${encodeURIComponent(ticket)}?token=${encodeURIComponent(spreadsheetToken)}`, accessToken)
+    fileToken = task.result?.file_token
+    if (!fileToken && task.result?.job_status === 3) throw new JobLibraryImportError(`飞书表格导出失败：${task.result.job_error_msg || '未知错误'}`, 'FEISHU_READ_FAILED')
+  }
+  if (!fileToken) throw new JobLibraryImportError('飞书表格导出超时，请稍后重试。', 'FEISHU_READ_FAILED')
+
+  const downloadResponse = await fetch(`https://open.feishu.cn/open-apis/drive/v1/export_tasks/file/${encodeURIComponent(fileToken)}/download`, { headers: { Authorization: `Bearer ${accessToken}` } })
+  if (!downloadResponse.ok) throw new JobLibraryImportError(`下载飞书表格导出文件失败：${downloadResponse.statusText}`, 'FEISHU_READ_FAILED')
+  return Buffer.from(await downloadResponse.arrayBuffer())
+}
+
+async function parseExportedWorkbook(buffer: Buffer) {
+  const xlsxModule = 'xlsx'
+  const XLSX = await import(/* @vite-ignore */ xlsxModule) as typeof import('xlsx')
+  const workbook = XLSX.read(buffer, { type: 'buffer' })
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    const reference = sheet?.['!ref']
+    if (!sheet || !reference) continue
+    const range = XLSX.utils.decode_range(reference)
+    const cellValue = (row: number, column: number): FeishuValue => {
+      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })]
+      if (!cell) return null
+      if (cell.l?.Target) return { text: String(cell.w ?? cell.v ?? ''), link: cell.l.Target }
+      return cell.v as FeishuValue
+    }
+    const previewRows = Array.from({ length: Math.min(10, range.e.r - range.s.r + 1) }, (_, offset) => Array.from({ length: range.e.c - range.s.c + 1 }, (__, column) => cellValue(range.s.r + offset, range.s.c + column)))
+    const companyAliases = fieldAliases.companyName.map(normalizeFieldName)
+    const titleAliases = fieldAliases.title.map(normalizeFieldName)
+    const headerOffset = previewRows.findIndex((row) => {
+      const names = row.map(value => normalizeFieldName(textValue(value) ?? ''))
+      return names.some(name => companyAliases.includes(name)) && names.some(name => titleAliases.includes(name))
+    })
+    if (headerOffset < 0) continue
+    const headerRow = range.s.r + headerOffset
+    const headers = Array.from({ length: range.e.c - range.s.c + 1 }, (_, column) => textValue(cellValue(headerRow, range.s.c + column)) ?? '')
+    const mappedRows: Array<ImportedJobRow | null> = []
+    for (let row = headerRow + 1; row <= range.e.r; row += 1) {
+      const fields: Record<string, FeishuValue> = {}
+      headers.forEach((header, column) => { if (header) fields[header] = cellValue(row, range.s.c + column) })
+      mappedRows.push(mapFeishuRecord({ record_id: `${sheetName}:${row + 1}`, fields }))
+    }
+    const rows = mappedRows.filter((row): row is ImportedJobRow => row !== null)
+    return { rows, skipped: mappedRows.length - rows.length }
+  }
+  throw new JobLibraryImportError('导出的表格中未找到同时包含“企业名称”和“招聘岗位”的工作表。', 'FEISHU_INVALID_DATA')
+}
+
+async function importRows(sourceDocId: string, rows: ImportedJobRow[], skipped: number, mode: JobLibrarySyncMode = 'FULL') {
   const syncedAt = new Date()
   const rowsByKey = new Map<string, ImportedJobRow>()
   for (const row of rows) rowsByKey.set(`${row.companyName}\u0000${row.title}`, row)
@@ -165,20 +249,25 @@ async function importRows(sourceDocId: string, rows: ImportedJobRow[], skipped: 
   if (missingCompanies.length) {
     const firstByCompany = new Map<string, ImportedJobRow>()
     for (const row of missingCompanies) firstByCompany.set(row.companyName, row)
-    await prisma.company.createMany({ data: [...firstByCompany.values()].map(row => ({ name: row.companyName, industry: row.industry, companyType: row.companyType })), skipDuplicates: true })
+    await prisma.company.createMany({ data: [...firstByCompany.values()].map(row => ({ name: row.companyName, description: row.companyDescription, industry: row.industry, companyType: row.companyType })), skipDuplicates: true })
     const createdCompanies = await prisma.company.findMany({ where: { name: { in: [...firstByCompany.keys()] } }, select: { id: true, name: true } })
     for (const company of createdCompanies) companyIds.set(company.name, company.id)
   }
 
+  const companyDescriptionUpdates = uniqueRows
+    .filter(row => Boolean(row.companyDescription) && companyIds.has(row.companyName))
+    .map(row => prisma.company.update({ where: { id: companyIds.get(row.companyName)! }, data: { description: row.companyDescription } }))
+  if (companyDescriptionUpdates.length) await prisma.$transaction(companyDescriptionUpdates)
+
   const existingJobs = await prisma.job.findMany({ where: { sourceDocId }, select: { id: true, companyId: true, title: true } })
   const existingJobIds = new Map(existingJobs.map(job => [`${job.companyId}\u0000${job.title}`, job.id]))
-  const toCreate: Array<{ companyId: string, title: string, source: JobSource, sourceDocId: string, location: string | null, recruitmentType: string | null, announcementUrl: string | null, url: string | null, hasWrittenTest: boolean | null, sourceUpdatedAt: Date | null, deadlineAt: Date | null, syncedAt: Date, offlineAt: null }> = []
+  const toCreate: Array<{ companyId: string, title: string, source: JobSource, sourceDocId: string, location: string | null, recruitmentType: string | null, announcementUrl: string | null, url: string | null, referralCode: string | null, applicationNotes: string | null, hasWrittenTest: boolean | null, sourceUpdatedAt: Date | null, deadlineAt: Date | null, syncedAt: Date, offlineAt: null }> = []
   const updates = []
   const seenExistingJobIds: string[] = []
   for (const row of uniqueRows) {
     const companyId = companyIds.get(row.companyName)
     if (!companyId) throw new JobLibraryImportError(`公司「${row.companyName}」写入后无法读取。`, 'FEISHU_READ_FAILED')
-    const data = { location: row.location, recruitmentType: row.recruitmentType, announcementUrl: row.announcementUrl, url: row.url, hasWrittenTest: row.hasWrittenTest, sourceUpdatedAt: row.sourceUpdatedAt, deadlineAt: row.deadlineAt, syncedAt, offlineAt: null }
+    const data = { location: row.location, recruitmentType: row.recruitmentType, announcementUrl: row.announcementUrl, url: row.url, referralCode: row.referralCode, applicationNotes: row.applicationNotes, hasWrittenTest: row.hasWrittenTest, sourceUpdatedAt: row.sourceUpdatedAt, deadlineAt: row.deadlineAt, syncedAt, offlineAt: null }
     const existingId = existingJobIds.get(`${companyId}\u0000${row.title}`)
     if (existingId) {
       seenExistingJobIds.push(existingId)
@@ -188,24 +277,158 @@ async function importRows(sourceDocId: string, rows: ImportedJobRow[], skipped: 
   }
 
   if (updates.length) await prisma.$transaction(updates, { maxWait: 15_000, timeout: 180_000 })
-  const offlined = await prisma.job.updateMany({ where: { sourceDocId, offlineAt: null, ...(seenExistingJobIds.length ? { id: { notIn: seenExistingJobIds } } : {}) }, data: { offlineAt: syncedAt } })
+  const offlined = shouldReconcileOffline(mode)
+    ? await prisma.job.updateMany({ where: { sourceDocId, offlineAt: null, ...(seenExistingJobIds.length ? { id: { notIn: seenExistingJobIds } } : {}) }, data: { offlineAt: syncedAt } })
+    : { count: 0 }
   if (toCreate.length) await prisma.job.createMany({ data: toCreate })
   return { created: toCreate.length, updated: updates.length, offlined: offlined.count, skipped, total: uniqueRows.length }
 }
 
-export async function importFeishuJobs(input: FeishuImportInput) {
-  const { appToken, tableId: tableIdFromUrl } = parseShareUrl(input.shareUrl)
+async function resolveFeishuSource(shareUrl: string, accessToken: string): Promise<ResolvedFeishuSource> {
+  const { appToken: directAppToken, wikiToken, tableId: tableIdFromUrl } = parseShareUrl(shareUrl)
   if (!tableIdFromUrl) throw new JobLibraryImportError('请使用已打开「27届秋招」数据表后复制的飞书链接。链接中需要包含 table=tbl... 参数。', 'FEISHU_READ_FAILED')
-  const accessToken = await getFeishuUserAccessToken()
+  let appToken = directAppToken
+  let wikiObjectType: string | undefined
+  if (!appToken && wikiToken) {
+    const wikiNode = await feishuRequest<{ node: { obj_token: string, obj_type: string } }>(`/wiki/v2/spaces/get_node?token=${encodeURIComponent(wikiToken)}`, accessToken)
+    wikiObjectType = wikiNode.node.obj_type
+    if (!['bitable', 'sheet'].includes(wikiObjectType) || !wikiNode.node.obj_token) throw new JobLibraryImportError(`该飞书 Wiki 页面类型为 ${wikiObjectType || '未知'}，暂不支持同步。`, 'FEISHU_READ_FAILED')
+    appToken = wikiNode.node.obj_token
+  }
+  if (!appToken) throw new JobLibraryImportError('无法解析飞书多维表格应用标识。', 'FEISHU_READ_FAILED')
+  if (wikiObjectType === 'sheet') return { appToken, tableId: tableIdFromUrl, sourceDocId: `sheet-export:${appToken}`, sourceType: FeishuJobSyncSourceType.SHEET_EXPORT, skipCampaignFilter: Boolean(wikiToken) }
   const tables = await feishuRequest<{ items: FeishuTable[] }>(`/bitable/v1/apps/${appToken}/tables`, accessToken)
   const targetTable = tables.items.find(table => table.table_id === tableIdFromUrl)
   if (!targetTable) throw new JobLibraryImportError('链接指定的数据表不存在或当前账号无权读取。请重新从「27届秋招」标签页复制链接。', 'FEISHU_READ_FAILED')
-  const { sourceDocId, rows, skipped } = await readFeishuRecords(appToken, targetTable.table_id, accessToken)
-  return importRows(sourceDocId, rows, skipped)
+  return { appToken, tableId: targetTable.table_id, sourceDocId: `${appToken}:${targetTable.table_id}`, sourceType: FeishuJobSyncSourceType.BITABLE, skipCampaignFilter: Boolean(wikiToken) }
+}
+
+function conciseSyncError(error: unknown) {
+  const message = error instanceof Error ? error.message : '飞书同步失败，请稍后重试。'
+  return message.replace(/https?:\/\/\S+/g, '[链接已隐藏]').slice(0, 500)
+}
+
+async function claimFeishuSource(userId: string, source: ResolvedFeishuSource, shareUrl: string, now: Date) {
+  const configured = await prisma.feishuJobSyncSource.upsert({
+    where: { userId_sourceDocId: { userId, sourceDocId: source.sourceDocId } },
+    create: { userId, sourceDocId: source.sourceDocId, sourceType: source.sourceType, shareUrl, autoSyncEnabled: source.sourceType === FeishuJobSyncSourceType.BITABLE },
+    update: { sourceType: source.sourceType, shareUrl, autoSyncEnabled: source.sourceType === FeishuJobSyncSourceType.BITABLE },
+  })
+  const lockExpiresAt = new Date(now.getTime() - sourceLockTimeoutMs)
+  const claim = await prisma.feishuJobSyncSource.updateMany({
+    where: { id: configured.id, OR: [{ syncStartedAt: null }, { syncStartedAt: { lt: lockExpiresAt } }] },
+    data: { syncStartedAt: now, lastAttemptAt: now, lastError: null },
+  })
+  if (!claim.count) throw new JobLibraryImportError('该飞书岗位源正在同步，请稍后刷新结果。', 'FEISHU_SYNC_IN_PROGRESS')
+  return configured
+}
+
+async function recordFeishuSyncSuccess(sourceId: string, userId: string, trigger: FeishuSyncTrigger, mode: JobLibrarySyncMode, stats: Awaited<ReturnType<typeof importRows>>) {
+  const completedAt = new Date()
+  await prisma.$transaction(async tx => {
+    await tx.feishuJobSyncSource.update({
+      where: { id: sourceId },
+      data: {
+        lastSuccessfulSyncAt: completedAt,
+        ...(trigger === 'SCHEDULED' ? { lastAutomaticSyncAt: completedAt } : {}),
+        lastError: null,
+        syncStartedAt: null,
+      },
+    })
+    await tx.documentMutationEvent.create({
+      data: {
+        userId,
+        type: DocumentMutationType.JOB_LIBRARY_SYNCED,
+        entityType: 'FeishuJobSyncSource',
+        entityId: sourceId,
+        source: trigger,
+        payload: { mode, created: stats.created, updated: stats.updated, offlined: stats.offlined, skipped: stats.skipped, total: stats.total },
+      },
+    })
+  })
+}
+
+async function recordFeishuSyncFailure(sourceId: string | undefined, error: unknown) {
+  if (!sourceId) return
+  await prisma.feishuJobSyncSource.update({ where: { id: sourceId }, data: { syncStartedAt: null, lastError: conciseSyncError(error) } }).catch(() => undefined)
+}
+
+export async function importFeishuJobs(input: FeishuImportInput, trigger: FeishuSyncTrigger = 'MANUAL', userId?: string) {
+  const id = userId ?? (await getCurrentUser()).id
+  const accessToken = await getFeishuUserAccessToken(id)
+  let sourceId: string | undefined
+  try {
+    const source = await resolveFeishuSource(input.shareUrl, accessToken)
+    const configured = await claimFeishuSource(id, source, input.shareUrl, new Date())
+    sourceId = configured.id
+    const mode: JobLibrarySyncMode = 'FULL'
+    const imported = source.sourceType === FeishuJobSyncSourceType.SHEET_EXPORT
+      ? await parseExportedWorkbook(await exportFeishuSheet(source.appToken, accessToken))
+      : await readBitableRecords(source.appToken, source.tableId, accessToken, source.skipCampaignFilter)
+    const stats = await importRows(source.sourceDocId, imported.rows, imported.skipped, mode)
+    await recordFeishuSyncSuccess(configured.id, id, trigger, mode, stats)
+    return { ...stats, mode, cutoffAt: null }
+  }
+  catch (error) {
+    await recordFeishuSyncFailure(sourceId, error)
+    throw error
+  }
+}
+
+export async function getFeishuAutoSyncStatus() {
+  const user = await getCurrentUser()
+  const sources = await prisma.feishuJobSyncSource.findMany({
+    where: { userId: user.id },
+    select: { id: true, sourceType: true, autoSyncEnabled: true, lastSuccessfulSyncAt: true, lastAutomaticSyncAt: true, lastAttemptAt: true, lastError: true, syncStartedAt: true },
+    orderBy: { createdAt: 'asc' },
+  })
+  return {
+    enabled: isFeishuAutoSyncEnabled(),
+    timeZone: FEISHU_AUTO_SYNC_TIME_ZONE,
+    scheduledTime: FEISHU_AUTO_SYNC_TIME,
+    nextScheduledAt: nextFeishuAutoSyncAt(),
+    sources: sources.map(source => ({
+      id: source.id,
+      sourceType: source.sourceType,
+      enabled: source.autoSyncEnabled && source.sourceType === FeishuJobSyncSourceType.BITABLE,
+      lastSuccessfulSyncAt: source.lastSuccessfulSyncAt,
+      lastAutomaticSyncAt: source.lastAutomaticSyncAt,
+      lastAttemptAt: source.lastAttemptAt,
+      lastError: source.lastError,
+      syncing: Boolean(source.syncStartedAt),
+    })),
+  }
+}
+
+export async function runScheduledFeishuSyncs(options: { onlyIfMissed?: boolean, now?: Date } = {}) {
+  if (!isFeishuAutoSyncEnabled()) return { attempted: 0, succeeded: 0, failed: 0, skipped: 'DISABLED' as const }
+  const owner = await getOwnerUser()
+  const now = options.now ?? new Date()
+  const sources = await prisma.feishuJobSyncSource.findMany({
+    where: { autoSyncEnabled: true, sourceType: FeishuJobSyncSourceType.BITABLE },
+    select: { id: true, shareUrl: true, lastAutomaticSyncAt: true },
+  })
+  let attempted = 0
+  let succeeded = 0
+  let failed = 0
+  for (const source of sources) {
+    if (options.onlyIfMissed && !shouldRunMissedFeishuAutoSync(now, source.lastAutomaticSyncAt)) continue
+    attempted += 1
+    try {
+      await importFeishuJobs({ shareUrl: source.shareUrl }, 'SCHEDULED', owner.id)
+      succeeded += 1
+    }
+    catch (error) {
+      failed += 1
+      console.warn(`[feishu-auto-sync] source ${source.id} failed: ${conciseSyncError(error)}`)
+    }
+  }
+  return { attempted, succeeded, failed }
 }
 
 const excelColumnMap = {
   companyName: '公司名称',
+  companyDescription: '公司介绍',
   title: '职位',
   location: '地点',
   industry: '行业',
@@ -213,6 +436,8 @@ const excelColumnMap = {
   recruitmentType: '批次',
   announcementUrl: '公告链接',
   url: '投递链接',
+  referralCode: '内推码',
+  applicationNotes: '投递注意事项',
 } as const
 
 // SheetJS 会把单元格解析成基础类型（字符串/数字/布尔/日期），这里统一转成文本。
@@ -253,6 +478,7 @@ export async function importExcelJobs(buffer: Buffer, filename: string) {
     if (!companyName || !title) { skipped += 1; continue }
     const parsed = importedJobRowSchema.safeParse({
       companyName,
+      companyDescription: raw[excelColumnMap.companyDescription],
       title,
       location: raw[excelColumnMap.location],
       industry: raw[excelColumnMap.industry],
@@ -260,6 +486,8 @@ export async function importExcelJobs(buffer: Buffer, filename: string) {
       recruitmentType: raw[excelColumnMap.recruitmentType],
       announcementUrl: raw[excelColumnMap.announcementUrl],
       url: raw[excelColumnMap.url],
+      referralCode: raw[excelColumnMap.referralCode],
+      applicationNotes: raw[excelColumnMap.applicationNotes],
       hasWrittenTest: writtenTestCol === undefined ? null : booleanValue(rawRows[i]?.[writtenTestCol] as FeishuValue),
     })
     if (!parsed.success) { skipped += 1; continue }
@@ -289,9 +517,9 @@ export async function clearJobs() {
 }
 
 export async function listJobs(query: ListJobsQuery) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const where: Prisma.JobWhereInput = {
-    ...(query.includeOffline ? {} : { offlineAt: null }),
+    ...(query.includeOffline ? {} : { offlineAt: null, manualOfflineAt: null }),
     ...(query.location ? { location: { contains: query.location, mode: 'insensitive' } } : {}),
     ...(query.recruitmentType ? { recruitmentType: { contains: query.recruitmentType, mode: 'insensitive' } } : {}),
     ...(query.hasWrittenTest === undefined ? {} : { hasWrittenTest: query.hasWrittenTest }),
@@ -299,9 +527,9 @@ export async function listJobs(query: ListJobsQuery) {
     ...(query.search ? { OR: [{ title: { contains: query.search, mode: 'insensitive' } }, { company: { name: { contains: query.search, mode: 'insensitive' } } }] } : {}),
   }
   const [items, total, filterRows] = await prisma.$transaction([
-    prisma.job.findMany({ where, include: { company: true, applications: { where: { userId: user.id, deletedAt: null }, select: { id: true } } }, orderBy: [{ offlineAt: 'asc' }, { sourceUpdatedAt: 'desc' }, { updatedAt: 'desc' }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+    prisma.job.findMany({ where, include: { company: true, applications: { where: { userId: user.id, deletedAt: null }, select: { id: true } } }, orderBy: [{ sourceUpdatedAt: { sort: query.updatedSort, nulls: 'last' } }, { updatedAt: query.updatedSort }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
     prisma.job.count({ where }),
-    prisma.job.findMany({ where: { offlineAt: null }, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
+    prisma.job.findMany({ where: { offlineAt: null, manualOfflineAt: null }, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
   ])
   const values = (items: Array<string | null>) => [...new Set(items.filter((value): value is string => Boolean(value)))].sort()
   const splitTokens = (value: string) => value.split(/[,、，;；/]+/).map(item => item.trim()).filter(Boolean)
@@ -319,8 +547,35 @@ export async function listJobs(query: ListJobsQuery) {
   return { items: items.map(({ applications, ...job }) => ({ ...job, applicationId: applications[0]?.id ?? null })), page: query.page, pageSize: query.pageSize, total, filters: { locations: uniqueTokens(filterRows.map(row => row.location)), industries: uniqueTokens(filterRows.map(row => row.company.industry), true), companyTypes: values(filterRows.map(row => row.company.companyType)).filter(value => value !== '-'), recruitmentTypes: uniqueTokens(filterRows.map(row => row.recruitmentType)) } }
 }
 
+export async function manuallyOfflineJob(jobId: string) {
+  const user = await getCurrentUser()
+  const current = await prisma.job.findUnique({ where: { id: jobId }, select: { id: true, offlineAt: true, manualOfflineAt: true } })
+  if (!current) return null
+  if (current.manualOfflineAt) return current
+
+  return prisma.$transaction(async (transaction) => {
+    const manualOfflineAt = new Date()
+    const job = await transaction.job.update({
+      where: { id: jobId },
+      data: { manualOfflineAt },
+      select: { id: true, offlineAt: true, manualOfflineAt: true },
+    })
+    await transaction.documentMutationEvent.create({
+      data: {
+        userId: user.id,
+        type: DocumentMutationType.JOB_MANUALLY_OFFLINED,
+        entityType: 'Job',
+        entityId: job.id,
+        source: 'USER',
+        payload: { manualOfflineAt: manualOfflineAt.toISOString() },
+      },
+    })
+    return job
+  })
+}
+
 export async function createApplicationFromJob(jobId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) return null
   const existing = await prisma.application.findUnique({ where: { userId_jobId: { userId: user.id, jobId } }, include: { job: { include: { company: true } } } })

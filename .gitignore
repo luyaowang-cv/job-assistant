@@ -23,6 +23,16 @@ artifacts/
 # 下载的第三方 skill（依赖，非项目代码）
 .agents/
 
+# 用于对照研究的第三方浏览器扩展。上游没有 LICENSE 文件，不能随本仓库分发；
+# 具体参考了哪些机制见 docs/research/upstream-provenance.md。
+CampusApply-Agent-main/
+CampusApply-Agent-main.zip
+starjob-resume-assistant-v1.1.5/
+starjob-resume-assistant-v1.1.5.zip
+
 # 本地数据与进程文件（不提交）
 *.xlsx
 *.pid
+backup-*.sql
+# 数据库导出（如 deploy-data.sql）。不要写成 *.sql，会连 Prisma 迁移一起忽略掉。
+*-data.sql

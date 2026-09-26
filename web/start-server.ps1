@@ -19,7 +19,8 @@ function Test-PortListening([int]$port) {
 if (Test-Path $LockFile) {
   try {
     $existingPid = [int](Get-Content -LiteralPath $LockFile -ErrorAction Stop)
-    if ($existingPid -gt 0 -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)) {
+    $existingWatchdog = Get-CimInstance Win32_Process -Filter "ProcessId = $existingPid" -ErrorAction SilentlyContinue
+    if ($existingWatchdog -and $existingWatchdog.Name -eq 'powershell.exe' -and $existingWatchdog.CommandLine -match [regex]::Escape($PSCommandPath)) {
       Write-Output ('watchdog already running (pid ' + $existingPid + '), exit')
       exit 0
     }
@@ -45,7 +46,7 @@ while (-not (Test-PortListening 5432)) {
 while ($true) {
   if (-not (Test-PortListening $Port)) {
     $process = Start-Process -FilePath 'node.exe' `
-      -ArgumentList '--env-file=.env', '.output/server/index.mjs' `
+      -ArgumentList '--env-file=.env', '--import', './server/import-meta-preload.mjs', '.output/server/index.mjs' `
       -WorkingDirectory $WebDir -WindowStyle Hidden `
       -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog -PassThru
     Write-Output ('started node pid ' + $process.Id)

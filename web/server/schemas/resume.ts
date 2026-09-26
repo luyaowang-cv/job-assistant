@@ -20,6 +20,7 @@ export const resumeOptimizationResultSchema = z.object({
 })
 
 export const resumeVersionSchema = z.object({
+  name: z.string().trim().min(1).max(80),
   content: z.string().trim().min(1).max(50_000),
   aiDraft: z.string().trim().min(1).max(50_000),
   changeSummary: z.array(resumeChangeSchema).min(1).max(12),

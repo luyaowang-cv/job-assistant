@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { Collection, Document, Grid, House, Search, Setting, User } from '@element-plus/icons-vue'
+import { ChatDotRound, Collection, Document, Grid, House, Search, Setting, User } from '@element-plus/icons-vue'
 
 const route = useRoute()
 
 const routeMeta: Record<string, { group: string, label: string }> = {
   '/': { group: '工作台', label: '今日工作台' },
   '/applications': { group: '推进求职', label: '投递看板' },
+  '/agent': { group: '推进求职', label: '求职 Agent' },
   '/jobs': { group: '推进求职', label: '岗位库' },
   '/materials': { group: '准备资料', label: '素材库' },
   '/resumes': { group: '准备资料', label: '简历版本' },
@@ -16,16 +17,23 @@ const routeMeta: Record<string, { group: string, label: string }> = {
 }
 
 const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工作台', label: '工作区' })
+
+const { user, logout } = useAuthSession()
+
+async function handleLogout() {
+  await logout()
+  await navigateTo('/login')
+}
 </script>
 
 <template>
   <el-container class="workbench-shell">
     <el-aside width="248px" class="workbench-sidebar p-5">
       <NuxtLink to="/applications" class="mb-8 flex items-center gap-3 px-2 pt-2 no-underline">
-        <span class="grid h-10 w-10 place-items-center rounded-[14px] bg-[linear-gradient(145deg,#a6bce6,#7898d0)] text-lg text-white shadow-[0_8px_18px_rgba(93,125,182,.25)]">求</span>
+        <span class="grid h-10 w-10 place-items-center rounded-[14px] bg-[linear-gradient(145deg,#a6bce6,#7898d0)] text-lg text-white shadow-[0_8px_18px_rgba(93,125,182,.25)]">✓</span>
         <span>
-          <strong class="block text-[15px] tracking-wide text-[#3b4657]">求职小助手</strong>
-          <small class="font-mono text-[11px] tracking-wide text-[#8c98ab]">PERSONAL CAREER OS</small>
+          <strong class="block text-[15px] tracking-wide text-[#3b4657]">Offer来</strong>
+          <small class="font-mono text-[11px] tracking-wide text-[#8c98ab]">OFFER ON THE WAY</small>
         </span>
       </NuxtLink>
 
@@ -33,10 +41,11 @@ const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工�
         <p class="mb-2 px-2 font-mono text-[11px] tracking-[0.14em] text-[#8290a1]">推进求职</p>
         <el-menu :default-active="$route.path" router class="mb-6 border-0 !bg-transparent">
           <el-menu-item index="/"><el-icon><House /></el-icon><span>今日工作台</span></el-menu-item>
-          <el-menu-item index="/applications"><el-icon><Grid /></el-icon><span>投递看板</span></el-menu-item>
+          <el-menu-item index="/agent"><el-icon><ChatDotRound /></el-icon><span>求职 Agent</span></el-menu-item>
+          <el-menu-item index="/jobs"><el-icon><Search /></el-icon><span>岗位库</span></el-menu-item>
         </el-menu>
         <el-menu :default-active="$route.path" router class="mb-6 border-0 !bg-transparent">
-          <el-menu-item index="/jobs"><el-icon><Search /></el-icon><span>岗位库</span></el-menu-item>
+          <el-menu-item index="/applications"><el-icon><Grid /></el-icon><span>投递看板</span></el-menu-item>
         </el-menu>
 
         <p class="mb-2 px-2 font-mono text-[11px] tracking-[0.14em] text-[#8290a1]">准备资料</p>
@@ -63,7 +72,10 @@ const currentMeta = computed(() => routeMeta[route.path] ?? { group: '求职工�
         <div class="flex items-center gap-2 text-sm">
           <span class="text-[#7b899a]">{{ currentMeta.group }}</span><span class="text-[#a2adba]">/</span><strong class="font-medium text-[#31445b]">{{ currentMeta.label }}</strong>
         </div>
-        <span class="workbench-mode"><i />本地单用户模式</span>
+        <div class="flex items-center gap-3">
+          <span class="workbench-mode"><i />{{ user?.email ?? '未登录' }}</span>
+          <el-button size="small" text @click="handleLogout">退出</el-button>
+        </div>
       </el-header>
       <el-main class="workbench-main">
         <slot />

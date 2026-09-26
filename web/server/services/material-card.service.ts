@@ -1,14 +1,14 @@
 import { DocumentMutationType } from '../generated/prisma/client'
 import type { MaterialCardType, Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
-import type { CreateMaterialCardInput, MaterialCardListQuery, UpdateMaterialCardInput } from '../schemas/material-card'
-import { getLocalUser } from './local-user'
+import type { CreateMaterialCardInput, MaterialCardListQuery, SaveMaterialVariantInput, UpdateMaterialCardInput } from '../schemas/material-card'
+import { getCurrentUser } from './current-user'
 
 const cardInclude = { variants: { orderBy: { createdAt: 'desc' as const } } }
 const json = (value: unknown) => value as Prisma.InputJsonValue
 
 export async function listMaterialCards(query: MaterialCardListQuery) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const where: Prisma.MaterialCardWhereInput = {
     userId: user.id,
     ...(query.includeArchived ? {} : { archivedAt: null }),
@@ -29,12 +29,12 @@ export async function listMaterialCards(query: MaterialCardListQuery) {
 }
 
 export async function getMaterialCard(cardId: string, includeArchived = true) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.materialCard.findFirst({ where: { id: cardId, userId: user.id, ...(includeArchived ? {} : { archivedAt: null }) }, include: cardInclude })
 }
 
 export async function createMaterialCard(input: CreateMaterialCardInput, legacySourceKey?: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   return prisma.$transaction(async (tx) => {
     const card = await tx.materialCard.create({
       data: {
@@ -54,7 +54,7 @@ export async function createMaterialCard(input: CreateMaterialCardInput, legacyS
 }
 
 export async function updateMaterialCard(cardId: string, input: UpdateMaterialCardInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const existing = await prisma.materialCard.findFirst({ where: { id: cardId, userId: user.id, archivedAt: null } })
   if (!existing) return null
   return prisma.$transaction(async (tx) => {
@@ -71,22 +71,32 @@ export async function updateMaterialCard(cardId: string, input: UpdateMaterialCa
   })
 }
 
-export async function addMaterialVariant(cardId: string, input: { name: string, content: string }) {
-  const user = await getLocalUser()
+export async function addMaterialVariant(cardId: string, input: SaveMaterialVariantInput) {
+  const user = await getCurrentUser()
   const card = await prisma.materialCard.findFirst({ where: { id: cardId, userId: user.id, archivedAt: null } })
   if (!card) return null
   return prisma.$transaction(async (tx) => {
+    const existing = await tx.materialCardVariant.findUnique({ where: { cardId_name: { cardId, name: input.name } } })
+    if (existing) {
+      if (!input.overwrite) return { action: 'exists' as const, variant: existing }
+      const variant = await tx.materialCardVariant.update({ where: { id: existing.id }, data: { content: input.content } })
+      const event = await tx.documentMutationEvent.create({ data: {
+        userId: user.id, type: DocumentMutationType.MATERIAL_UPDATED, entityType: 'MaterialCardVariant', entityId: variant.id,
+        payload: json({ cardId, name: variant.name, action: 'overwritten' }),
+      } })
+      return { action: 'overwritten' as const, variant, eventId: event.id }
+    }
     const variant = await tx.materialCardVariant.create({ data: { cardId, name: input.name, content: input.content } })
     const event = await tx.documentMutationEvent.create({ data: {
       userId: user.id, type: DocumentMutationType.MATERIAL_VARIANT_CREATED, entityType: 'MaterialCardVariant', entityId: variant.id,
       payload: json({ cardId, name: variant.name }),
     } })
-    return { variant, eventId: event.id }
+    return { action: 'created' as const, variant, eventId: event.id }
   })
 }
 
 export async function archiveMaterialCard(cardId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const card = await prisma.materialCard.findFirst({ where: { id: cardId, userId: user.id, archivedAt: null } })
   if (!card) return null
   return prisma.$transaction(async (tx) => {
@@ -99,7 +109,7 @@ export async function archiveMaterialCard(cardId: string) {
 }
 
 export async function deleteMaterialCard(cardId: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const card = await prisma.materialCard.findFirst({ where: { id: cardId, userId: user.id }, select: { id: true, title: true } })
   if (!card) return null
   return prisma.$transaction(async (tx) => {

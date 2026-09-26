@@ -4,7 +4,7 @@ import type { Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { CompositionInput } from '../schemas/document-composition'
 import { createApplicationProfileVersion, createComposedResumeVersion } from './document-composition.service'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 
 type Target = { id: string, kind: 'RESUME' | 'APPLICATION_PROFILE', currentVersionId: string, title: string, reason: 'DIRECT_REFERENCE' | 'TAG_MATCH' }
 type TokenPayload = { cardId: string, variantId: string, mode: 'SYNC' | 'APPEND', targets: Target[], exp: number }
@@ -28,7 +28,7 @@ function verify(token: string): TokenPayload | null {
 }
 
 export async function previewMaterialImpact(cardId: string, mode: 'SYNC' | 'APPEND', targetTags: string[]) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const card = await prisma.materialCard.findFirst({
     where: { id: cardId, userId: user.id, archivedAt: null },
     include: { variants: { orderBy: { createdAt: 'desc' }, take: 1 } },
@@ -79,7 +79,7 @@ function cloneComposition(composition: { fieldVisibility: unknown, config: unkno
 }
 
 export async function confirmMaterialSync(cardId: string, token: string, idempotencyKey: string, targetIds: string[]) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const existing = await prisma.documentMutationEvent.findUnique({ where: { userId_idempotencyKey: { userId: user.id, idempotencyKey } } })
   if (existing) return { replayed: true, results: (existing.payload as { results?: unknown[] } | null)?.results ?? [] }
   const payload = verify(token)

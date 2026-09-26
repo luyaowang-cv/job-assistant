@@ -23,8 +23,8 @@
 
 - 所有业务 API 位于 `/api/v1`。
 - 所有输入使用 Zod 校验；不要相信插件或浏览器传入的字段。
-- F-001 单用户本地模式下，服务端使用固定 local user；客户端不得指定 `userId`。
-- 后续接入认证后，用户身份改由服务端会话取得，调用方仍不得指定 `userId`。
+- 用户身份由服务端会话（httpOnly cookie）取得，调用方不得指定 `userId`。
+- 未登录访问 `/api/v1/**` 返回 `401 UNAUTHENTICATED`；认证接口位于 `/api/auth/**`，无需鉴权。
 
 ## 响应
 
@@ -38,6 +38,22 @@
 - 插件使用与 Web 相同的 API 与授权机制。
 - 创建、更新、删除状态必须在服务端生成 `ApplicationEvent`。
 - Agent 工具调用 API 服务层，不绕过鉴权与事件记录。
+
+## F-042 Auth API
+
+认证端点由 better-auth 提供，位于 `/api/auth/**`，包含邮箱注册、邮箱登录、退出与读取当前会话。注册与登录输入 `email`/`password`；会话接口返回当前登录用户或 null。
+
+- 会话使用 httpOnly、SameSite cookie，客户端 JS 不可读。
+- 认证接口不回传密码哈希或任何明文密钥。
+- 除 `/api/auth/**` 外，所有 `/api/v1/**` 未登录一律返回 `401 UNAUTHENTICATED`。
+- `PUT /api/v1/ai-settings` 可额外接受可选 `apiKey`（服务端加密存储）；`GET /api/v1/ai-settings` 仅返回 `apiKeyConfigured`，永不返回明文。
+
+## F-043 公开注册与岗位库写权限
+
+- `POST /api/auth/sign-up/email` 为公开注册接口，输入 `email` / `password` / 可选 `name`（映射 displayName）。是否开放由服务端环境变量 `ALLOW_PUBLIC_SIGNUP` 控制，关闭时注册接口拒绝；本次不验证邮箱。
+- `GET /api/signup-config` 为公开只读接口，返回 `{ enabled: boolean }`，供登录页决定是否显示注册入口。
+- `GET /api/v1/me` 返回当前登录用户 `{ id, email, displayName, isAdmin }`；`isAdmin` 由环境变量 `ADMIN_EMAILS`（逗号分隔邮箱）判定。
+- 岗位库写接口（`POST /api/v1/jobs/imports/feishu`、`POST /api/v1/jobs/imports/excel`、`POST /api/v1/jobs/:id/offline`、`DELETE /api/v1/jobs`）仅管理员可调用，非管理员返回 `403 FORBIDDEN`；`POST /api/v1/jobs/:id/application` 仍对任意登录用户开放（按用户创建投递）。
 
 ## F-002 Job Evaluation API
 
@@ -146,32 +162,36 @@
 | Method | Path | Input | Success data |
 |---|---|---|---|
 | GET | `/api/v1/jobs` | `page`, `pageSize`, `search`, `location`, `industry`, `companyType`, `recruitmentType`, `hasWrittenTest`, `includeOffline` | `{ items, page, pageSize, total, filters }` |
-| POST | `/api/v1/jobs/imports/feishu` | `{ shareUrl }` | `{ created, updated, offlined, skipped, total }` |
+| POST | `/api/v1/jobs/imports/feishu` | `{ shareUrl }` | `{ created, updated, offlined, skipped, total, mode, cutoffAt? }` |
 | POST | `/api/v1/jobs/:id/application` | path `id` | `{ application, created }` |
+| POST | `/api/v1/jobs/:id/offline` | path `id` | `{ id, offlineAt, manualOfflineAt }` |
 
 - 所有输入均由 Zod 校验。浏览器仅提供飞书公开分享链接，不得传入来源行、userId、飞书凭据、时间戳或投递状态。
 - 飞书凭据只存在于服务端环境变量。凭据缺失、来源无法读取或任一行校验失败时导入返回明确错误且不写入数据库。导入在一个最长三分钟的数据库事务内执行，保证失败时不留下半同步数据。
 - 搜索匹配公司名称与岗位名称；location / industry / companyType / recruitmentType 筛选为包含匹配（不区分大小写）；hasWrittenTest 支持 true / false / null（null 表示未标注）；`includeOffline` 默认 false；每次查询都返回分页元数据。
+- 默认岗位列表同时排除来源下线 `offlineAt` 与用户手动下线 `manualOfflineAt`；`includeOffline=true` 返回两类下线记录。手动下线在事务中写入 Job 与 `JOB_MANUALLY_OFFLINED` 审计事件，飞书同步不得清空该字段。
 - 导入仅返回统计，不返回凭据或分享链接；只映射 F-020 明确字段，绝不持久化薪资列。
 - 转投递检查当前 local user 并事务性创建投递/事件。已存在投递的重复请求幂等，返回 `created: false`。
+- 首次同步来源为 FULL；已配置 Bitable 来源的后续同步为 INCREMENTAL，通过飞书记录自动字段 `last_modified_time` 仅查询上次成功同步前一分钟以来的记录。INCREMENTAL 响应的 `offlined` 固定为 0，且不得修改 `manualOfflineAt`。
 
 ## F-020 飞书 OAuth API
 
 | Method | Path | Input | Success data |
 |---|---|---|---|
-| GET | `/api/v1/integrations/feishu` | 无 | `{ connected, expiresAt?, scopes }` |
+| GET | `/api/v1/integrations/feishu` | 无 | `{ connected, expiresAt?, scopes, autoSync }` |
 | GET | `/api/v1/integrations/feishu/authorize` | 无 | 302 跳转至飞书授权页 |
 | GET | `/api/v1/integrations/feishu/callback` | 飞书的 `code`、`state` | 持久化授权后 302 回 `/jobs?feishu=connected` |
 | DELETE | `/api/v1/integrations/feishu` | 无 | `{ disconnected: true }` |
 
-- 授权 scope 固定为 `bitable:app:readonly offline_access`。`bitable:app:readonly` 已覆盖多维表格、数据表与记录的查看/评论/导出读取能力；OAuth state 必须签名并限时校验，回调 code 只能在服务器端用 App Secret 交换。
+- 授权 scope 固定为 `bitable:app:readonly wiki:wiki wiki:wiki:readonly wiki:node:read drive:export:readonly offline_access`。多维表格 scope 用于读取 Bitable，Wiki scopes 用于解析 Wiki 节点，导出 scope 用于将 `resource_type=bitable` 的 Sheet 容器只读导出为 XLSX；OAuth state 必须签名并限时校验，回调 code 只能在服务器端用 App Secret 交换。
 - 岗位同步仅使用当前 local user 的有效 `user_access_token`；access token 到期时服务器用已加密的 refresh token 刷新并轮换保存。用户授权满 365 天或 refresh 失败时，返回重新连接指引。
+- `autoSync` 是只读状态：`{ enabled, timeZone: 'Asia/Shanghai', scheduledTime: '08:00', sources[] }`。每个 source 只返回 id、sourceType、最近成功/自动同步/尝试时间、最近错误及是否正在同步；不返回分享链接、来源 token 或 OAuth 信息。Bitable 来源由常驻服务在每日 08:00 自动增量同步；服务器在 08:00 后启动且当天未执行时补跑一次。
 
 ## F-001 Application API
 
 | Method | Path | Input | Success data |
 |---|---|---|---|
-| GET | `/api/v1/applications` | `page`、`pageSize`、`search`、`status`、`channel` | `{ items, page, pageSize, total }` |
+| GET | `/api/v1/applications` | `page`、`pageSize`、`search`、`status`、`channel`、`view?` | `{ items, page, pageSize, total }` |
 | POST | `/api/v1/applications` | Company、Job 与 Application 创建字段；必须含 `companyName`、`jobTitle`、`status` | 含 Job 与 Company 的 Application |
 | GET | `/api/v1/applications/:id` | 路径 `id` | 含 Job、Company、按时间倒序 Events 的 Application |
 | PATCH | `/api/v1/applications/:id` | 可编辑的 Company、Job、Application 字段 | 更新后的 Application |
@@ -192,7 +212,7 @@
 |---|---|---|
 | GET/POST | `/api/v1/material-cards` | 分页搜索/筛选；创建 card 与首个 variant |
 | GET/PATCH | `/api/v1/material-cards/:id` | 读取；更新 title/tags/facts |
-| POST | `/api/v1/material-cards/:id/variants` | 创建不可变命名 variant |
+| POST | `/api/v1/material-cards/:id/variants` | 创建命名 variant；仅 `overwrite=true` 可覆盖同名版本正文 |
 | POST | `/api/v1/material-cards/:id/archive` | 归档 card |
 | POST | `/api/v1/material-migrations/application-profiles/:id/preview` | 只读生成 legacy 候选 |
 | POST | `/api/v1/material-migrations/application-profiles/:id/confirm` | 导入明确选中的 sourceKey |
@@ -250,3 +270,44 @@
 - 复盘分析仅接受用户提供的录音文字内容（`transcript`，≤50,000 字符），产品不做音频文件上传或转写。
 - 导出 Markdown 仅接受已持久化且归属当前用户的 `InterviewRecord`，不创建/更新记录或事件。
 - AI 失败沿用 `AI_KEY_NOT_CONFIGURED` / `AI_PROVIDER_UNAVAILABLE` / `AI_PROVIDER_ERROR` / `AI_PROVIDER_INVALID_RESPONSE`。
+
+## F-032 插件完整填写与简历选择
+
+- `GET /api/v1/applications` 返回的 Application 继续包含 `job.url`；该 URL 是投递看板“投递”操作的唯一数据源，岗位库转换和插件创建不得另存一份链接副本。
+- `GET /api/v1/resumes` 供插件列出当前用户可用的 ResumeVersion；插件只在用户选择版本并点击生成后，将该版本 `content` 提交给既有材料 preview API。
+- `GET /api/v1/application-profiles/:id/fill-context` 的 legacy 回退必须包含 basics、educations、strategy、workExperiences、projects、skills、languages、certificates、campusExperiences、awards 与关联 ResumeVersion；组合版本返回 resolved blocks/references。
+- `POST /api/v1/form-fill/preview` 可接收空白、可编辑的 input、textarea、date/month 等日期输入、select、radio-group 和 custom-select descriptor，并允许项目、实习/工作、校园经历、自我评价和长描述字段。服务端仍拒绝密码、验证码、文件上传、支付/银行卡和同意声明字段。
+- AI 只能使用所选网申档案的 resolved context，不得编造事实；输出仍限制为请求中已声明的 fieldId，并经 Zod 校验。
+
+## F-033 网申档案到岗时间说明
+
+- ApplicationProfile 的 `strategy.availableDate` 是可选到岗时间说明，接受 `YYYY-MM-DD` 等具体日期，也接受“可立即到岗”“一个月内到岗”等用户原文，trim 后最多 80 字符。
+- 空字符串与 null 归一化为未填写。该规则不影响 educations、workExperiences、projects、campusExperiences 的结构化日期字段。
+
+## F-034 上下文感知表单填写
+
+- `GET /api/v1/application-profiles/:id/fill-context` 优先使用档案显式绑定的 ResumeVersion；未绑定时只读回退当前 User 的 BASE ResumeVersion，不修改 ApplicationProfile。
+
+## F-035 岗位与投递详情字段
+
+- `GET /api/v1/jobs` 的岗位项包含 `referralCode`、`applicationNotes`，关联 Company 包含 `description`；现有筛选查询参数保持后端兼容，但岗位库 UI 不再发送 industry、recruitmentType、hasWrittenTest。可选 `updatedSort=asc|desc` 按 `sourceUpdatedAt` 排序，默认 desc，空值始终置后。
+- Excel/飞书岗位导入可接收内推码、投递注意事项、公司介绍；所有字段经 Zod trim/限长，缺失值保存为 null。
+- 飞书导入同时接受 `/base/{appToken}` 与 `/wiki/{wikiToken}` 链接；Wiki 链接通过当前用户授权调用 Wiki node API。节点为 Bitable 时读取记录 API；节点为 Sheet 且子资源是 Bitable 时创建只读 XLSX 导出任务，下载到内存后按表头解析，不持久化导出文件。`TfJkwz7yIil5qvktSKOcBJj8nFd` 数据源不应用届次/批次过滤。
+- 导入记录的企业名称若以含明确月日的半角或全角括号结尾，则去除该日期括号作为 Company.name，并在没有独立更新时间时以同步年份补全 `sourceUpdatedAt`；非日期括号保持原文。
+- 导出任务轮询以 `result.file_token` 作为完成信号；`job_status=0` 为成功，`job_error_msg=success` 不视为错误。
+- `POST /api/v1/applications` 与 `PATCH /api/v1/applications/:id` 分别通过 `referralCode`、`applicationNotes`、`companyDescription` 写入对应 Job/Company；PATCH 的写入继续生成 UPDATE ApplicationEvent。
+- `GET /api/v1/applications` 与 `GET /api/v1/applications/:id` 通过关联 Job/Company 返回新增字段，不新增独立详情 API；列表可选 `updatedSort=asc|desc` 按 `Application.updatedAt` 排序，默认 desc。
+- `POST /api/v1/form-fill/preview` 的模型上下文压缩为 basics、educations、strategy、experiences、非空 sections、resumeContent 和 legacy 分类字段；composition id、计数和审计元数据不进入 prompt。
+- descriptor.context 可携带不含页面已有值的字段顺序、同名序号和相邻标签；仍不得提交页面输入值、DOM 或 HTML。
+
+## F-040 投递看板连续拖拽排序
+
+- `GET /api/v1/applications` 增加可选查询参数 `view=kanban`，与既有 `search`、`status`、`channel`、`updatedSort` 共同经 Zod 校验。普通请求继续按 `page` / `pageSize` 分页；`view=kanban` 返回当前用户全部未软删除且匹配筛选条件的 Application，不应用这两个分页参数的截断。
+- 两种模式都使用 `{ items, page, pageSize, total }` 响应。看板模式固定返回 `page=1`，`pageSize=items.length`，让客户端不必拼接多页数据；列表模式保持既有分页元数据。
+- 看板卡片拖拽仍调用既有 `PATCH /api/v1/applications/:id/status` 并写入 `STATUS_CHANGED` ApplicationEvent。客户端可先把卡片插入目标列顶部，成功后必须以 API 返回记录更新本地状态；失败时恢复本次拖拽前的列与顺序。
+
+## F-041 素材文案版本确认覆盖
+
+- `POST /api/v1/material-cards/:id/variants` 接受严格输入 `{ name, content, overwrite?: boolean }`。`overwrite` 默认 `false`；同一卡片同名版本在默认模式返回 `409 MATERIAL_VARIANT_NAME_EXISTS`，不修改任何数据。
+- 只有用户明确提交 `overwrite=true` 时，服务端才可更新该当前用户、未归档卡片下同名 `MaterialCardVariant` 的 `content`。响应返回 `{ action: 'overwritten', variant, eventId }`，且保持原 variant ID、名称和所有 DocumentCardReference 不变；不存在同名版本时仍创建并返回 `action: 'created'`。
+- 覆盖请求和创建请求都必须经 Zod 校验。覆盖成功写入 `MATERIAL_UPDATED` 事件，`entityType=MaterialCardVariant`；payload 只含 cardId、版本名称和 `action: 'overwritten'`，不得包含文案正文。

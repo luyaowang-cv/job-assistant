@@ -1,5 +1,20 @@
 # F-005 Browser Extension Contract
 
+## F-032 工作台数据驱动更新
+
+- 插件中的“网申档案”选择器直接使用工作台 `GET /api/v1/application-profiles` 结果；不维护插件私有档案或裁剪版档案。
+- 用户点击“AI 填写”后，插件读取所选档案的 resolved fill-context，并将当前页面全部空白、可编辑且可程序化处理的字段 descriptor 交给本地规则或服务端 AI。项目、实习/工作、校园经历、自我评价、日期、描述、普通单选和单选下拉不得因类别而被前置排除。
+- 页面已有值不覆盖；密码、验证码、文件上传、支付/银行卡和同意声明仍不扫描进 AI 请求。AI 不得补造档案没有的事实，未解析字段进入结果报告。
+- 打招呼模块必须展示工作台 ResumeVersion 选择器，不展示“粘贴简历文本”。用户选择版本并点击生成后，插件使用该版本已保存 content 调用既有 Application Materials preview。
+- 读取并保存当前岗位时，当前页有效 HTTP(S) URL 写入 Application API 的 `jobUrl`；该值随后作为 Job.url 在投递看板显示。
+
+## F-034 重复字段与 Universe Design 控件
+
+- 扫描结果按页面 DOM 控件顺序返回。descriptor.context 可包含页面序号、同名标签序号和前后相邻字段标签，帮助 AI 区分多组“起止时间”“描述”“公司名称”。
+- `.ud__select`、`.el-select` 与只读 ARIA combobox 作为 custom-select 处理；未禁用的 UD 控件不得被硬编码标记为不可编辑。
+- custom-select 仅点击唯一精确文本匹配的可见 option；没有唯一匹配时不操作并进入报告。
+- 一次填写中先应用 radio/custom-select，再应用普通文本。初始 disabled 的 descriptor 可发送给 AI；应用时仍禁用且未被前序选择解锁则报告不可用。
+
 ## Permissions and activation
 
 - The Chromium extension uses only `activeTab`, `scripting`, `clipboardWrite`, and the local workbench host permission `http://127.0.0.1:3000/*`.

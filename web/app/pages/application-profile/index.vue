@@ -22,6 +22,9 @@ const blocks = ref<Block[]>([
   { key: 'projects', title: '项目经历', fields: [{ key: 'project1', label: '项目经历 1', text: '', limit: 2000 }] },
   { key: 'campus', title: '校园经历', fields: [{ key: 'campus1', label: '校园经历 1', text: '', limit: 1000 }] },
   { key: 'internship', title: '实习经历', fields: [{ key: 'internship1', label: '实习经历 1', text: '', limit: 2000 }] },
+  { key: 'research', title: '科研经历', fields: [{ key: 'research1', label: '科研经历 1', text: '', limit: 2000 }] },
+  { key: 'awards', title: '荣誉奖项', fields: [{ key: 'award1', label: '荣誉奖项 1', text: '', limit: 1000 }] },
+  { key: 'certificates', title: '证书', fields: [{ key: 'certificate1', label: '证书 1', text: '', limit: 1000 }] },
 ])
 const fieldRefs = reactive<Record<string, { cardId: string; variantId: string }>>({})
 const migrationOpen = ref(false)
@@ -32,7 +35,8 @@ const legacyCount = computed(() => {
   return item ? item.workExperiences.length + item.projects.length + item.skills.length + item.campusExperiences.length + item.awards.length + item.certificates.length + item.languages.length : 0
 })
 const selectedCard = (fieldKey: string) => cards.value.find(card => card.id === fieldRefs[fieldKey]?.cardId)
-const typeLabels: Record<string, string> = { PROJECT: '项目经历', INTERNSHIP: '实习经历', WORK: '工作经历', CAMPUS: '校园经历', AWARD: '荣誉奖项', SKILL: '专业技能', SELF_EVALUATION: '自我评价', CUSTOM_ANSWER: '自定义问答' }
+const typeLabels: Record<string, string> = { PROJECT: '项目经历', INTERNSHIP: '实习经历', WORK: '工作经历', CAMPUS: '校园经历', AWARD: '荣誉奖项', RESEARCH: '科研经历', CERTIFICATE: '证书', SKILL: '专业技能', SELF_EVALUATION: '自我评价', CUSTOM_ANSWER: '自定义问答' }
+const displayCardTitle = (card: Pick<Card, 'title' | 'type'>) => card.title.trim() || typeLabels[card.type] || '未命名素材'
 function cardPeriod(card: Card) {
   return [card.facts.startDate, card.facts.endDate].filter(value => typeof value === 'string' && value).join(' — ')
 }
@@ -129,12 +133,18 @@ async function saveProfile() {
     selectedId.value = response.data.id
     await load()
     ElMessage.success('档案身份与策略已保存。')
-  } catch { ElMessage.error('档案保存失败。') } finally { saving.value = false }
+  }
+  catch (error) {
+    const details = (error as { data?: { error?: { details?: Array<{ message?: string }> } } })?.data?.error?.details
+    ElMessage.error(details?.[0]?.message || '档案保存失败。')
+  }
+  finally { saving.value = false }
 }
 function chooseCard(field: Field, cardId: string) {
   const card = cards.value.find(item => item.id === cardId)
   if (!card?.variants[0]) { Reflect.deleteProperty(fieldRefs, field.key); return }
-  fieldRefs[field.key] = { cardId, variantId: card.variants[0].id }
+  const variant = card.variants.find(item => item.name === '网申版') ?? card.variants[0]
+  fieldRefs[field.key] = { cardId, variantId: variant.id }
 }
 function setVariant(fieldKey: string, variantId: string) {
   const reference = fieldRefs[fieldKey]
@@ -177,7 +187,7 @@ onMounted(() => void load())
     <div class="application-editor__layout">
       <aside class="material-surface profile-sidebar">
         <h2>网申档案</h2><el-select :model-value="selectedId" placeholder="选择档案" @update:model-value="id => setProfile(profiles.find(item => item.id === id))"><el-option v-for="item in profiles" :key="item.id" :label="item.name" :value="item.id" /></el-select>
-        <el-form label-position="top"><el-form-item label="名称"><el-input v-model="profile.name" /></el-form-item><el-form-item label="标签"><el-select v-model="profile.targetTags" multiple filterable allow-create /></el-form-item><el-form-item label="期望地点"><el-select v-model="profile.strategy.targetLocations" multiple filterable allow-create /></el-form-item><el-form-item label="期望薪资"><el-input v-model="profile.strategy.expectedSalary" /></el-form-item><el-form-item label="可到岗日期"><el-input v-model="profile.strategy.availableDate" placeholder="YYYY-MM-DD" /></el-form-item><el-form-item label="招聘来源"><el-input v-model="profile.strategy.recruitmentSource" /></el-form-item><el-form-item label="内推码"><el-input v-model="profile.strategy.referralCode" /></el-form-item></el-form>
+        <el-form label-position="top"><el-form-item label="名称"><el-input v-model="profile.name" /></el-form-item><el-form-item label="标签"><el-select v-model="profile.targetTags" multiple filterable allow-create /></el-form-item><el-form-item label="期望地点"><el-select v-model="profile.strategy.targetLocations" multiple filterable allow-create /></el-form-item><el-form-item label="期望薪资"><el-input v-model="profile.strategy.expectedSalary" /></el-form-item><el-form-item label="可到岗时间"><el-input v-model="profile.strategy.availableDate" maxlength="80" placeholder="例如：可立即到岗、一个月内或 2026-09-01" /></el-form-item><el-form-item label="招聘来源"><el-input v-model="profile.strategy.recruitmentSource" /></el-form-item><el-form-item label="内推码"><el-input v-model="profile.strategy.referralCode" /></el-form-item></el-form>
         <el-alert v-if="legacyCount" type="info" :closable="false" :title="`检测到 ${legacyCount} 项历史内容`"><el-button text type="primary" @click="previewMigration">预览迁移</el-button></el-alert>
       </aside>
       <main class="material-surface structured-form">
@@ -185,10 +195,10 @@ onMounted(() => void load())
         <section v-for="block in blocks" :key="block.key" class="profile-block"><div class="profile-block__heading"><h3>{{ block.title }}</h3><el-button text @click="addField(block)">＋ 字段</el-button></div>
           <div v-for="field in block.fields" :key="field.key" class="profile-field">
                         
-            <div class="field-material"><el-select :model-value="fieldRefs[field.key]?.cardId" clearable placeholder="插入素材卡片" @update:model-value="value => chooseCard(field, value)"><el-option v-for="card in cards" :key="card.id" :label="card.title" :value="card.id" /></el-select>
+            <div class="field-material"><el-select :model-value="fieldRefs[field.key]?.cardId" clearable placeholder="插入素材卡片" @update:model-value="value => chooseCard(field, value)"><el-option v-for="card in cards" :key="card.id" :label="displayCardTitle(card)" :value="card.id" /></el-select>
               <el-select v-if="selectedCard(field.key)" :model-value="fieldRefs[field.key]?.variantId" placeholder="文案版本" @update:model-value="value => setVariant(field.key, value)"><el-option v-for="item in selectedCard(field.key)?.variants" :key="item.id" :label="item.name" :value="item.id" /></el-select></div>
             <div v-if="selectedCard(field.key)" class="material-card-preview">
-              <div class="preview-head"><span>{{ typeLabels[selectedCard(field.key)!.type] }}</span><strong>{{ selectedCard(field.key)!.title }}</strong></div>
+              <div class="preview-head"><span>{{ typeLabels[selectedCard(field.key)!.type] }}</span><strong>{{ displayCardTitle(selectedCard(field.key)!) }}</strong></div>
               <span v-if="cardMeta(selectedCard(field.key)!)" class="preview-meta">{{ cardMeta(selectedCard(field.key)!) }}</span>
               <span v-if="cardTechStack(selectedCard(field.key)!)" class="preview-tech">{{ cardTechStack(selectedCard(field.key)!) }}</span>
               <p v-if="selectedVariant(field.key)?.content" class="preview-content">{{ selectedVariant(field.key)!.content }}</p>

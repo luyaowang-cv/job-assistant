@@ -3,7 +3,7 @@ import { DocumentMutationType, type Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { VariantSuggestionPreviewInput } from '../schemas/resume-variant-suggestion'
 import { modelVariantSuggestionsSchema } from '../schemas/resume-variant-suggestion'
-import { getLocalUser } from './local-user'
+import { getCurrentUser } from './current-user'
 import { AiWorkflowError, callStructuredAi } from './openai-compatible-json.service'
 
 type Suggestion = { suggestionId: string, cardId: string, sourceVariantId: string, sourceContent: string, content: string, evidence: string[], warnings: string[] }
@@ -27,7 +27,7 @@ function hasInventedNumber(source: string, rewritten: string) {
 }
 
 export async function previewResumeVariantSuggestions(resumeId: string, input: VariantSuggestionPreviewInput) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const [resume, application, cards] = await Promise.all([
     prisma.resume.findFirst({ where: { id: resumeId, userId: user.id } }),
     prisma.application.findFirst({ where: { id: input.applicationId, userId: user.id, deletedAt: null }, include: { job: { include: { company: true } } } }),
@@ -68,7 +68,7 @@ export async function previewResumeVariantSuggestions(resumeId: string, input: V
 }
 
 export async function confirmResumeVariantSuggestions(resumeId: string, token: string, selectedIds: string[], idempotencyKey: string) {
-  const user = await getLocalUser()
+  const user = await getCurrentUser()
   const existing = await prisma.documentMutationEvent.findUnique({ where: { userId_idempotencyKey: { userId: user.id, idempotencyKey } } })
   if (existing) return { replayed: true, results: (existing.payload as { results?: unknown[] } | null)?.results ?? [] }
   const payload = verify(token)
