@@ -20,6 +20,13 @@ export function scanVisibleFormFields() {
     const text = normalizeLabel(element.textContent)
     return text && text.length <= 80 ? text : ''
   }
+  /**
+   * A split date control usually has nothing but the unit character beside it
+   * (“年”, “月”) or the range separator in front of it (“至”). Those are not
+   * labels: matched as one they name no column, and a model asked to fill a
+   * separator will gladly write something into it.
+   */
+  const isUselessLabel = (value) => /^(?:年|月|日|号|至|到|起|止|年月|年月日|[~～—–\-/\\、,，.。:：*·・]+)$/.test(normalizeLabel(value))
   const isLabelLike = (element) => {
     const className = typeof element?.className === 'string' ? element.className : ''
     return ['LABEL', 'TH'].includes(element?.tagName)
@@ -86,12 +93,17 @@ export function scanVisibleFormFields() {
     return containerText && containerText.length <= 60 ? containerText : ''
   }
   const adjacentLabel = (element) => {
+    const hasControl = (node) => Boolean(node.querySelector?.('input, textarea, select, [contenteditable="true"], button'))
     let cursor = element
     for (let level = 0; level < 3 && cursor?.parentElement; level += 1) {
       let sibling = cursor.previousElementSibling
       while (sibling) {
-        const text = shortVisibleText(sibling)
-        if (text && (isLabelLike(sibling) || text.length <= 40)) return text
+        // A sibling that holds another control is a previous field, not this
+        // one's label; reading it names the wrong box.
+        if (!hasControl(sibling)) {
+          const text = shortVisibleText(sibling)
+          if (text && (isLabelLike(sibling) || text.length <= 40) && !isUselessLabel(text)) return text
+        }
         sibling = sibling.previousElementSibling
       }
       cursor = cursor.parentElement
@@ -113,7 +125,7 @@ export function scanVisibleFormFields() {
       nearestContainerLabel(element),
       adjacentLabel(element),
       titleLabel(element),
-    ).find(Boolean) ?? ''
+    ).find(candidate => candidate && !isUselessLabel(candidate)) ?? ''
   }
   const contextFor = (element) => {
     const container = semanticContainerFor(element)

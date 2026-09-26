@@ -512,6 +512,10 @@ async function fillCurrentPage() {
       const entry = activeById.get(field.id)
       return !activeLocalAppliedIds.has(field.id)
         && entry?.category !== 'sensitive'
+        // The plan knows when a control names nothing, or when a repeating page
+        // block has no saved record behind it. Both are cases where a model can
+        // only invent, so neither reaches it.
+        && entry?.skipAi !== true
         && entry?.status !== 'skipped_existing'
         && !['checkbox'].includes(String(field.inputType ?? '').toLowerCase())
         && (String(field.inputType ?? '').toLowerCase() !== 'radio' || field.controlType === 'radio-group')

@@ -405,6 +405,11 @@ function fieldIdentityText(field) {
   return [field.label, field.name, field.placeholder].map(normalizeText).filter(Boolean).join(' | ')
 }
 
+/** Whether anything at all names this control. */
+function hasFieldIdentity(field) {
+  return [field.label, field.name, field.placeholder].some(value => normalizeText(value))
+}
+
 function signalsFor(field) {
   const visible = [field.label, field.placeholder].map(normalizeLabel).filter(Boolean)
   const attributes = [field.name].map(normalize).filter(Boolean)
@@ -711,6 +716,14 @@ export function buildFillPlan(profile, fields) {
       decisions.set(field, { entry: baseEntry(field, 'unknown', 'needs_manual', '字段缺少稳定标识，无法安全填写。') })
       continue
     }
+    // A control whose only label was a unit character or a range separator has
+    // no identity left once that is filtered out. Nothing can decide what goes
+    // in it, and handing it to a model turns an unfillable box into an invented
+    // one — a separator box that comes back with a value in it.
+    if (!hasFieldIdentity(field)) {
+      decisions.set(field, { entry: { ...needsManual(field, 'unlabeled', '这个控件没有任何可识别的标签，无法判断它该填什么。'), skipAi: true } })
+      continue
+    }
     const category = classifyField(field)
     if (category === 'sensitive') {
       decisions.set(field, { entry: baseEntry(field, category, 'skipped_sensitive', '敏感字段或上传控件不会填写。') })
@@ -750,9 +763,23 @@ export function buildFillPlan(profile, fields) {
     const isRepeatable = Boolean(rule.collection)
     let recordIndex = 0
     if (isRepeatable) {
-      recordIndex = resolveRecordIndex(candidate, recordsFor(context, rule) ?? [], claimed)
+      const records = recordsFor(context, rule) ?? []
+      recordIndex = resolveRecordIndex(candidate, records, claimed)
       if (recordIndex === null) {
-        return needsManual(field, category, '页面中的重复区块多于档案中的记录条数，此字段需要人工确认。', rule.key)
+        // The profile documents this section and every record is spoken for, so
+        // this block asks for an entry that does not exist. The model has
+        // nothing to draw on and would invent one — a third degree for someone
+        // who has two — so it is not asked.
+        if (records.length > 0) {
+          return {
+            ...needsManual(field, category, '页面中的重复区块多于档案中的记录条数，此字段需要人工确认。', rule.key),
+            skipAi: true,
+          }
+        }
+        // The section is absent from the profile altogether. We know nothing
+        // about this part of the applicant's history, so the resume in the
+        // model's evidence remains the only source and it is still asked.
+        return needsManual(field, category, '所选资料档案没有该字段的可用内容。', rule.key)
       }
     }
     const dedupeKey = isRepeatable ? `${rule.key}#${recordIndex}` : rule.key

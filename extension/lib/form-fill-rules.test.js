@@ -402,6 +402,43 @@ test('accepts a page that reformats what was written as a successful fill', () =
   assert.match(source, /actual\.includes\(wanted\) \|\| wanted\.includes\(actual\)/)
 })
 
+test('refuses a control that has nothing left to identify it', () => {
+  // A split date control's label comes back as the unit character beside it
+  // (“年”, “至”), and the scan filters those out. What remains names nothing,
+  // so neither the rule table nor the model should answer it.
+  const plan = buildFillPlan(profile, [{ id: 'separator', label: '', name: '', placeholder: '' }])
+
+  assert.equal(plan.entries[0].status, 'needs_manual')
+  assert.equal(plan.entries[0].category, 'unlabeled')
+  assert.equal(plan.entries[0].reason, '这个控件没有任何可识别的标签，无法判断它该填什么。')
+  // The popup skips anything the plan marked, so a model never sees it.
+  assert.equal(plan.entries[0].skipAi, true)
+})
+
+test('does not ask the model about a page block with no saved record behind it', () => {
+  const localProfile = {
+    educations: [{ school: 'A 大学', educationLevel: '本科', endDate: '2025-06-30' }],
+  }
+  const plan = buildFillPlan(localProfile, [
+    { id: 'level-1', label: '学历', controlType: 'input', inputType: 'text' },
+    { id: 'level-2', label: '学历', controlType: 'input', inputType: 'text' },
+  ])
+
+  assert.equal(plan.entries[0].status, 'filled')
+  // One saved education, two page blocks: the second has no facts behind it.
+  assert.equal(plan.entries[1].status, 'needs_manual')
+  assert.equal(plan.entries[1].skipAi, true)
+  assert.equal(plan.entries[1].reason, '页面中的重复区块多于档案中的记录条数，此字段需要人工确认。')
+})
+
+test('filters the stray unit characters a split date control sits next to', () => {
+  const source = scanVisibleFormFields.toString()
+  assert.match(source, /const isUselessLabel = /)
+  // A sibling that contains another control is a previous field, not a label.
+  assert.match(source, /const hasControl = /)
+  assert.match(source, /\.find\(candidate => candidate && !isUselessLabel\(candidate\)\)/)
+})
+
 test('does not mistake another tool’s tooltip for the field label', () => {
   // An autofill tool writes its status into `title` ("拾星已填写：姓名"). Reading
   // that as the label shadows the page's real one and shows up in the report.
