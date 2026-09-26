@@ -439,6 +439,69 @@ test('filters the stray unit characters a split date control sits next to', () =
   assert.match(source, /\.find\(candidate => candidate && !isUselessLabel\(candidate\)\)/)
 })
 
+test('reads a split date from the field name', () => {
+  const localProfile = {
+    educations: [{ school: 'A 大学', startDate: '2021-09', endDate: '2025-06' }],
+    workExperiences: [{ company: '甲公司', startDate: '2023-07', endDate: '2024-01' }],
+  }
+  // Frame works name these controls from the backend, and the name says which
+  // record, which end of the range, and which component — the visible label is
+  // often nothing but the unit character beside the box.
+  const plan = buildFillPlan(localProfile, [
+    { id: 'sy', name: 'RecruitmentPortalEducation_StartDate_Year', controlType: 'select', options: ['', '2020', '2021', '2022'] },
+    { id: 'sm', name: 'RecruitmentPortalEducation_StartDate_Month', controlType: 'select', options: ['', ...Array.from({ length: 12 }, (_, i) => String(i + 1))] },
+    { id: 'ey', name: 'RecruitmentPortalEducation_EndDate_Year', controlType: 'select', options: ['', '2024', '2025'] },
+    { id: 'em', name: 'RecruitmentPortalEducation_EndDate_Month', controlType: 'select', options: ['', ...Array.from({ length: 12 }, (_, i) => String(i + 1))] },
+    { id: 'wy', name: 'RecruitmentPortalWork_StartDate_Year', controlType: 'select', options: ['', '2023', '2024'] },
+    { id: 'wm', name: 'RecruitmentPortalWork_EndDate_Month', controlType: 'select', options: ['', ...Array.from({ length: 12 }, (_, i) => String(i + 1))] },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.status), Array(6).fill('filled'))
+  assert.deepEqual(plan.entries.map(entry => entry.target), [
+    'education.startDate', 'education.startDate',
+    'education.endDate', 'education.endDate',
+    'work.startDate', 'work.endDate',
+  ])
+  // Each box gets its own component, not the whole date.
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['2021', '9', '2025', '6', '2023', '1'])
+})
+
+test('does not repeat one saved record across two page blocks', () => {
+  const localProfile = { educations: [{ school: 'A 大学', startDate: '2021-09', endDate: '2025-06' }] }
+  const months = ['', ...Array.from({ length: 12 }, (_, index) => String(index + 1))]
+  const block = index => [
+    { id: `s${index}y`, name: 'RecruitmentPortalEducation_StartDate_Year', controlType: 'select', options: ['', '2021', '2025'] },
+    { id: `s${index}m`, name: 'RecruitmentPortalEducation_StartDate_Month', controlType: 'select', options: months },
+    { id: `e${index}y`, name: 'RecruitmentPortalEducation_EndDate_Year', controlType: 'select', options: ['', '2021', '2025'] },
+    { id: `e${index}m`, name: 'RecruitmentPortalEducation_EndDate_Month', controlType: 'select', options: months },
+  ]
+  const plan = buildFillPlan(localProfile, [...block(1), ...block(2)])
+
+  assert.deepEqual(plan.entries.slice(0, 4).map(entry => entry.value), ['2021', '9', '2025', '6'])
+  // One saved education, two page blocks: the second must not silently repeat it.
+  assert.deepEqual(plan.entries.slice(4).map(entry => entry.status), Array(4).fill('needs_manual'))
+  assert.ok(plan.entries.slice(4).every(entry => entry.skipAi === true))
+})
+
+test('leaves a split date part manual when no block can be identified', () => {
+  const plan = buildFillPlan({ educations: [{ startDate: '2021-09' }] }, [
+    { id: 'orphan', name: 'SomeWidget_StartDate_Month', controlType: 'select', options: ['', '9'] },
+  ])
+
+  assert.equal(plan.entries[0].status, 'needs_manual')
+  assert.equal(plan.entries[0].skipAi, true)
+  assert.equal(plan.entries[0].reason, '这是日期的一部分，但无法确定它属于哪一段档案记录。')
+})
+
+test('reads a date-format placeholder as one whole date, not as a split', () => {
+  const plan = buildFillPlan({ educations: [{ endDate: '2025-06' }] }, [
+    { id: 'full', label: '毕业时间', name: 'endDate', controlType: 'input', inputType: 'text', placeholder: 'YYYY-MM-DD' },
+  ])
+
+  assert.equal(plan.entries[0].status, 'filled')
+  assert.equal(plan.entries[0].value, '2025-06-30')
+})
+
 test('does not mistake another tool’s tooltip for the field label', () => {
   // An autofill tool writes its status into `title` ("拾星已填写：姓名"). Reading
   // that as the label shadows the page's real one and shows up in the report.

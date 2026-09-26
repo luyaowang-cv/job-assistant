@@ -243,6 +243,26 @@ function normalizeLabel(value) {
     .replace(/请输入|请选择|请填写|必填|选填|required/gi, '')
 }
 
+/**
+ * Splits a backend-generated identifier into words, so `name` values can be
+ * read rather than matched as one blob: `RecruitmentPortalEducation_StartDate_
+ * Month` becomes the words recruitment / portal / education / start / date /
+ * month. Frame works render these names, and they say what a control is when
+ * the visible label says almost nothing.
+ */
+function splitIdentifier(value) {
+  return String(value ?? '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_\-.[\]()]+/g, ' ')
+    .toLowerCase()
+}
+
+function identifierWords(field) {
+  return new Set(splitIdentifier(`${field?.name ?? ''} ${field?.label ?? ''} ${field?.placeholder ?? ''}`)
+    .split(' ')
+    .filter(Boolean))
+}
+
 function hasNonAscii(value) {
   return /[^\x00-\x7F]/.test(value)
 }
@@ -302,13 +322,18 @@ function lastDayOfMonth(year, month) {
  * start dates, the last for end dates), and a plain text box keeps whatever the
  * profile stored unless its placeholder asks for more.
  */
-function formatDateValue(value, field, rule) {
+function formatDateValue(value, field, rule, datePart = '') {
   const raw = normalizeText(value)
   const parts = parseDateParts(raw)
   if (!parts) return raw
+  const day = !parts.hasDay && rule?.endOfMonth ? lastDayOfMonth(parts.year, parts.month) : parts.day
+  // One box of a split date takes one component. Unpadded, because these boxes
+  // are almost always a select listing plain numbers.
+  if (datePart === 'year') return String(parts.year)
+  if (datePart === 'month') return String(parts.month)
+  if (datePart === 'day') return String(day)
   const inputType = String(field?.inputType ?? '').toLowerCase()
   const hint = normalize(`${field?.placeholder ?? ''} ${field?.label ?? ''}`)
-  const day = !parts.hasDay && rule?.endOfMonth ? lastDayOfMonth(parts.year, parts.month) : parts.day
   const full = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   const month = `${parts.year}-${String(parts.month).padStart(2, '0')}`
 
@@ -437,6 +462,16 @@ function detectSectionFromText(value) {
   return null
 }
 
+/** The block named by the field's own identifier words, if any. */
+function sectionFromIdentifier(field) {
+  const words = identifierWords(field)
+  if (!words.size) return null
+  for (const [section, aliases] of Object.entries(SECTION_ALIASES)) {
+    if (aliases.some(alias => words.has(alias))) return section
+  }
+  return null
+}
+
 /**
  * Infers the block a field belongs to. The field's own wording wins first, so a
  * “姓名” box inside an internship card is still basic; free-text wording wins
@@ -447,7 +482,45 @@ function inferSection(field, signals) {
   const own = normalize(`${signals.visible.join(' ')} ${signals.attributes.join(' ')}`)
   if (FREE_TEXT_OWN_WORDS.test(own)) return null
   if (BASIC_OWN_WORDS.test(own)) return 'basic'
-  return detectSectionFromText(own) ?? detectSectionFromText(contextTextFor(field))
+  return sectionFromIdentifier(field)
+    ?? detectSectionFromText(own)
+    ?? detectSectionFromText(contextTextFor(field))
+}
+
+const DATE_ROLE_WORDS = {
+  end: ['end', 'finish', 'until'],
+  start: ['start', 'begin', 'from', 'since'],
+}
+
+/** Which end of a date range a control holds. */
+function dateRoleOf(field) {
+  const words = identifierWords(field)
+  for (const [role, candidates] of Object.entries(DATE_ROLE_WORDS)) {
+    if (candidates.some(candidate => words.has(candidate))) return role
+  }
+  const text = normalize(`${field?.label ?? ''} ${field?.name ?? ''} ${field?.placeholder ?? ''}`)
+  if (/结束|截止|离职|毕业/.test(text)) return 'end'
+  if (/开始|起始|入学|入职|起止/.test(text)) return 'start'
+  return ''
+}
+
+/**
+ * Which component of a date a control holds, when the date is split across
+ * several boxes. Both a name that says so and the unit character written beside
+ * the box are read; a unit alone is only trusted for a control that also says
+ * which end of the range it is, so “工作年限 ___ 年” is not a year component.
+ */
+function datePartOf(field) {
+  // Read from the name only. A placeholder like `YYYY-MM-DD` names every
+  // component at once — it is a format hint for one full-date box, not evidence
+  // that the date is split.
+  const words = new Set(splitIdentifier(field?.name ?? '').split(' ').filter(Boolean))
+  if (words.has('year') || words.has('yyyy')) return 'year'
+  if (words.has('month')) return 'month'
+  if (words.has('day')) return 'day'
+  const unit = String(field?.dateUnit ?? '')
+  if (['year', 'month', 'day'].includes(unit) && dateRoleOf(field)) return unit
+  return ''
 }
 
 function contextSections(field) {
@@ -544,6 +617,18 @@ function scoreRule(rule, field, signals, sectionHint, descriptor, sections) {
 
 function bestRuleFor(field) {
   const signals = signalsFor(field)
+
+  // A date split across boxes is read by component, which also decides which
+  // end of the range it belongs to. This runs before scoring because the
+  // component is what the value has to be, and no full-date rule can supply it.
+  const part = datePartOf(field)
+  if (part) {
+    const section = inferSection(field, signals)
+    const role = dateRoleOf(field)
+    const rule = section && role ? RULES.find(item => item.key === `${section}.${role}Date`) : null
+    return { rule: rule ?? null, score: rule ? 1 : 0, datePart: part }
+  }
+
   const sectionHint = inferSection(field, signals)
   const descriptor = descriptorFor(field)
   const sections = contextSections(field)
@@ -630,6 +715,23 @@ function assignRecordIndices(candidates) {
       }
     }
 
+    // The year and month boxes of one range are one record, so they must not
+    // each consume an occurrence. When the page shows no anchor heading to
+    // group by, their own sequence does: a record ends when a component
+    // repeats (“StartDate_Year” after we have already seen one).
+    const seenParts = new Set()
+    let dateRecord = 0
+    for (const candidate of group) {
+      if (!candidate.datePart) continue
+      const partKey = `${candidate.rule.key}:${candidate.datePart}`
+      if (seenParts.has(partKey)) {
+        dateRecord += 1
+        seenParts.clear()
+      }
+      seenParts.add(partKey)
+      candidate.datePartIndex = dateRecord
+    }
+
     const occurrences = new Map()
     for (const candidate of group) {
       const seen = occurrences.get(candidate.rule.key) ?? 0
@@ -650,14 +752,25 @@ function assignRecordIndices(candidates) {
  * names the record that was used and nothing is ever submitted automatically.
  * Returns `null` only when the page repeats more blocks than the profile holds.
  */
+/** The claim a field takes on a record — its date component counts as part of it. */
+function claimKey(candidate, index) {
+  return `${candidate.rule.key}#${index}${candidate.datePart ? `#${candidate.datePart}` : ''}`
+}
+
 function resolveRecordIndex(candidate, records, claimed) {
   const usable = index => Number.isInteger(index) && index >= 0 && index < records.length
-  const candidates = [candidate.anchorIndex, candidate.occurrenceIndex].filter(usable)
+  // A date component is placed by the block it sits in, or by the part cycle;
+  // plain occurrence counting would hand the month box the next record.
+  const candidates = (candidate.datePart
+    ? [candidate.anchorIndex, candidate.datePartIndex]
+    : [candidate.anchorIndex, candidate.occurrenceIndex]).filter(usable)
   for (const index of candidates) {
-    if (!claimed.has(`${candidate.rule.key}#${index}`)) return index
+    if (!claimed.has(claimKey(candidate, index))) return index
   }
+  // Falling back to a record another field already read would repeat one
+  // education in two page blocks; better to report the block as unfilled.
   for (let index = 0; index < records.length; index += 1) {
-    if (!claimed.has(`${candidate.rule.key}#${index}`)) return index
+    if (!claimed.has(claimKey(candidate, index))) return index
   }
   return null
 }
@@ -674,7 +787,8 @@ export function classifyField(field) {
   const identity = fieldIdentityText(field)
   if (isSensitive(field)) return 'sensitive'
   const match = bestRuleFor(field)
-  if (match) return match.rule.section
+  // `rule` is null for a date component that could not be placed in a block.
+  if (match?.rule) return match.rule.section
   const inputType = String(field?.inputType ?? '').toLowerCase()
   if (['date', 'datetime-local', 'month', 'week', 'time'].includes(inputType) || /(?:日期|时间|date|time)/i.test(identity)) return 'date'
   return CATEGORY_PATTERNS.find(([, pattern]) => pattern.test(identity))?.[0] ?? 'unknown'
@@ -738,13 +852,22 @@ export function buildFillPlan(profile, fields) {
       continue
     }
     const match = bestRuleFor(field)
-    if (!match) {
+    if (!match?.rule) {
+      if (match?.datePart) {
+        // One component of a split date with no block to read from. Handing it
+        // to a model gets a whole date written into a year box, so it is named
+        // as what it is and left alone.
+        decisions.set(field, {
+          entry: { ...needsManual(field, 'date', '这是日期的一部分，但无法确定它属于哪一段档案记录。'), skipAi: true },
+        })
+        continue
+      }
       decisions.set(field, {
         entry: needsManual(field, category, category === 'unknown' ? '字段含义无法可靠确认。' : '字段未匹配到档案中的可用栏目。'),
       })
       continue
     }
-    candidates.push({ field, rule: match.rule, score: match.score })
+    candidates.push({ field, rule: match.rule, score: match.score, datePart: match.datePart })
   }
 
   // Pass 2: map repeating page blocks onto saved records, in page order.
@@ -782,7 +905,10 @@ export function buildFillPlan(profile, fields) {
         return needsManual(field, category, '所选资料档案没有该字段的可用内容。', rule.key)
       }
     }
-    const dedupeKey = isRepeatable ? `${rule.key}#${recordIndex}` : rule.key
+    // A date component claims its record together with its siblings, so the
+    // component belongs in the key: the year box and the month box of one
+    // record are not two boxes asking the same question.
+    const dedupeKey = isRepeatable ? claimKey(candidate, recordIndex) : rule.key
     // Only single-valued rules need this: a page with two “姓名” boxes gives no
     // way to tell which one the saved name belongs to.
     if (!isRepeatable && claimed.has(dedupeKey)) {
@@ -797,7 +923,7 @@ export function buildFillPlan(profile, fields) {
           : '所选资料档案没有该字段的可用内容。')
       return needsManual(field, category, reason, rule.key)
     }
-    const value = rule.date ? formatDateValue(rawValue, field, rule) : rawValue
+    const value = rule.date ? formatDateValue(rawValue, field, rule, candidate.datePart) : rawValue
     if (!value) return needsManual(field, category, '档案中的日期无法解析。', rule.key)
 
     const resolved = resolveOptionValue(value, field)
