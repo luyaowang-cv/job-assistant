@@ -50,15 +50,22 @@ export function scanVisibleFormFields() {
     }
     return null
   }
+  /**
+   * Labels the page declares about the control itself. `title` is deliberately
+   * not read here: it is a tooltip, and another autofill tool writes its own
+   * status text into it ("拾星已填写：姓名"), which would then be mistaken for
+   * the field's name and shadow the page's real label.
+   */
   const attributeLabelFor = (element) => {
     const fromData = ['data-field-label', 'data-label', 'data-title']
       .map(attribute => normalizeLabel(element.getAttribute(attribute)))
       .find(Boolean)
-    const title = normalizeLabel(element.getAttribute('title'))
     const describedBy = (element.getAttribute('aria-describedby') ?? '').split(/\s+/)
       .map(id => shortVisibleText(document.getElementById(id))).find(Boolean)
-    return fromData || title || describedBy || ''
+    return fromData || describedBy || ''
   }
+  /** Last resort only: a tooltip says less than the page's own layout does. */
+  const titleLabel = (element) => normalizeLabel(element.getAttribute('title'))
   const formilyMetadataLabel = (element) => {
     const container = formContainerFor(element)
     if (!container) return ''
@@ -105,6 +112,7 @@ export function scanVisibleFormFields() {
       attributeLabelFor(element),
       nearestContainerLabel(element),
       adjacentLabel(element),
+      titleLabel(element),
     ).find(Boolean) ?? ''
   }
   const contextFor = (element) => {
@@ -112,7 +120,20 @@ export function scanVisibleFormFields() {
     const text = shortVisibleText(container)
     return text && text !== labelFor(element) ? text.slice(0, 240) : ''
   }
-  const allControls = Array.from(document.querySelectorAll('input, textarea, select, [contenteditable="true"]'))
+  // Component libraries increasingly render inside a web component, where an
+  // ordinary document query cannot see the form at all. Walk open shadow roots
+  // breadth-first: a root can contain a host for the next one down.
+  const allRoots = () => {
+    const roots = [document]
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const node of roots[index].querySelectorAll('*')) {
+        if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot)
+      }
+    }
+    return roots
+  }
+  const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
+  const allControls = queryAll('input, textarea, select, [contenteditable="true"]')
   const customSelectFor = (element) => element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select')
     ?? (element.getAttribute('role') === 'combobox' ? element.closest('[role="combobox"]') ?? element : null)
   const radioGroupFor = (element) => {
@@ -228,7 +249,19 @@ export async function applyFillEntries(instructions) {
     const rect = element.getBoundingClientRect()
     return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
   }
-  const controls = Array.from(document.querySelectorAll('input, textarea, select, [contenteditable="true"]'))
+  // Mirrors the scan: the same open shadow roots must be walked so `form-field-N`
+  // still names the same control it named when the plan was built.
+  const allRoots = () => {
+    const roots = [document]
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const node of roots[index].querySelectorAll('*')) {
+        if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot)
+      }
+    }
+    return roots
+  }
+  const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
+  const controls = queryAll('input, textarea, select, [contenteditable="true"]')
     .map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden')
     .filter(({ element }) => !(element instanceof HTMLInputElement && element.type === 'radio'))
@@ -239,6 +272,18 @@ export async function applyFillEntries(instructions) {
   const skippedExistingIds = []
   const unavailableIds = []
   const seenIds = new Set()
+  // Chrome serialises this function body into the page, so every constant it
+  // needs has to live inside it rather than at module scope.
+  const REVEAL_MS = 90
+  // A framework may commit its model one task after the input event. Settling
+  // once per field is what keeps `change` and `blur` validators from reading a
+  // stale value, and it is why this runs before those two events rather than
+  // during the batch audit.
+  const COMMIT_SETTLE_MS = 48
+  // Text controls can still be reverted on the following render. One short wait
+  // for the whole batch is cheaper than a longer wait on every single field.
+  const BATCH_AUDIT_MS = 120
+
   const mark = (element, color) => {
     element.style.backgroundColor = color
     element.style.transition = 'background-color 160ms ease'
@@ -248,7 +293,54 @@ export async function applyFillEntries(instructions) {
     element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
     mark(element, '#fef3c7')
     element.focus?.({ preventScroll: true })
-    await pause(220)
+    await pause(REVEAL_MS)
+  }
+  const normalizeValue = value => String(value ?? '').trim()
+  /**
+   * An ATS may reformat what it was given — a phone box that inserts spaces, a
+   * province box that appends “省”. This check exists to catch a write that
+   * silently did not happen, not to demand the page echo our exact string back,
+   * so a value that still contains ours counts as written.
+   */
+  const readbackMatches = (element, expected) => {
+    const actual = normalizeValue(element.value ?? element.textContent)
+    const wanted = normalizeValue(expected)
+    if (!actual || !wanted) return false
+    if (actual === wanted) return true
+    return wanted.length >= 2 && (actual.includes(wanted) || wanted.includes(actual))
+  }
+  /**
+   * Writes a text value the way a user would, so framework-controlled inputs
+   * commit it: `beforeinput` and `input` carry the value because React and Vue
+   * read it there, and only the native prototype setter reaches past a value a
+   * controlled component is holding.
+   */
+  const commitTextValue = async (element, value) => {
+    element.focus?.({ preventScroll: true })
+    try {
+      element.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: String(value) }))
+    }
+    catch { /* older engines reject the full InputEvent init */ }
+    const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+    if (setter) setter.call(element, value)
+    else element.value = value
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(value) }))
+    await pause(COMMIT_SETTLE_MS)
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+    element.blur?.()
+  }
+  const deferredReadbacks = []
+  const auditDeferredReadbacks = async () => {
+    if (!deferredReadbacks.length) return
+    await pause(BATCH_AUDIT_MS)
+    for (const pending of deferredReadbacks) {
+      if (readbackMatches(pending.element, pending.expected)) continue
+      const applied = appliedIds.indexOf(pending.fieldId)
+      if (applied >= 0) appliedIds.splice(applied, 1)
+      if (!unavailableIds.includes(pending.fieldId)) unavailableIds.push(pending.fieldId)
+      mark(pending.element, '#fee2e2')
+    }
   }
 
   for (const { element, index } of controls) {
@@ -259,6 +351,27 @@ export async function applyFillEntries(instructions) {
       continue
     }
     seenIds.add(fieldId)
+
+    // A checkbox carries no text: its default `value` of "on" must not read as
+    // pre-existing content, and the answer belongs in `checked`, not `value`.
+    if (element instanceof HTMLInputElement && element.type === 'checkbox') {
+      if (element.hasAttribute('disabled')) {
+        unavailableIds.push(fieldId)
+        continue
+      }
+      const shouldCheck = /^(?:true|1|yes|是|有)$/i.test(String(entry.value ?? '').trim())
+      element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+      await pause(REVEAL_MS)
+      if (element.checked !== shouldCheck) element.click()
+      if (Boolean(element.checked) !== shouldCheck) {
+        unavailableIds.push(fieldId)
+        continue
+      }
+      element.style.outline = '2px solid #16a34a'
+      element.style.outlineOffset = '2px'
+      appliedIds.push(fieldId)
+      continue
+    }
 
     if (element.hasAttribute('disabled') || element.hasAttribute('readonly')) {
       unavailableIds.push(fieldId)
@@ -273,11 +386,6 @@ export async function applyFillEntries(instructions) {
     await reveal(element)
 
     if (element instanceof HTMLSelectElement) {
-      if (element.multiple) {
-        unavailableIds.push(fieldId)
-        if (unresolvedIds.has(fieldId)) mark(element, '#fee2e2')
-        continue
-      }
       const normalizeOption = (value) => String(value ?? '')
         .replace(/\s+/g, ' ')
         .replace(/^[*＊]\s*/, '')
@@ -285,56 +393,77 @@ export async function applyFillEntries(instructions) {
         .replace(/\s*(?:必填|required)?\s*[:：]\s*$/i, '')
         .trim()
       const availableOptions = Array.from(element.options).filter(option => !option.disabled)
-      const wanted = normalizeOption(entry.value)
-      const exactMatches = availableOptions.filter(option => normalizeOption(option.textContent) === wanted)
-      const relaxedWanted = wanted.replace(/[省市]$/, '')
-      const matches = exactMatches.length ? exactMatches : availableOptions.filter((option) => {
-        const optionValue = normalizeOption(option.textContent)
-        return Boolean(optionValue) && (optionValue.replace(/[省市]$/, '') === relaxedWanted
-          || optionValue.includes(wanted)
-          || wanted.includes(optionValue))
-      })
-      if (matches.length !== 1) {
+      const selectOption = (rawValue) => {
+        const wanted = normalizeOption(rawValue)
+        if (!wanted) return null
+        const exactMatches = availableOptions.filter(option => normalizeOption(option.textContent) === wanted)
+        const relaxedWanted = wanted.replace(/[省市]$/, '')
+        const matches = exactMatches.length ? exactMatches : availableOptions.filter((option) => {
+          const optionValue = normalizeOption(option.textContent)
+          return Boolean(optionValue) && (optionValue.replace(/[省市]$/, '') === relaxedWanted
+            || optionValue.includes(wanted)
+            || wanted.includes(optionValue))
+        })
+        return matches.length === 1 ? matches[0] : null
+      }
+      // A multi-select answers with one option per saved value; a single-select
+      // goes through the native setter so a framework's value tracker sees it.
+      const wantedValues = element.multiple
+        ? String(entry.value ?? '').split(/[、,，;；|]/).map(part => part.trim()).filter(Boolean)
+        : [entry.value]
+      const targets = wantedValues.map(selectOption)
+      if (!targets.length || targets.some(target => !target)) {
         unavailableIds.push(fieldId)
         mark(element, '#fee2e2')
         continue
       }
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-      if (setter) setter.call(element, matches[0].value)
-      else element.value = matches[0].value
+      if (element.multiple) targets.forEach(option => { option.selected = true })
+      else {
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+        if (setter) setter.call(element, targets[0].value)
+        else element.value = targets[0].value
+      }
       element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(entry.value) }))
       element.dispatchEvent(new Event('change', { bubbles: true }))
       element.dispatchEvent(new Event('blur', { bubbles: true }))
-      if (element.value !== matches[0].value) {
+      const applied = element.multiple
+        ? targets.every(option => option.selected)
+        : element.value === targets[0].value
+      if (!applied) {
         unavailableIds.push(fieldId)
         mark(element, '#fee2e2')
         continue
       }
       mark(element, '#dcfce7')
       appliedIds.push(fieldId)
-      await pause(180)
       continue
     }
 
-    if (element.getAttribute('contenteditable') === 'true') element.textContent = String(entry.value)
-    else {
-      const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
-      const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
-      if (setter) setter.call(element, entry.value)
-      else element.value = entry.value
+    if (element.getAttribute('contenteditable') === 'true') {
+      element.focus?.({ preventScroll: true })
+      element.textContent = String(entry.value)
+      element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(entry.value) }))
+      await pause(COMMIT_SETTLE_MS)
+      element.dispatchEvent(new Event('change', { bubbles: true }))
+      element.blur?.()
     }
-    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(entry.value) }))
-    element.dispatchEvent(new Event('change', { bubbles: true }))
-    element.dispatchEvent(new Event('blur', { bubbles: true }))
-    if (String(element.value ?? element.textContent ?? '') !== String(entry.value)) {
+    else {
+      await commitTextValue(element, entry.value)
+    }
+    if (!readbackMatches(element, entry.value)) {
       unavailableIds.push(fieldId)
       mark(element, '#fee2e2')
       continue
     }
+    // Text controls — including rich-text contenteditable editors, which accept
+    // a write and then restore their own model on the next render — are the
+    // ones a framework can quietly revert.
+    deferredReadbacks.push({ fieldId, element, expected: entry.value })
     mark(element, '#dcfce7')
     appliedIds.push(fieldId)
-    await pause(180)
   }
+
+  await auditDeferredReadbacks()
 
   return {
     appliedIds,
@@ -356,7 +485,17 @@ export async function applyChoiceEntries(instructions) {
     .replace(/^[*\s]+|[*\s]+$/g, '')
     .replace(/[:：]\s*$/, '')
     .trim()
-  const allControls = Array.from(document.querySelectorAll('input, textarea, select, [contenteditable="true"]'))
+  const allRoots = () => {
+    const roots = [document]
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const node of roots[index].querySelectorAll('*')) {
+        if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot)
+      }
+    }
+    return roots
+  }
+  const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
+  const allControls = queryAll('input, textarea, select, [contenteditable="true"]')
   const byId = new Map(entries.map(entry => [entry.fieldId, entry]))
   const appliedIds = []
   const skippedExistingIds = []
@@ -367,6 +506,9 @@ export async function applyChoiceEntries(instructions) {
     element.style.transition = 'background-color 160ms ease'
   }
   const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+  // Long enough to see which control is being worked on; the dropdown waits
+  // below are the ones that are actually load-bearing.
+  const REVEAL_MS = 90
   const waitForRender = async () => {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     await pause(140)
@@ -448,10 +590,12 @@ export async function applyChoiceEntries(instructions) {
     selectContainer.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
     mark(element, '#fef3c7')
     element.focus?.({ preventScroll: true })
-    await pause(220)
+    await pause(REVEAL_MS)
     selectContainer.click()
     await waitForRender()
-    const options = Array.from(document.querySelectorAll('.ud__select-option, .ud__select-dropdown-option, .ud__select-option-item, .el-select-dropdown__item, .ant-select-item-option, .arco-select-option, .semi-select-option, [role="option"]'))
+    // A dropdown opened from inside a shadow root renders its list in that same
+    // root, so the option lookup has to walk them too.
+    const options = queryAll('.ud__select-option, .ud__select-dropdown-option, .ud__select-option-item, .el-select-dropdown__item, .ant-select-item-option, .arco-select-option, .semi-select-option, [role="option"]')
       .filter(option => isVisible(option) && option.getAttribute('aria-disabled') !== 'true' && !option.classList.contains('is-disabled'))
     const exactMatches = options.filter(option => normalizeOption(option.textContent) === normalizeOption(entry.value))
     const wanted = normalizeOption(entry.value)
@@ -477,7 +621,6 @@ export async function applyChoiceEntries(instructions) {
     }
     mark(element, '#dcfce7')
     appliedIds.push(fieldId)
-    await pause(180)
   }
 
   for (const entry of entries) {

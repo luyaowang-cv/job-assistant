@@ -21,8 +21,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .greetings { display: grid; gap: 8px; }
 .greeting { display: grid; gap: 5px; padding-top: 8px; border-top: 1px solid #e2e8f0; }
 .greeting p { margin: 0; white-space: pre-wrap; font-size: 12px; }
-.greeting small { color: #64748b; line-height: 1.4; }
-.greeting button { justify-self: start; }
+.qa-thread { display: grid; gap: 10px; max-height: 260px; overflow-y: auto; }
+.qa-thread:empty { display: none; }
+.qa-turn { display: grid; gap: 5px; }
+.qa-turn + .qa-turn { padding-top: 10px; border-top: 1px solid #e2e8f0; }
+.qa-question { margin: 0; color: #475569; font-size: 12px; font-weight: 600; }
+.qa-answer { margin: 0; padding: 8px 10px; border-radius: 6px; background: #f1f5f9; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; }
+.qa-pending { margin: 0; color: #64748b; font-size: 12px; }
+.qa-actions { display: flex; gap: 8px; align-items: center; }
+.qa-actions button { min-height: 28px; padding: 4px 10px; }
+.qa-note { color: #94a3b8; font-size: 11px; }
+.qa-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.qa-presets button { border-radius: 999px; padding: 4px 10px; font-size: 11px; color: #475569; }
 .fill-report { display: grid; gap: 5px; }
 .fill-report p { margin: 0; font-size: 12px; line-height: 1.45; }
 .fill-summary { color: #334155; font-weight: 600; }

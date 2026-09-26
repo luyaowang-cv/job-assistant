@@ -1,11 +1,18 @@
 import './style.css'
 import { applyChoiceEntries, applyFillEntries, scanVisibleFormFields } from '../../lib/form-page-bridge.js'
+import { buildFillBatches } from '../../lib/fill-batches.js'
+import { countUnreachedFrames, groupByFrame, isChoiceField, qualifyFieldId } from '../../lib/frame-scope.js'
 import { buildFillPlan } from '../../lib/form-fill-rules.js'
+import {
+  appendTurn,
+  readThread,
+  toRequestMessages,
+  writeThread,
+} from '../../lib/open-question-thread.js'
 
 const statusElement = document.querySelector<HTMLElement>('#status')
 const readPageButton = document.querySelector<HTMLButtonElement>('#read-page')
 const saveJobButton = document.querySelector<HTMLButtonElement>('#save-job')
-const generateGreetingButton = document.querySelector<HTMLButtonElement>('#generate-greeting')
 const companyNameInput = document.querySelector<HTMLInputElement>('#company-name')
 const jobTitleInput = document.querySelector<HTMLInputElement>('#job-title')
 const locationInput = document.querySelector<HTMLInputElement>('#location')
@@ -13,10 +20,13 @@ const salaryMinInput = document.querySelector<HTMLInputElement>('#salary-min')
 const salaryMaxInput = document.querySelector<HTMLInputElement>('#salary-max')
 const jobUrlInput = document.querySelector<HTMLInputElement>('#job-url')
 const descriptionInput = document.querySelector<HTMLTextAreaElement>('#description')
-const resumeVersionSelect = document.querySelector<HTMLSelectElement>('#resume-version')
+const qaThreadElement = document.querySelector<HTMLElement>('#qa-thread')
+const qaQuestionInput = document.querySelector<HTMLTextAreaElement>('#qa-question')
+const qaPresetsElement = document.querySelector<HTMLElement>('#qa-presets')
+const askQuestionButton = document.querySelector<HTMLButtonElement>('#ask-question')
+const qaResultElement = document.querySelector<HTMLElement>('#qa-result')
+const clearThreadButton = document.querySelector<HTMLButtonElement>('#clear-thread')
 const jobResultElement = document.querySelector<HTMLElement>('#job-result')
-const greetingResultElement = document.querySelector<HTMLElement>('#greeting-result')
-const greetingsElement = document.querySelector<HTMLElement>('#greetings')
 const applicationProfileSelect = document.querySelector<HTMLSelectElement>('#application-profile')
 const refreshProfilesButton = document.querySelector<HTMLButtonElement>('#refresh-profiles')
 const fillCurrentPageButton = document.querySelector<HTMLButtonElement>('#fill-current-page')
@@ -24,6 +34,10 @@ const fillResultElement = document.querySelector<HTMLElement>('#fill-result')
 const fillReportElement = document.querySelector<HTMLElement>('#fill-report')
 
 const workbenchOrigin = 'https://offerscoming.cn'
+
+// A long form becomes a few dozen small requests. This is a backstop against a
+// runaway page, not a target: the batch builder keeps real forms well under it.
+const MAX_FILL_BATCHES = 60
 
 type CaptureResult = {
   companyName?: string
@@ -52,19 +66,10 @@ type SavedApplication = {
   id: string
 }
 
-type Greeting = {
-  text: string
-  evidence: string
-}
-
-type MaterialsPreview = {
-  aiDraft: {
-    greetings: {
-      short: Greeting
-      standard: Greeting
-      technicalHighlight: Greeting
-    }
-  }
+type OpenQuestionAnswer = {
+  answer: string
+  provider: string
+  model: string
 }
 
 type ApplicationProfile = {
@@ -83,20 +88,6 @@ type ApplicationProfile = {
     politicalStatus?: string
     documentType?: string
   }
-}
-
-type ResumeVersion = {
-  id: string
-  name: string
-  type: 'BASE' | 'TARGETED'
-  content: string
-  createdAt: string
-  application?: { job?: { title?: string, company?: { name?: string } } | null } | null
-}
-
-type Resume = {
-  name: string
-  versions: ResumeVersion[]
 }
 
 type LocalFacts = { basics: Record<string, string | number | string[] | undefined>, educations: unknown[], strategy: Record<string, unknown>, resumeVersion: { id: string, type: string } | null }
@@ -123,6 +114,7 @@ type FillEntry = {
   status: 'filled' | 'skipped_existing' | 'skipped_sensitive' | 'needs_manual'
   reason: string
   target?: string
+  record?: number
   value?: string
 }
 
@@ -136,9 +128,24 @@ type AiFillPreview = {
 }
 
 let applicationProfiles: ApplicationProfile[] = []
-let resumeVersions: ResumeVersion[] = []
 
 let savedApplicationId: string | null = null
+
+// The question thread is kept per profile, in extension storage rather than in
+// memory: opening this popup covers the page it is filling, so any click back
+// on that page closes it and would otherwise drop the conversation.
+const OPEN_QUESTION_STORE_KEY = 'openQuestionThreads'
+let openQuestionThreads: Record<string, Array<{ role: 'user' | 'assistant', content: string }>> = {}
+let openQuestionProfileId = ''
+let openQuestionPending = false
+
+const QUESTION_PRESETS = [
+  '请简述你的职业规划',
+  '为什么选择我们公司',
+  '你的优点和缺点是什么',
+  '描述一次你克服困难的经历',
+  '你最大的成就是什么',
+]
 
 function setResult(element: HTMLElement | null, message: string, isError = false) {
   if (!element) return
@@ -161,7 +168,6 @@ function setLoading(button: HTMLButtonElement | null, isLoading: boolean, loadin
 
 function clearSavedApplication() {
   savedApplicationId = null
-  if (greetingsElement) greetingsElement.replaceChildren()
 }
 
 function getHttpUrl(value: string | undefined) {
@@ -334,34 +340,8 @@ function renderProfileOptions() {
   if (applicationProfiles.some(profile => profile.id === previous)) applicationProfileSelect.value = previous
   else if (applicationProfiles.length === 1) applicationProfileSelect.value = applicationProfiles[0].id
   if (fillCurrentPageButton) fillCurrentPageButton.disabled = applicationProfiles.length === 0
-}
-
-function resumeVersionLabel(version: ResumeVersion) {
-  return version.name
-}
-
-function renderResumeOptions() {
-  if (!resumeVersionSelect) return
-  const previous = resumeVersionSelect.value
-  resumeVersionSelect.replaceChildren(new Option('请选择一份工作台简历', ''))
-  for (const version of resumeVersions) resumeVersionSelect.add(new Option(resumeVersionLabel(version), version.id))
-  resumeVersionSelect.disabled = resumeVersions.length === 0
-  if (resumeVersions.some(version => version.id === previous)) resumeVersionSelect.value = previous
-  else if (resumeVersions.length === 1) resumeVersionSelect.value = resumeVersions[0].id
-}
-
-async function loadResumeVersions() {
-  try {
-    const resume = await readApi<Resume | null>('/api/v1/resumes')
-    resumeVersions = resume?.versions ?? []
-    renderResumeOptions()
-    if (!resumeVersions.length) setResult(greetingResultElement, '工作台还没有简历版本，请先在“简历版本”中创建。', true)
-  }
-  catch (error) {
-    resumeVersions = []
-    renderResumeOptions()
-    setResult(greetingResultElement, error instanceof Error ? error.message : '简历版本读取失败。', true)
-  }
+  // The question thread is per profile, so it follows this selection.
+  showThreadForSelectedProfile()
 }
 
 async function loadApplicationProfiles() {
@@ -406,6 +386,72 @@ function renderFillReport(report: Omit<FillPlan, 'entries'> & { entries: Array<O
   }
 }
 
+// Many ATS vendors render the whole application form inside an iframe, where a
+// top-frame-only scan finds nothing at all. Every frame is scanned and written
+// to on its own, with ids namespaced by the frame that owns them.
+/**
+ * How many frames this document embeds. Each injectable frame reports its own,
+ * which is what makes “were any frames skipped?” answerable without guessing
+ * from `contentDocument` (a frame stays cross-origin to the page even when the
+ * extension holds a host permission for it).
+ */
+function countChildFrames() {
+  return document.querySelectorAll('iframe, frame').length
+}
+
+/**
+ * Scans every frame the extension may reach. Frame ids are namespaced so two
+ * frames cannot collide on `form-field-3`, and the write goes back to the frame
+ * the field came from.
+ */
+async function scanEveryFrame(tabId: number) {
+  const [fieldResults, frameCounts] = await Promise.all([
+    chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: scanVisibleFormFields }),
+    chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: countChildFrames }),
+  ])
+  const declaredChildren = frameCounts.reduce((total, entry) => total + ((entry.result as number) ?? 0), 0)
+  return {
+    fields: fieldResults.flatMap(result => ((result.result ?? []) as FormFieldDescriptor[])
+      .map(field => ({ ...field, id: qualifyFieldId(result.frameId, field.id) }))),
+    unreachedFrames: countUnreachedFrames(fieldResults.length, declaredChildren),
+  }
+}
+
+type FillOutcome = { appliedIds: string[], skippedExistingIds: string[], unavailableIds: string[] }
+
+/**
+ * Runs one page-side writer once per frame that owns an entry, and reports the
+ * outcome against the same qualified ids the plan was built with. A frame that
+ * fails on its own does not discard the frames that worked.
+ */
+async function applyEveryFrame(
+  tabId: number,
+  entries: Array<{ fieldId: string, value: string }>,
+  unresolvedIds: string[],
+  func: typeof applyFillEntries | typeof applyChoiceEntries,
+): Promise<FillOutcome> {
+  const perFrame = groupByFrame(entries, unresolvedIds)
+  const outcome: FillOutcome = { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
+  for (const [frameId, payload] of perFrame) {
+    const qualify = (ids: string[]) => ids.map(id => qualifyFieldId(frameId, id))
+    try {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        func,
+        args: [payload],
+      })
+      const value = result?.result as FillOutcome | undefined
+      outcome.appliedIds.push(...qualify(value?.appliedIds ?? []))
+      outcome.skippedExistingIds.push(...qualify(value?.skippedExistingIds ?? []))
+      outcome.unavailableIds.push(...qualify(value?.unavailableIds ?? []))
+    }
+    catch {
+      outcome.unavailableIds.push(...qualify([...payload.entries.map(entry => entry.fieldId), ...payload.unresolvedIds]))
+    }
+  }
+  return outcome
+}
+
 async function fillCurrentPage() {
   const selectedId = applicationProfileSelect?.value
   const profile = applicationProfiles.find(item => item.id === selectedId)
@@ -422,22 +468,21 @@ async function fillCurrentPage() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
     if (!tab?.id) throw new Error('未找到当前页面，请切换到网申表单后重试。')
 
-    const [scanResult] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scanVisibleFormFields,
-    })
-    const fields = (scanResult?.result ?? []) as FormFieldDescriptor[]
+    const { fields, unreachedFrames } = await scanEveryFrame(tab.id)
+    // Frames from an origin outside the vendor allowlist cannot be injected
+    // into; naming the count beats reporting “no fields found”.
+    const unreachedFrameWarning = unreachedFrames > 0
+      ? `页面有 ${unreachedFrames} 个 iframe 未能访问，其中的表单没有填写。`
+      : ''
     const fillContext = await readApi<FillContext>(`/api/v1/application-profiles/${encodeURIComponent(profile.id)}/fill-context`)
     const localPlan = buildFillPlan(fillContext.localFacts, fields) as FillPlan
     const localEntries = localPlan.entries.filter(entry => entry.status === 'filled').map(entry => ({ fieldId: entry.fieldId, value: entry.value ?? '' }))
-    const choiceEntries = localEntries.filter(entry => /^radio-group-|^custom-select-/.test(entry.fieldId))
-    const textEntries = localEntries.filter(entry => !/^radio-group-|^custom-select-/.test(entry.fieldId))
-    const textOutcome = textEntries.length
-      ? (await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: applyFillEntries, args: [textEntries] }))[0]?.result ?? { appliedIds: [], skippedExistingIds: [], unavailableIds: textEntries.map(entry => entry.fieldId) }
-      : { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
-    const choiceOutcome = choiceEntries.length
-      ? (await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: applyChoiceEntries, args: [choiceEntries] }))[0]?.result ?? { appliedIds: [], skippedExistingIds: [], unavailableIds: choiceEntries.map(entry => entry.fieldId) }
-      : { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
+    const choiceEntries = localEntries.filter(entry => isChoiceField(entry.fieldId))
+    const textEntries = localEntries.filter(entry => !isChoiceField(entry.fieldId))
+    const [textOutcome, choiceOutcome] = await Promise.all([
+      applyEveryFrame(tab.id, textEntries, [], applyFillEntries),
+      applyEveryFrame(tab.id, choiceEntries, [], applyChoiceEntries),
+    ])
     const localOutcome = {
       appliedIds: [...textOutcome.appliedIds, ...choiceOutcome.appliedIds],
       skippedExistingIds: [...textOutcome.skippedExistingIds, ...choiceOutcome.skippedExistingIds],
@@ -450,8 +495,7 @@ async function fillCurrentPage() {
       if (field) counts.set(fieldSignature(field), (counts.get(fieldSignature(field)) ?? 0) + 1)
       return counts
     }, new Map<string, number>())
-    const [rescanResult] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: scanVisibleFormFields })
-    const activeFields = (rescanResult?.result ?? []) as FormFieldDescriptor[]
+    const { fields: activeFields } = await scanEveryFrame(tab.id)
     const activePlan = buildFillPlan(fillContext.localFacts, activeFields) as FillPlan
     const activeById = new Map(activePlan.entries.map(entry => [entry.fieldId, entry]))
     const activeLocalAppliedIds = new Set<string>()
@@ -489,55 +533,83 @@ async function fillCurrentPage() {
         }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
       }
       renderFillReport(report)
-      setResult(fillResultElement, '当前页面没有可填写的空白字段。')
+      setResult(fillResultElement, `${unreachedFrameWarning}当前页面没有可填写的空白字段。`, Boolean(unreachedFrameWarning))
       return
     }
-    const preview = await readApi<AiFillPreview>('/api/v1/form-fill/preview', {
-      method: 'POST',
-      body: JSON.stringify({ profileId: profile.id, fields: aiFields.map(field => ({
-        id: field.id,
-        label: field.label,
-        context: field.context,
-        name: field.name,
-        placeholder: field.placeholder,
-        inputType: field.inputType,
-        controlType: field.controlType,
-        options: field.options,
-        multiple: field.multiple,
-      })) }),
-    })
-    const isChoiceField = (id: string) => /^(?:radio-group|custom-select)-/.test(id)
-    const aiChoiceFills = preview.fills.filter(fill => isChoiceField(fill.fieldId))
-    const aiTextFills = preview.fills.filter(fill => !isChoiceField(fill.fieldId))
-    const aiTextOutcome = aiTextFills.length === 0 && preview.unresolvedIds.length === 0
-      ? { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
-      : (await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: applyFillEntries,
-          args: [{ entries: aiTextFills, unresolvedIds: preview.unresolvedIds.filter(id => !isChoiceField(id)) }],
-        }))[0]?.result ?? { appliedIds: [], skippedExistingIds: [], unavailableIds: aiTextFills.map(entry => entry.fieldId) }
-    const aiChoiceOutcome = aiChoiceFills.length
-      ? (await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          func: applyChoiceEntries,
-          args: [{ entries: aiChoiceFills, unresolvedIds: preview.unresolvedIds.filter(id => isChoiceField(id)) }],
-        }))[0]?.result ?? { appliedIds: [], skippedExistingIds: [], unavailableIds: aiChoiceFills.map(entry => entry.fieldId) }
-      : { appliedIds: [], skippedExistingIds: [], unavailableIds: [] }
-    const outcome = {
-      appliedIds: [...aiTextOutcome.appliedIds, ...aiChoiceOutcome.appliedIds],
-      skippedExistingIds: [...aiTextOutcome.skippedExistingIds, ...aiChoiceOutcome.skippedExistingIds],
-      unavailableIds: [...aiTextOutcome.unavailableIds, ...aiChoiceOutcome.unavailableIds],
+    const batches = buildFillBatches(
+      aiFields.map(field => ({ fieldId: field.id, target: activeById.get(field.id)?.target, record: activeById.get(field.id)?.record })),
+      aiFields,
+    )
+    // A page that splits into an unreasonable number of batches is a page worth
+    // stopping on rather than hammering the provider with hundreds of calls.
+    if (batches.length > MAX_FILL_BATCHES) {
+      throw new Error(`当前页面需要拆成 ${batches.length} 个批次，超过 ${MAX_FILL_BATCHES} 个上限。请分步骤填写或收起部分表单区块后重试；本次没有改动页面。`)
     }
-    const appliedIds = new Set(outcome.appliedIds)
-    const unavailableIds = new Set(outcome.unavailableIds)
+
+    const appliedIds = new Set<string>()
+    const unavailableIds = new Set<string>()
     const aiFieldIds = new Set(aiFields.map(field => field.id))
+    let provider = ''
+    let model = ''
+    let completedBatches = 0
+    let failure = ''
+
+    for (const [index, batch] of batches.entries()) {
+      setResult(fillResultElement, `AI 填写中：第 ${index + 1} / ${batches.length} 批…`)
+      try {
+        const preview = await readApi<AiFillPreview>('/api/v1/form-fill/preview', {
+          method: 'POST',
+          body: JSON.stringify({ profileId: profile.id, fields: batch.map(field => ({
+            id: field.id,
+            label: field.label,
+            context: field.context,
+            name: field.name,
+            placeholder: field.placeholder,
+            inputType: field.inputType,
+            controlType: field.controlType,
+            options: field.options,
+            multiple: field.multiple,
+          })) }),
+        })
+        provider = preview.provider
+        model = preview.model
+        const choiceFills = preview.fills.filter(fill => isChoiceField(fill.fieldId))
+        const textFills = preview.fills.filter(fill => !isChoiceField(fill.fieldId))
+        const [textOutcome, choiceOutcome] = await Promise.all([
+          applyEveryFrame(tab.id, textFills, preview.unresolvedIds.filter(id => !isChoiceField(id)), applyFillEntries),
+          applyEveryFrame(tab.id, choiceFills, preview.unresolvedIds.filter(id => isChoiceField(id)), applyChoiceEntries),
+        ])
+        for (const id of [...textOutcome.appliedIds, ...choiceOutcome.appliedIds]) appliedIds.add(id)
+        for (const id of [...textOutcome.unavailableIds, ...choiceOutcome.unavailableIds]) unavailableIds.add(id)
+        completedBatches += 1
+      }
+      catch (error) {
+        // Everything already written and read back stays in place; stopping here
+        // keeps a broken provider from being called once per remaining batch.
+        failure = error instanceof Error ? error.message : 'AI 填写请求失败。'
+        break
+      }
+    }
+
     const entries = activePlan.entries.map((entry) => {
       const { value: _value, ...safeEntry } = entry
       if (activeLocalAppliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: '已由本地个人主档案填写。' }
       if (!aiFieldIds.has(entry.fieldId) || entry.status === 'skipped_existing' || entry.status === 'skipped_sensitive') return safeEntry
-      if (appliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: `AI 已填写（${preview.provider} / ${preview.model}）。` }
+      if (appliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: `AI 已填写（${provider} / ${model}）。` }
       if (unavailableIds.has(entry.fieldId)) return { ...safeEntry, status: 'needs_manual' as const, reason: 'AI 已给出建议，但页面控件未能应用。' }
-      return { ...safeEntry, status: 'needs_manual' as const, reason: 'AI 未给出可用答案。' }
+      // A batch that never ran keeps the plan's own reason: “档案中没有该字段的
+      // 可用内容” tells the user what to do, where “AI 未执行” only repeats the
+      // headline. The summary already reports the batch failure.
+      if (failure && completedBatches < batches.length) return safeEntry
+      // Keep the plan's own reason alongside the AI outcome. “档案里没有语言能力
+      // 那一段，AI 也答不出来” points at the profile; “AI 未给出可用答案” alone
+      // suggests the tool failed when it actually declined to invent.
+      const localReason = String(entry.reason ?? '').trim()
+      return {
+        ...safeEntry,
+        status: 'needs_manual' as const,
+        reason: localReason ? `${localReason.replace(/。$/, '')}；AI 也未能给出答案。` : 'AI 未给出可用答案。',
+      }
     })
     const report = {
       entries,
@@ -547,7 +619,18 @@ async function fillCurrentPage() {
       }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
     }
     renderFillReport(report)
-    setResult(fillResultElement, 'AI 填写已完成：浅绿色为已填写，浅红色为未能填写。请在提交前检查。')
+
+    const batchSummary = batches.length > 1 ? `已完成 ${completedBatches}/${batches.length} 批。` : ''
+    if (failure) {
+      const kept = report.summary.filled ? `已写入并校验的 ${report.summary.filled} 项保留在页面上，可直接使用或手动修改。` : ''
+      setResult(fillResultElement, `${unreachedFrameWarning}${batchSummary}${failure} ${kept}`, true)
+      return
+    }
+    setResult(
+      fillResultElement,
+      `${unreachedFrameWarning}${batchSummary}AI 填写已完成：浅绿色为已填写，浅红色为未能填写。请在提交前检查。`,
+      Boolean(unreachedFrameWarning),
+    )
   }
   catch (error) {
     const message = error instanceof Error ? error.message : '页面字段识别或填写失败。'
@@ -637,7 +720,40 @@ async function saveCurrentJob() {
   }
 }
 
-async function copyGreeting(text: string, button: HTMLButtonElement) {
+async function loadOpenQuestionThreads() {
+  try {
+    const stored = await chrome.storage.local.get(OPEN_QUESTION_STORE_KEY)
+    const value = stored?.[OPEN_QUESTION_STORE_KEY]
+    openQuestionThreads = value && typeof value === 'object' ? value : {}
+  }
+  catch {
+    openQuestionThreads = {}
+  }
+  showThreadForSelectedProfile()
+}
+
+async function persistOpenQuestionThreads() {
+  try {
+    await chrome.storage.local.set({ [OPEN_QUESTION_STORE_KEY]: openQuestionThreads })
+  }
+  catch {
+    // Storage is a convenience here; losing the thread must not block asking.
+  }
+}
+
+function currentThread() {
+  return readThread(openQuestionThreads, openQuestionProfileId)
+}
+
+/** The thread belongs to whichever profile is selected at the top of the popup. */
+function showThreadForSelectedProfile() {
+  openQuestionProfileId = applicationProfileSelect?.value ?? ''
+  renderThread()
+  if (askQuestionButton) askQuestionButton.disabled = !openQuestionProfileId || openQuestionPending
+  if (clearThreadButton) clearThreadButton.disabled = !openQuestionProfileId || openQuestionPending || currentThread().length === 0
+}
+
+async function copyAnswer(text: string, button: HTMLButtonElement) {
   try {
     await navigator.clipboard.writeText(text)
     const label = button.textContent
@@ -645,68 +761,123 @@ async function copyGreeting(text: string, button: HTMLButtonElement) {
     window.setTimeout(() => { button.textContent = label }, 1_500)
   }
   catch {
-    setResult(greetingResultElement, '复制失败，请手动复制话术文本。', true)
+    setResult(qaResultElement, '复制失败，请手动选中答案复制。', true)
   }
 }
 
-function renderGreetings(greetings: MaterialsPreview['aiDraft']['greetings']) {
-  if (!greetingsElement) return
-  greetingsElement.replaceChildren()
+function renderThread() {
+  if (!qaThreadElement) return
+  qaThreadElement.replaceChildren()
+  const thread = currentThread()
 
-  const labels: Array<[string, Greeting]> = [
-    ['短版', greetings.short],
-    ['标准版', greetings.standard],
-    ['技术亮点版', greetings.technicalHighlight],
-  ]
+  for (let index = 0; index < thread.length; index += 1) {
+    const message = thread[index]
+    if (message.role !== 'user') continue
+    const turn = document.createElement('div')
+    turn.className = 'qa-turn'
+    const question = document.createElement('p')
+    question.className = 'qa-question'
+    question.textContent = message.content
+    turn.append(question)
 
-  for (const [label, greeting] of labels) {
-    const article = document.createElement('article')
-    article.className = 'greeting'
-    const heading = document.createElement('strong')
-    heading.textContent = label
-    const content = document.createElement('p')
-    content.textContent = greeting.text
-    const evidence = document.createElement('small')
-    evidence.textContent = `依据：${greeting.evidence}`
-    const copyButton = document.createElement('button')
-    copyButton.type = 'button'
-    copyButton.textContent = '复制'
-    copyButton.addEventListener('click', () => void copyGreeting(greeting.text, copyButton))
-    article.append(heading, content, evidence, copyButton)
-    greetingsElement.append(article)
+    const reply = thread[index + 1]
+    if (reply?.role === 'assistant') {
+      const body = document.createElement('p')
+      body.className = 'qa-answer'
+      body.textContent = reply.content
+      const actions = document.createElement('div')
+      actions.className = 'qa-actions'
+      const copy = document.createElement('button')
+      copy.type = 'button'
+      copy.textContent = '复制回答'
+      copy.addEventListener('click', () => void copyAnswer(reply.content, copy))
+      const note = document.createElement('span')
+      note.className = 'qa-note'
+      note.textContent = 'AI 生成，提交前请核对'
+      actions.append(copy, note)
+      turn.append(body, actions)
+    }
+    else if (openQuestionPending) {
+      const pending = document.createElement('p')
+      pending.className = 'qa-pending'
+      pending.textContent = '正在生成…'
+      turn.append(pending)
+    }
+
+    qaThreadElement.append(turn)
   }
 }
 
-async function generateGreetings() {
-  const resumeVersion = resumeVersions.find(version => version.id === resumeVersionSelect?.value)
-  if (!savedApplicationId) {
-    setResult(greetingResultElement, '请先在本窗口确认保存当前岗位，再生成话术。', true)
+function renderQuestionPresets() {
+  if (!qaPresetsElement) return
+  qaPresetsElement.replaceChildren()
+  for (const preset of QUESTION_PRESETS) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = preset
+    button.addEventListener('click', () => {
+      if (qaQuestionInput) qaQuestionInput.value = preset
+      qaQuestionInput?.focus()
+    })
+    qaPresetsElement.append(button)
+  }
+}
+
+async function askQuestion() {
+  const question = qaQuestionInput?.value.trim() ?? ''
+  if (!openQuestionProfileId) {
+    setResult(qaResultElement, '请先在上面选择一份网申档案。', true)
     return
   }
-  if (!resumeVersion) {
-    setResult(greetingResultElement, '请选择一份工作台简历版本。', true)
+  if (!question) {
+    setResult(qaResultElement, '请先输入你的问题。', true)
     return
   }
 
-  setLoading(generateGreetingButton, true, '生成中…')
-  setResult(greetingResultElement, '')
-  if (greetingsElement) greetingsElement.replaceChildren()
+  const profileId = openQuestionProfileId
+  const previous = currentThread()
+  const asked = appendTurn(previous, question, '')
+  openQuestionThreads = writeThread(openQuestionThreads, profileId, asked)
+  openQuestionPending = true
+  if (qaQuestionInput) qaQuestionInput.value = ''
+  setResult(qaResultElement, '')
+  setLoading(askQuestionButton, true, '生成中…')
+  if (clearThreadButton) clearThreadButton.disabled = true
+  renderThread()
 
   try {
-    const preview = await readApi<MaterialsPreview>(`/api/v1/applications/${encodeURIComponent(savedApplicationId)}/materials/preview`, {
+    const reply = await readApi<OpenQuestionAnswer>('/api/v1/open-questions/answer', {
       method: 'POST',
-      body: JSON.stringify({ resumeText: resumeVersion.content }),
+      body: JSON.stringify({ profileId, messages: toRequestMessages(asked) }),
     })
-    renderGreetings(preview.aiDraft.greetings)
-    setResult(greetingResultElement, '已生成三版话术；它们仅供复制，不会自动发送或保存。')
+    openQuestionThreads = writeThread(openQuestionThreads, profileId, [
+      ...asked,
+      { role: 'assistant', content: reply.answer },
+    ])
+    await persistOpenQuestionThreads()
+    setResult(qaResultElement, `已生成（${reply.provider} / ${reply.model}）。答案由 AI 生成，提交前请核对。`)
   }
   catch (error) {
-    const message = error instanceof Error ? error.message : '生成失败，请检查岗位 JD 和工作台连接。'
-    setResult(greetingResultElement, message, true)
+    // Roll the unanswered question back and hand it to the input box, so a
+    // retry does not leave two questions in a row in the thread.
+    openQuestionThreads = writeThread(openQuestionThreads, profileId, previous)
+    await persistOpenQuestionThreads()
+    if (qaQuestionInput) qaQuestionInput.value = question
+    setResult(qaResultElement, error instanceof Error ? error.message : '生成失败，请稍后重试。', true)
   }
   finally {
-    setLoading(generateGreetingButton, false, '')
+    openQuestionPending = false
+    setLoading(askQuestionButton, false, '')
+    showThreadForSelectedProfile()
   }
+}
+
+async function clearThread() {
+  if (!openQuestionProfileId) return
+  openQuestionThreads = writeThread(openQuestionThreads, openQuestionProfileId, [])
+  await persistOpenQuestionThreads()
+  setResult(qaResultElement, '')
+  showThreadForSelectedProfile()
 }
 
 for (const input of [companyNameInput, jobTitleInput, locationInput, salaryMinInput, salaryMaxInput, jobUrlInput, descriptionInput]) {
@@ -715,10 +886,13 @@ for (const input of [companyNameInput, jobTitleInput, locationInput, salaryMinIn
 
 readPageButton?.addEventListener('click', () => void captureCurrentPage())
 saveJobButton?.addEventListener('click', () => void saveCurrentJob())
-generateGreetingButton?.addEventListener('click', () => void generateGreetings())
 refreshProfilesButton?.addEventListener('click', () => void loadApplicationProfiles())
 fillCurrentPageButton?.addEventListener('click', () => void fillCurrentPage())
+applicationProfileSelect?.addEventListener('change', () => showThreadForSelectedProfile())
+askQuestionButton?.addEventListener('click', () => void askQuestion())
+clearThreadButton?.addEventListener('click', () => void clearThread())
 
 void checkWorkbench()
 void loadApplicationProfiles()
-void loadResumeVersions()
+void loadOpenQuestionThreads()
+void renderQuestionPresets()
