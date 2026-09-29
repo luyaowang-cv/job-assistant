@@ -14,6 +14,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # 只绑回环地址，供生产数据库迁移时经 SSH 隧道接入；公网不可达。
+    # 迁移流程见 docs/deploy.md 的「数据库迁移」一节。
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U job_assistant -d job_assistant"]
       interval: 5s
@@ -44,6 +48,16 @@ services:
       FEISHU_TOKEN_ENCRYPTION_KEY: ${FEISHU_TOKEN_ENCRYPTION_KEY:-}
       FEISHU_AUTO_SYNC_ENABLED: ${FEISHU_AUTO_SYNC_ENABLED:-true}
       RESUME_CHROMIUM_PATH: ${RESUME_CHROMIUM_PATH:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURE: ${SMTP_SECURE:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      MAIL_DEV_LOG_ONLY: ${MAIL_DEV_LOG_ONLY:-false}
+      # 单进程堆上限。2G 内存要和 postgres、caddy 分着用，而 node-cluster 会起
+      # 多个 worker：不限制时每个 worker 的默认上限约 1.5G，加起来足以把 db 挤到 OOM-kill。
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=768}
     # 不再对外暴露端口：HTTPS 由 caddy 终结，caddy 通过内部网络访问 web:3000
     expose:
       - "3000"

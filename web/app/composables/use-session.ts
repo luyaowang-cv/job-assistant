@@ -1,4 +1,4 @@
-type SessionUser = { id: string; email: string; displayName: string }
+type SessionUser = { id: string; email: string; displayName: string; emailVerified: boolean }
 
 // 当前登录用户与登录/注册/退出动作。better-auth 的 user 字段里 name 即我们的 displayName。
 export function useAuthSession() {
@@ -7,9 +7,15 @@ export function useAuthSession() {
 
   async function fetchSession() {
     try {
-      const res = await $fetch<{ user?: { id: string; email: string; name?: string } } | null>('/api/auth/get-session')
+      const res = await $fetch<{ user?: { id: string; email: string; name?: string; emailVerified?: boolean } } | null>('/api/auth/get-session')
       user.value = res?.user
-        ? { id: res.user.id, email: res.user.email, displayName: res.user.name ?? res.user.email }
+        ? {
+            id: res.user.id,
+            email: res.user.email,
+            displayName: res.user.name ?? res.user.email,
+            // 未验证不构成使用门槛，这里只驱动界面上的软提醒。
+            emailVerified: res.user.emailVerified ?? false,
+          }
         : null
     }
     catch {
@@ -32,11 +38,20 @@ export function useAuthSession() {
     if (!user.value) await login(email, password)
   }
 
+  // 重发验证邮件。刻意不依赖会话：验证链接点失败的用户可能已经登出，
+  // 该端点本身也不要求登录（对未注册邮箱返回相同结果，不泄露账号是否存在）。
+  async function resendVerificationEmail(email: string) {
+    await $fetch('/api/auth/send-verification-email', {
+      method: 'POST',
+      body: { email, callbackURL: '/verify-email' },
+    })
+  }
+
   async function logout() {
     await $fetch('/api/auth/sign-out', { method: 'POST' }).catch(() => undefined)
     user.value = null
     checked.value = true
   }
 
-  return { user, checked, fetchSession, login, signup, logout }
+  return { user, checked, fetchSession, login, signup, resendVerificationEmail, logout }
 }

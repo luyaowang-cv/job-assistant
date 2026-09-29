@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ElMessage } from 'element-plus'
+
 definePageMeta({ layout: 'auth' })
 
 const mode = ref<'login' | 'register'>('login')
@@ -35,6 +37,8 @@ async function submit() {
   try {
     if (mode.value === 'register') {
       await signup(email.value.trim(), password.value, displayName.value.trim() || undefined)
+      // 注册即发验证信。刻意说明"不验证也能用"，免得用户以为必须先去邮箱点链接。
+      ElMessage.success('注册成功。验证邮件已发送，不验证也能正常使用。')
     }
     else {
       await login(email.value.trim(), password.value)
@@ -86,17 +90,23 @@ onMounted(loadSignupConfig)
               <el-input v-model="displayName" placeholder="怎么称呼你" autocomplete="nickname" size="large" />
             </el-form-item>
             <el-form-item label="密码">
-              <el-input v-model="password" type="password" show-password :placeholder="mode === 'register' ? '请设置密码' : '请输入密码'" :autocomplete="mode === 'register' ? 'new-password' : 'current-password'" @keyup.enter="submit" size="large" />
+              <el-input v-model="password" type="password" show-password size="large" :placeholder="mode === 'register' ? '请设置密码' : '请输入密码'" :autocomplete="mode === 'register' ? 'new-password' : 'current-password'" @keyup.enter="submit" />
             </el-form-item>
             <el-alert v-if="error" class="auth-form__error" type="error" :closable="false" :title="error" show-icon />
             <el-button class="auth-form__submit" type="primary" size="large" :loading="loading" @click="submit">{{ mode === 'register' ? '注册' : '登录' }}</el-button>
           </el-form>
 
           <div class="auth-form__switch">
-            <template v-if="mode === 'login' && allowSignup">
-              还没有账号？<el-link type="primary" :underline="false" @click="switchMode('register')">立即注册</el-link>
+            <template v-if="mode === 'login'">
+              <div v-if="allowSignup">
+                还没有账号？<el-link type="primary" :underline="false" @click="switchMode('register')">立即注册</el-link>
+              </div>
+              <!-- 忘记密码入口不受注册开关影响：关闭注册时老用户仍然需要找回密码。 -->
+              <div class="auth-form__aside">
+                <el-link type="info" :underline="false" @click="navigateTo('/forgot-password')">忘记密码？</el-link>
+              </div>
             </template>
-            <template v-else-if="mode === 'register'">
+            <template v-else>
               已有账号？<el-link type="primary" :underline="false" @click="switchMode('login')">返回登录</el-link>
             </template>
           </div>
@@ -242,6 +252,10 @@ onMounted(loadSignupConfig)
   text-align: center;
   font-size: 13px;
   color: var(--workbench-slate);
+}
+
+.auth-form__aside {
+  margin-top: 10px;
 }
 
 @media (max-width: 760px) {

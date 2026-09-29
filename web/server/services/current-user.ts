@@ -6,6 +6,9 @@ export interface CurrentUser {
   email: string
   displayName: string
   isAdmin: boolean
+  // 邮箱是否已验证。只用于界面上的软提醒，不作为功能门禁——
+  // 邮箱未验证的用户与已验证用户拥有完全相同的权限。
+  emailVerified: boolean
 }
 
 // 不依赖 h3/nitropack 静态导入的 401 错误（便于服务层在单测环境被直接引用）。
@@ -44,5 +47,11 @@ export async function isCurrentUserAdmin(): Promise<boolean> {
 export async function getOwnerUser(): Promise<CurrentUser> {
   const user = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' } })
   if (!user) throw new UnauthorizedError()
-  return { id: user.id, email: user.email, displayName: user.displayName, isAdmin: isAdminEmail(user.email) }
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    isAdmin: isAdminEmail(user.email),
+    emailVerified: user.emailVerified,
+  }
 }
