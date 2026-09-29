@@ -311,3 +311,51 @@
 - `POST /api/v1/material-cards/:id/variants` 接受严格输入 `{ name, content, overwrite?: boolean }`。`overwrite` 默认 `false`；同一卡片同名版本在默认模式返回 `409 MATERIAL_VARIANT_NAME_EXISTS`，不修改任何数据。
 - 只有用户明确提交 `overwrite=true` 时，服务端才可更新该当前用户、未归档卡片下同名 `MaterialCardVariant` 的 `content`。响应返回 `{ action: 'overwritten', variant, eventId }`，且保持原 variant ID、名称和所有 DocumentCardReference 不变；不存在同名版本时仍创建并返回 `action: 'created'`。
 - 覆盖请求和创建请求都必须经 Zod 校验。覆盖成功写入 `MATERIAL_UPDATED` 事件，`entityType=MaterialCardVariant`；payload 只含 cardId、版本名称和 `action: 'overwritten'`，不得包含文案正文。
+
+## F-046 邮件认证与收件箱
+
+### 邮件认证端点
+
+邮箱验证与找回密码复用 better-auth 的既有端点，无需新增路由：`POST /api/auth/send-verification-email`、`GET|POST /api/auth/verify-email`、`POST /api/auth/request-password-reset`、`POST /api/auth/reset-password`。
+
+- 邮件里的链接指向站内公开页面的**相对路径**；重置链接由 better-auth 以 302 跳转到该路径并追加 `token` 查询参数，站内页面从查询参数取值，不自行解析令牌。
+- 找回密码与重发验证的接口对"邮箱已注册"与"邮箱未注册"返回**相同响应且耗时相近**，不得泄露账号是否存在。
+- 邮箱验证不构成使用门槛：未验证用户可正常登录与使用全部功能，仅在界面提示。响应中不得回传 SMTP 凭据或令牌明文。
+- 超出配额的认证请求一律返回 `429`，语义与响应头遵循 better-auth 的限流约定。
+
+### 邮件配置健康检查
+
+| Method | Path | Input | Success data |
+|---|---|---|---|
+| GET | `/api/v1/email/health` | 无 | `{ configured, ok, from, error? }` |
+
+- 仅管理员可调用，非管理员返回 `403 FORBIDDEN`。
+- 只返回连通性结论与发件人地址，**永不返回 SMTP 主机、用户名或密码**。
+
+### 收件箱用户侧接口
+
+全部位于 `/api/v1/**`，未登录返回 `401 UNAUTHENTICATED`，且一律按当前会话用户的 `userId` 过滤。
+
+| Method | Path | Input | Success data |
+|---|---|---|---|
+| GET | `/api/v1/inbox/address` | 无 | 专属地址、启用状态、上次收信时间与收信计数 |
+| PATCH | `/api/v1/inbox/address` | `{ enabled }` | 更新后的地址信息 |
+| POST | `/api/v1/inbox/address/reset` | 无 | 重新生成的地址（旧地址立即失效） |
+| GET | `/api/v1/inbox/emails` | `page` / `pageSize` / `search` | `{ items, page, pageSize, total }`，条目只含预览，不含正文 |
+| GET | `/api/v1/inbox/emails/:id` | 路径 `id` | 单封邮件详情（正文、原始内容、附件元数据） |
+| DELETE | `/api/v1/inbox/emails/:id` | 路径 `id` | 删除结果 |
+
+- 越权访问他人邮件返回 `404`（而非 `403`），既不泄露资源存在性也不泄露归属。
+- 附件只保存元数据（文件名、类型、大小），不提供内容下载；响应中须能区分"已被大小限制截断"的邮件。
+
+### 入站邮件 webhook
+
+| Method | Path | 鉴权 | Success data |
+|---|---|---|---|
+| POST | `/api/inbound/email` | HMAC 签名 | `{ status }`，取值为 `stored` / `duplicate` / `unknown-recipient` / `disabled` |
+
+- 该路径位于 `/api/inbound/` 前缀下，**不使用会话鉴权**（调用方为外部邮件系统），也因此在 `/api/v1/**` 的守卫范围之外。
+- 请求必须携带时间戳与签名两个头，签名覆盖"时间戳 + 原始请求体"；签名校验**先于 JSON 解析**，校验失败不得解析或记录请求体内容。
+- 签名无效或时间戳超出容忍窗口返回 `401`；请求体超出大小上限返回 `413`（在读取请求体之前判定）；格式不合法返回 `400`。
+- 同一封邮件重复投递是幂等操作，返回 `duplicate` 而不重复入库。**`unknown-recipient` 与 `disabled` 也必须返回 200**——调用方对 5xx 会重试，而这两类结果重试无意义，只会放大流量。
+- 该端点的签名密钥独立于其他密钥，且不在任何面向客户端的响应中出现。
