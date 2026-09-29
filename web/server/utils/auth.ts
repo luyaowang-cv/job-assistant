@@ -70,11 +70,14 @@ export const auth = betterAuth({
     // 公开注册由 ALLOW_PUBLIC_SIGNUP 总开关控制；未设置时默认关闭。
     disableSignUp: process.env.ALLOW_PUBLIC_SIGNUP !== 'true',
     minPasswordLength: 8,
-    // 注册后不自动建立会话：新用户必须先点邮件里的链接验证，再回来登录。
-    // 这是"新注册必须验证"的前半段；后半段（拦住手动登录）在 middleware/auth.ts 里，
-    // 因为 better-auth 的 requireEmailVerification 是全局开关，做不到只拦新账号。
-    autoSignIn: false,
-    // 保持全局不设门禁，避免把存量账号一起锁死；新账号的门禁由上面两处组合实现。
+    // 显式写出来是因为**不能**改成 false：一旦 autoSignIn 为 false，better-auth 会把
+    // "邮箱已存在"当作需要隐藏的信息（shouldReturnGenericDuplicateResponse 由
+    // autoSignIn === false 触发），此后用已注册邮箱注册会返回一个**假的成功响应**——
+    // 既不建号也不发信，用户只会看到"注册成功"然后苦等一封永远不会来的邮件。
+    // "注册后不进入工作台"改由前端在注册成功后主动退出会话实现。
+    autoSignIn: true,
+    // 全局不设门禁，避免把存量账号一起锁死；新账号的门禁由 middleware/auth.ts
+    // 的注册时间分界 + 前端登录拦截组合实现。
     requireEmailVerification: false,
     resetPasswordTokenExpiresIn: TOKEN_TTL_SECONDS,
     // 改密码后踢掉所有旧会话：否则密码被盗改后，攻击者手上的旧 cookie 仍然有效。

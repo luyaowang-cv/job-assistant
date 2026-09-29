@@ -67,8 +67,11 @@ export function useAuthSession() {
   async function signup(email: string, password: string, name?: string) {
     // better-auth 要求 name 必须是 string；未填昵称时用邮箱前缀兜底。
     await $fetch('/api/auth/sign-up/email', { method: 'POST', body: { email, password, name: name || email.split('@')[0] } })
-    // 刻意不做自动登录兜底：注册后必须先点邮件里的链接完成验证，再回来登录。
-    // （服务端配了 autoSignIn: false，这里本来也拿不到会话。）
+    // 注册会建立会话，但新账号必须先验证邮箱才能使用，所以立刻退掉，
+    // 让用户停在登录页而不是被直接送进工作台。
+    // 刻意不用服务端的 autoSignIn: false 来达到这个效果——那会连带触发 better-auth
+    // 的防账号枚举行为，把"邮箱已注册"变成静默的假成功（详见 server/utils/auth.ts 的注释）。
+    await logout()
   }
 
   // 重发验证邮件。刻意不依赖会话：验证链接点失败的用户可能已经登出，

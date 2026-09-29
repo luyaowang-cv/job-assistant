@@ -124,6 +124,12 @@
 
 区分存量与新账号的依据是**注册时间**而不是 `emailVerified`——后者对两类账号都是 false，无法区分。分界时刻硬编码在 `server/utils/auth.ts`，前端 `use-session.ts` 有一份必须保持同步的副本；若将来要再次调整策略，改这两处即可。
 
+**上线后暴露并修复的缺陷**：最初用 better-auth 的 `autoSignIn: false` 来实现"注册后不建立会话"，结果连带激活了它的**防账号枚举**行为——`shouldReturnGenericDuplicateResponse` 的判据是 `requireEmailVerification || autoSignIn === false`，一旦为真，用**已注册的邮箱**再次注册时接口会返回一个**假的成功响应**：既不建号也不发信，用户看到"注册成功，验证链接已发送"，然后苦等一封永远不会来的邮件。
+
+这个缺陷的迷惑性在于：同一个邮箱走"忘记密码"能正常收到信（同一条 SMTP 通道、同一个发送函数），只有注册路径静默失败，很容易被误判成发信故障。实际复现与修复验证：已存在的邮箱注册返回 `422 USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL`；全新邮箱注册正常建号并发信。
+
+最终改为 `autoSignIn: true`（better-auth 默认值，显式写出以防有人"优化"掉）+ 前端注册成功后主动退出会话，既保住"注册后不进入工作台"，也恢复了"邮箱已存在"的明确报错。
+
 ### 阶段 2（未实现）
 
 待实现后按同样方式记录。Cloudflare 侧的子域名启用、Worker 部署与 catch-all 绑定属人工步骤，需与代码验证分开记录。
