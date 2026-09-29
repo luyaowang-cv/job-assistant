@@ -13,7 +13,23 @@ const loading = ref(false)
 const error = ref('')
 const allowSignup = ref(false)
 
-const { login, signup } = useAuthSession()
+// 注册成功后把凭据留在页面上：用户点完邮件里的验证链接回来，
+// 按一个按钮就能重新登录，不必再把邮箱密码敲一遍。
+const pendingVerification = ref<{ email: string, password: string } | null>(null)
+const checkingVerification = ref(false)
+const resending = ref(false)
+
+const { login, signup, resendVerificationEmail } = useAuthSession()
+
+const formTitle = computed(() => {
+  if (pendingVerification.value) return '验证你的邮箱'
+  return mode.value === 'register' ? '创建你的账号' : '欢迎回来'
+})
+
+const formSubtitle = computed(() => {
+  if (pendingVerification.value) return '就差最后一步了'
+  return mode.value === 'register' ? '开始整理你的求职节奏' : '登录以继续你的求职工作台'
+})
 
 // 读取公开注册总开关，决定是否展示"注册"入口。
 async function loadSignupConfig() {
@@ -39,11 +55,9 @@ async function submit() {
   try {
     if (mode.value === 'register') {
       await signup(email.value.trim(), password.value, displayName.value.trim() || undefined)
-      // 注册后不会建立会话（服务端 autoSignIn: false），必须先验证邮箱。
-      // 切回登录模式并留在本页，让用户去邮箱点完链接再回来登录。
-      mode.value = 'login'
-      password.value = ''
-      ElMessage.success('注册成功。验证链接已发到你的邮箱，点开后回来登录即可。')
+      // 新账号必须先验证邮箱才能用，服务端注册后（autoSignIn: true + 立即登出）
+      // 不会留下会话。这里记下凭据，切到"待验证"界面等用户去邮箱点链接。
+      pendingVerification.value = { email: email.value.trim(), password: password.value }
       return
     }
     await login(email.value.trim(), password.value)
@@ -51,7 +65,9 @@ async function submit() {
   }
   catch (err) {
     if (err instanceof EmailNotVerifiedError) {
-      error.value = '这个账号还需要先验证邮箱。验证链接已经发到你的邮箱，点开后就能登录了。'
+      // 用户常常刚点完验证链接就回来登录，但页面上的状态是旧的。
+      // 明确告诉他"再点一次就行"，避免他以为是链接没生效。
+      error.value = '这个账号还需要先验证邮箱。验证链接已发到你的邮箱——如果你刚刚点过链接，再点一次「登录」就能进了。'
     }
     else {
       error.value = mode.value === 'register'
@@ -62,6 +78,50 @@ async function submit() {
   finally {
     loading.value = false
   }
+}
+
+// 用户从邮箱点完验证链接回来，按这个按钮自动重试登录——不用重新输密码。
+// 本质上就是再查一次服务端状态：验证过了就能进，没验证会被拦回来并给出提示。
+//
+// 刻意不做"点完链接就自动登录"：如果是电脑上注册、手机上点开邮件链接，
+// 自动登录会把会话建在手机上，而用户其实想在电脑上继续。
+async function retryAfterVerification() {
+  if (!pendingVerification.value) return
+  checkingVerification.value = true
+  error.value = ''
+  try {
+    await login(pendingVerification.value.email, pendingVerification.value.password)
+    await navigateTo('/')
+  }
+  catch (err) {
+    error.value = err instanceof EmailNotVerifiedError
+      ? '还没查到验证记录。请确认你点开了邮件里的链接，有时候需要等几秒再试。'
+      : '登录没能完成，请用邮箱和密码手动登录。'
+  }
+  finally {
+    checkingVerification.value = false
+  }
+}
+
+async function resendVerification() {
+  if (!pendingVerification.value) return
+  resending.value = true
+  try {
+    await resendVerificationEmail(pendingVerification.value.email)
+    ElMessage.success('验证邮件已重新发送。')
+  }
+  catch {
+    ElMessage.error('发送失败，请稍后再试。')
+  }
+  finally {
+    resending.value = false
+  }
+}
+
+function backToLogin() {
+  pendingVerification.value = null
+  error.value = ''
+  mode.value = 'login'
 }
 
 onMounted(loadSignupConfig)
@@ -88,10 +148,39 @@ onMounted(loadSignupConfig)
             <span class="auth-form__name">Offer来</span>
           </div>
 
-          <h2 class="auth-form__title">{{ mode === 'register' ? '创建你的账号' : '欢迎回来' }}</h2>
-          <p class="auth-form__subtitle">{{ mode === 'register' ? '开始整理你的求职节奏' : '登录以继续你的求职工作台' }}</p>
+          <h2 class="auth-form__title">{{ formTitle }}</h2>
+          <p class="auth-form__subtitle">{{ formSubtitle }}</p>
 
-          <el-form label-position="top" @submit.prevent="submit">
+          <!-- 待验证状态：注册完成，等用户去邮箱点链接回来 -->
+          <template v-if="pendingVerification">
+            <el-alert
+              type="success"
+              :closable="false"
+              show-icon
+              title="注册成功，验证链接已发送"
+              :description="`请打开 ${pendingVerification.email} 查收邮件（没看到就翻一下垃圾邮件文件夹）`"
+            />
+            <el-alert v-if="error" class="auth-form__error mt-4" type="error" :closable="false" show-icon :title="error" />
+            <el-button
+              class="auth-form__submit mt-5"
+              type="primary"
+              size="large"
+              :loading="checkingVerification"
+              @click="retryAfterVerification"
+            >
+              我已完成验证，重新登录
+            </el-button>
+            <div class="auth-form__switch">
+              <div>
+                没收到邮件？<el-link type="primary" :underline="false" @click="resendVerification">重新发送</el-link>
+              </div>
+              <div class="auth-form__aside">
+                <el-link type="info" :underline="false" @click="backToLogin">返回登录</el-link>
+              </div>
+            </div>
+          </template>
+
+          <el-form v-else label-position="top" @submit.prevent="submit">
             <el-form-item label="邮箱">
               <el-input v-model="email" type="email" placeholder="you@example.com" autocomplete="username" size="large" />
             </el-form-item>
@@ -105,7 +194,7 @@ onMounted(loadSignupConfig)
             <el-button class="auth-form__submit" type="primary" size="large" :loading="loading" @click="submit">{{ mode === 'register' ? '注册' : '登录' }}</el-button>
           </el-form>
 
-          <div class="auth-form__switch">
+          <div v-if="!pendingVerification" class="auth-form__switch">
             <template v-if="mode === 'login'">
               <div v-if="allowSignup">
                 还没有账号？<el-link type="primary" :underline="false" @click="switchMode('register')">立即注册</el-link>

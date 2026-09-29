@@ -64,16 +64,32 @@ async function resend() {
 <template>
   <AuthPanel :title="title" :subtitle="subtitle">
     <template v-if="state === 'success'">
-      <el-alert
-        type="success"
-        :closable="false"
-        show-icon
-        title="验证完成。"
-        description="回到工作台继续你的求职节奏吧。"
-      />
-      <el-button class="w-full mt-5" type="primary" size="large" @click="navigateTo('/')">
-        进入工作台
-      </el-button>
+      <template v-if="user">
+        <el-alert
+          type="success"
+          :closable="false"
+          show-icon
+          title="验证完成。"
+          description="回到工作台继续你的求职节奏吧。"
+        />
+        <el-button class="w-full mt-5" type="primary" size="large" @click="navigateTo('/')">
+          进入工作台
+        </el-button>
+      </template>
+      <template v-else>
+        <!-- 未登录通常是「电脑上注册、手机上点邮件链接」这种跨设备场景。
+             此时绝不能自动登录——那会把会话建在手机上，而用户其实想在电脑上用。 -->
+        <el-alert
+          type="success"
+          :closable="false"
+          show-icon
+          title="邮箱已验证。"
+          description="请回到你注册时用的设备，用邮箱和密码登录。"
+        />
+        <el-button class="w-full mt-5" type="primary" size="large" @click="navigateTo('/login')">
+          去登录
+        </el-button>
+      </template>
     </template>
 
     <template v-else>
