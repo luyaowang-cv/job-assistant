@@ -40,10 +40,16 @@ export default defineEventHandler(async (event) => {
   }
 
   // 保护页面：未登录访问业务页面 → 重定向到 /login
-  const isStaticOrApi = event.path.startsWith('/api/')
-    || event.path.startsWith('/_nuxt/')
-    || event.path.includes('.')
-  if (!PUBLIC_PAGES.has(event.path) && !isStaticOrApi) {
+  //
+  // event.path 是**含查询串**的（h3 的行为），例如 '/reset-password?token=xxx'。
+  // 白名单判断必须先剥掉查询串——否则邮件链接跳回来的带参数地址永远匹配不上，
+  // 用户点重置密码链接会被直接弹回登录页，而且看不出任何原因。
+  const pathname = event.path.split('?')[0] ?? event.path
+
+  const isStaticOrApi = pathname.startsWith('/api/')
+    || pathname.startsWith('/_nuxt/')
+    || pathname.includes('.')
+  if (!PUBLIC_PAGES.has(pathname) && !isStaticOrApi) {
     const session = await auth.api.getSession({ headers: event.headers })
     if (!session?.user) {
       return sendRedirect(event, '/login', 302)
