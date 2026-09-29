@@ -1,6 +1,6 @@
 import { createError, defineEventHandler, sendRedirect } from 'h3'
 
-import { auth } from '../utils/auth'
+import { auth, EMAIL_VERIFICATION_REQUIRED_SINCE } from '../utils/auth'
 import { isAdminEmail } from '../utils/admin'
 
 // 无需登录即可访问的页面。邮件里的验证与重置链接会直接落到这些路径上，
@@ -19,6 +19,15 @@ export default defineEventHandler(async (event) => {
     if (!session?.user) {
       throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
     }
+
+    // 分界点之后注册的账号必须先验证邮箱，否则不给任何业务数据。
+    // 这是"新注册强制验证"的第二道防线：第一道是 auth.ts 的 autoSignIn: false
+    // （注册后不建会话），前端也会在登录后立刻拦一次给出友好提示；这里兜底防止
+    // 有人绕过界面直接调接口。分界点之前注册的存量账号不受影响。
+    if (!session.user.emailVerified && new Date(session.user.createdAt) >= EMAIL_VERIFICATION_REQUIRED_SINCE) {
+      throw createError({ statusCode: 403, statusMessage: 'Email not verified' })
+    }
+
     event.context.user = {
       id: session.user.id,
       email: session.user.email,

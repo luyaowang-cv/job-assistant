@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 
+import { EmailNotVerifiedError } from '~/composables/use-session'
+
 definePageMeta({ layout: 'auth' })
 
 const mode = ref<'login' | 'register'>('login')
@@ -37,18 +39,25 @@ async function submit() {
   try {
     if (mode.value === 'register') {
       await signup(email.value.trim(), password.value, displayName.value.trim() || undefined)
-      // 注册即发验证信。刻意说明"不验证也能用"，免得用户以为必须先去邮箱点链接。
-      ElMessage.success('注册成功。验证邮件已发送，不验证也能正常使用。')
+      // 注册后不会建立会话（服务端 autoSignIn: false），必须先验证邮箱。
+      // 切回登录模式并留在本页，让用户去邮箱点完链接再回来登录。
+      mode.value = 'login'
+      password.value = ''
+      ElMessage.success('注册成功。验证链接已发到你的邮箱，点开后回来登录即可。')
+      return
     }
-    else {
-      await login(email.value.trim(), password.value)
-    }
+    await login(email.value.trim(), password.value)
     await navigateTo('/')
   }
-  catch {
-    error.value = mode.value === 'register'
-      ? '注册失败：该邮箱可能已被使用，或当前未开放注册。'
-      : '登录失败：邮箱或密码不正确。'
+  catch (err) {
+    if (err instanceof EmailNotVerifiedError) {
+      error.value = '这个账号还需要先验证邮箱。验证链接已经发到你的邮箱，点开后就能登录了。'
+    }
+    else {
+      error.value = mode.value === 'register'
+        ? '注册失败：该邮箱可能已被使用，或当前未开放注册。'
+        : '登录失败：邮箱或密码不正确。'
+    }
   }
   finally {
     loading.value = false

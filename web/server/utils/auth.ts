@@ -15,6 +15,15 @@ const TOKEN_TTL_SECONDS = TOKEN_TTL_MINUTES * 60
 const VERIFY_CALLBACK = '/verify-email'
 const RESET_CALLBACK = '/reset-password'
 
+// 邮箱验证的分界时刻：从这个时间点**之后**注册的账号，必须先验证邮箱才能登录；
+// 此前的存量账号不受影响，保持"能登录 + 界面软提醒 + 收件箱受限"。
+//
+// 为什么要用时间分界而不是直接开 better-auth 的 requireEmailVerification：
+// 那个开关是全局的，一开就把所有 emailVerified=false 的存量账号一起锁在门外，
+// 而存量账号的 emailVerified 本来就都是 false——升级当天所有人（包括所有者自己）
+// 都会登不进来。哨兵值只在"注册策略切换"这种一次性场景出现，写死比加字段更直接。
+export const EMAIL_VERIFICATION_REQUIRED_SINCE = new Date('2026-09-29T00:00:00.000Z')
+
 // 邮件里的链接必须是**绝对地址**，否则收件人根本点不开。better-auth 在未配置
 // baseURL 时（本地开发、或环境变量漏配）会给出相对路径，所以这里用 APP_URL 兜底解析。
 // 顺带统一改写 callbackURL：注册后自动发的那封不带它，不改写就会跳回默认首页。
@@ -61,9 +70,11 @@ export const auth = betterAuth({
     // 公开注册由 ALLOW_PUBLIC_SIGNUP 总开关控制；未设置时默认关闭。
     disableSignUp: process.env.ALLOW_PUBLIC_SIGNUP !== 'true',
     minPasswordLength: 8,
-    // 刻意不设门禁：邮箱未验证也能正常登录使用，只在界面上软提醒。
-    // 开启它会让所有存量账号（emailVerified 全为 false）当场被锁在门外，
-    // 而验证邮件本身也有发不出去的可能。
+    // 注册后不自动建立会话：新用户必须先点邮件里的链接验证，再回来登录。
+    // 这是"新注册必须验证"的前半段；后半段（拦住手动登录）在 middleware/auth.ts 里，
+    // 因为 better-auth 的 requireEmailVerification 是全局开关，做不到只拦新账号。
+    autoSignIn: false,
+    // 保持全局不设门禁，避免把存量账号一起锁死；新账号的门禁由上面两处组合实现。
     requireEmailVerification: false,
     resetPasswordTokenExpiresIn: TOKEN_TTL_SECONDS,
     // 改密码后踢掉所有旧会话：否则密码被盗改后，攻击者手上的旧 cookie 仍然有效。
