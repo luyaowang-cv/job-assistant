@@ -31,6 +31,14 @@ async function main() {
     ?? (await auth.api.signUpEmail({ body: { email, password, name: '本地用户' } })).user.id
   console.log(`所有者账号就绪：${email} (id=${ownerId})`)
 
+  // 本脚本用的是独立 better-auth 实例，不带邮件验证配置，产出的账号
+  // emailVerified 恒为 false。所有者邮箱是可控的，直接标记为已验证，
+  // 免得顶栏一直挂着"邮箱未验证"的提醒。
+  if (!existing?.emailVerified) {
+    await prisma.user.update({ where: { id: ownerId }, data: { emailVerified: true } })
+    console.log('已把所有者账号标记为邮箱已验证。')
+  }
+
   const local = await prisma.user.findUnique({ where: { email: LOCAL_EMAIL } })
   if (!local) {
     console.log('未找到 local user，无需迁移。')
