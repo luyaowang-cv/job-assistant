@@ -545,6 +545,24 @@ test('keeps scanned fields in DOM order with repeated-label context', () => {
   assert.match(source, /相邻字段/)
 })
 
+test('scans and writes through the very same control selector', () => {
+  // `form-field-N` names a control by its position in this list, so a selector
+  // that differs by even one branch sends a value to the wrong box — silently,
+  // since nothing about the write would look wrong.
+  const declaration = /const CONTROL_SELECTOR = '([^']+)'/
+  const selectors = [scanVisibleFormFields, applyFillEntries, applyChoiceEntries]
+    .map(func => declaration.exec(func.toString())?.[1])
+
+  assert.ok(selectors.every(Boolean), 'every page-side pass must declare CONTROL_SELECTOR')
+  assert.equal(new Set(selectors).size, 1)
+  for (const selector of selectors) {
+    // Under a literal `contenteditable="true"` these two spellings are skipped
+    // entirely, and the field is never seen by any layer.
+    assert.match(selector, /contenteditable=""/)
+    assert.match(selector, /contenteditable="plaintext-only"/)
+  }
+})
+
 test('supports Universe Design custom selects without the legacy hard block', () => {
   const scanSource = scanVisibleFormFields.toString()
   const applySource = applyChoiceEntries.toString()
