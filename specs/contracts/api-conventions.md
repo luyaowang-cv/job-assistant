@@ -278,6 +278,9 @@
 - `GET /api/v1/application-profiles/:id/fill-context` 的 legacy 回退必须包含 basics、educations、strategy、workExperiences、projects、skills、languages、certificates、campusExperiences、awards 与关联 ResumeVersion；组合版本返回 resolved blocks/references。
 - `POST /api/v1/form-fill/preview` 可接收空白、可编辑的 input、textarea、date/month 等日期输入、select、radio-group 和 custom-select descriptor，并允许项目、实习/工作、校园经历、自我评价和长描述字段。服务端仍拒绝密码、验证码、文件上传、支付/银行卡和同意声明字段。
 - AI 只能使用所选网申档案的 resolved context，不得编造事实；输出仍限制为请求中已声明的 fieldId，并经 Zod 校验。
+- `POST /api/v1/form-fill/preview` 的失败响应细化错误码，取代原先统一折叠的 502 `AI_PROVIDER_ERROR`：上游 429 → `AI_PROVIDER_RATE_LIMITED`（HTTP 429）、401/403 → `AI_KEY_INVALID`、5xx → `AI_PROVIDER_UNAVAILABLE`、其他 4xx → `AI_PROVIDER_REJECTED`、超时 → `AI_PROVIDER_TIMEOUT`。调用方据此区分「退避重试」与「重试无用」；其余接口的错误码不变。
+- `POST /api/v1/form-fill/preview` 请求上游时显式传 `max_tokens: 4096`，不再依赖 Provider 各自的默认值（DeepSeek 默认 4096，gpt-4o-mini 默认 16384）。插件按该值把一批的估算输出量控制在 3200。
+- 该接口的 resolved context 在简历版本存在时不再附带 `legacyContent`；`resumeContent` 与 `legacyContent` 均设 12000 字符上限。
 
 ## F-033 网申档案到岗时间说明
 
