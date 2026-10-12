@@ -4,6 +4,17 @@
  */
 
 export function scanVisibleFormFields() {
+  // This body is serialised into the page, so the selector cannot live at
+  // module scope. Scan and both writers must match the same controls in the
+  // same order, or `form-field-N` stops naming the control the plan was built
+  // for.
+  //
+  // `contenteditable` is matched by value because the bare attribute
+  // (`<div contenteditable>`, the commonest spelling) and `plaintext-only` are
+  // both valid and neither equals the literal "true".
+  const CONTROL_SELECTOR = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
+  /** Only elements actually carrying the attribute; `includes(null)` is false. */
+  const isRichText = (element) => ['', 'true', 'plaintext-only'].includes(element.getAttribute?.('contenteditable'))
   const isVisible = (element) => {
     const style = window.getComputedStyle(element)
     const rect = element.getBoundingClientRect()
@@ -49,7 +60,7 @@ export function scanVisibleFormFields() {
 
     let cursor = element.parentElement
     for (let level = 0; cursor && level < 5; level += 1, cursor = cursor.parentElement) {
-      const controlsInContainer = cursor.querySelectorAll('input, textarea, select, [contenteditable="true"]').length
+      const controlsInContainer = cursor.querySelectorAll(CONTROL_SELECTOR).length
       const text = shortVisibleText(cursor)
       // A field wrapper normally holds at most a few related controls. This avoids
       // accidentally using the entire page text as a field label or context.
@@ -93,7 +104,7 @@ export function scanVisibleFormFields() {
     return containerText && containerText.length <= 60 ? containerText : ''
   }
   const adjacentLabel = (element) => {
-    const hasControl = (node) => Boolean(node.querySelector?.('input, textarea, select, [contenteditable="true"], button'))
+    const hasControl = (node) => Boolean(node.querySelector?.(`${CONTROL_SELECTOR}, button`))
     let cursor = element
     for (let level = 0; level < 3 && cursor?.parentElement; level += 1) {
       let sibling = cursor.previousElementSibling
@@ -145,7 +156,7 @@ export function scanVisibleFormFields() {
     return roots
   }
   const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
-  const allControls = queryAll('input, textarea, select, [contenteditable="true"]')
+  const allControls = queryAll(CONTROL_SELECTOR)
   const customSelectFor = (element) => element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select')
     ?? (element.getAttribute('role') === 'combobox' ? element.closest('[role="combobox"]') ?? element : null)
   const radioGroupFor = (element) => {
@@ -204,7 +215,7 @@ export function scanVisibleFormFields() {
       context: contextFor(element),
       name: element.getAttribute('name') ?? '',
       placeholder: element.getAttribute('placeholder') ?? '',
-      inputType: element instanceof HTMLInputElement ? element.type : (element.getAttribute('contenteditable') === 'true' ? 'contenteditable' : ''),
+      inputType: element instanceof HTMLInputElement ? element.type : (isRichText(element) ? 'contenteditable' : ''),
       controlType: 'custom-select',
       options: [],
       multiple: false,
@@ -219,7 +230,7 @@ export function scanVisibleFormFields() {
     context: contextFor(element),
     name: element.getAttribute('name') ?? '',
     placeholder: element.getAttribute('placeholder') ?? '',
-    inputType: element instanceof HTMLInputElement ? element.type : (element.getAttribute('contenteditable') === 'true' ? 'contenteditable' : ''),
+    inputType: element instanceof HTMLInputElement ? element.type : (isRichText(element) ? 'contenteditable' : ''),
     controlType: element.tagName.toLowerCase(),
     options: element instanceof HTMLSelectElement ? Array.from(element.options).map(option => option.textContent?.trim() ?? '') : [],
     multiple: element instanceof HTMLSelectElement && element.multiple,
@@ -256,6 +267,11 @@ export function scanVisibleFormFields() {
 export async function applyFillEntries(instructions) {
   const entries = Array.isArray(instructions) ? instructions : (instructions?.entries ?? [])
   const unresolvedIds = new Set(Array.isArray(instructions) ? [] : (instructions?.unresolvedIds ?? []))
+  // Must stay identical to the scan's selector: the ids name controls by their
+  // position in this list. See `scanVisibleFormFields` for why the
+  // `contenteditable` variants are spelled out.
+  const CONTROL_SELECTOR = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
+  const isRichText = (element) => ['', 'true', 'plaintext-only'].includes(element.getAttribute?.('contenteditable'))
   const isVisible = (element) => {
     const style = window.getComputedStyle(element)
     const rect = element.getBoundingClientRect()
@@ -273,7 +289,7 @@ export async function applyFillEntries(instructions) {
     return roots
   }
   const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
-  const controls = queryAll('input, textarea, select, [contenteditable="true"]')
+  const controls = queryAll(CONTROL_SELECTOR)
     .map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden')
     .filter(({ element }) => !(element instanceof HTMLInputElement && element.type === 'radio'))
@@ -451,7 +467,7 @@ export async function applyFillEntries(instructions) {
       continue
     }
 
-    if (element.getAttribute('contenteditable') === 'true') {
+    if (isRichText(element)) {
       element.focus?.({ preventScroll: true })
       element.textContent = String(entry.value)
       element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: String(entry.value) }))
@@ -487,6 +503,8 @@ export async function applyFillEntries(instructions) {
 export async function applyChoiceEntries(instructions) {
   const entries = Array.isArray(instructions) ? instructions : (instructions?.entries ?? [])
   const unresolvedIds = new Set(Array.isArray(instructions) ? [] : (instructions?.unresolvedIds ?? []))
+  // Must stay identical to the scan's selector; see `scanVisibleFormFields`.
+  const CONTROL_SELECTOR = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
   const isVisible = (element) => {
     const style = window.getComputedStyle(element)
     const rect = element.getBoundingClientRect()
@@ -507,7 +525,7 @@ export async function applyChoiceEntries(instructions) {
     return roots
   }
   const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
-  const allControls = queryAll('input, textarea, select, [contenteditable="true"]')
+  const allControls = queryAll(CONTROL_SELECTOR)
   const byId = new Map(entries.map(entry => [entry.fieldId, entry]))
   const appliedIds = []
   const skippedExistingIds = []

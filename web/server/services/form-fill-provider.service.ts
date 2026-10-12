@@ -9,6 +9,18 @@ export class FormFillProviderError extends Error {
   }
 }
 
+const PROVIDER_TIMEOUT_MS = 60_000
+
+/**
+ * The ceiling on one batch's answer, stated rather than inherited.
+ *
+ * Leaving `max_tokens` unset means the provider's own default decides, and those
+ * differ wildly (DeepSeek defaults to 4096, gpt-4o-mini to 16384). A reply cut
+ * off mid-JSON parses as invalid and costs the whole batch, so the limit is
+ * pinned to a value the extension's batch budget is sized against.
+ */
+const MAX_FILL_OUTPUT_TOKENS = 4_096
+
 export async function previewAiFormFill(input: FormFillPreviewInput) {
   const profileContext = await getApplicationProfileFillContext(input.profileId)
   if (!profileContext) throw new FormFillProviderError('所选网申档案不存在或不可访问。', 404, 'PROFILE_NOT_FOUND')
@@ -50,18 +62,43 @@ export async function previewAiFormFill(input: FormFillPreviewInput) {
         model: runtime.model,
         temperature: 0.1,
         response_format: { type: 'json_object' },
+        max_tokens: MAX_FILL_OUTPUT_TOKENS,
         messages: [
           { role: 'system', content: 'You are a precise job-application assistant. Return only the requested JSON object.' },
           { role: 'user', content: prompt },
         ],
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     })
   }
-  catch {
-    throw new FormFillProviderError('AI 服务暂时不可用，请检查 API 设置后重试。', 502, 'AI_PROVIDER_UNAVAILABLE')
+  catch (error) {
+    // A timeout and a dropped connection are both transient, but naming which
+    // one happened is what lets a caller decide to wait rather than re-check
+    // its own settings.
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    throw new FormFillProviderError(
+      timedOut ? 'AI 服务响应超时，请稍后重试。' : 'AI 服务暂时不可用，请检查 API 设置后重试。',
+      502,
+      timedOut ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_UNAVAILABLE',
+    )
   }
-  if (!response.ok) throw new FormFillProviderError(`AI 服务请求失败（HTTP ${response.status}）。`, 502, 'AI_PROVIDER_ERROR')
+  // The upstream status is the only thing that separates a failure worth
+  // retrying from one that will fail identically every time: a 429 clears on its
+  // own, a rejected key never does. Collapsing them into one 502 left the caller
+  // with no way to tell, so they are mapped through here.
+  if (!response.ok) {
+    const status = response.status
+    if (status === 429) {
+      throw new FormFillProviderError('AI 服务请求过于频繁（HTTP 429），请稍后重试。', 429, 'AI_PROVIDER_RATE_LIMITED')
+    }
+    if (status === 401 || status === 403) {
+      throw new FormFillProviderError('AI 服务的 API Key 无效或没有权限，请在“AI 设置”中检查。', 502, 'AI_KEY_INVALID')
+    }
+    if (status >= 500) {
+      throw new FormFillProviderError(`AI 服务暂时不可用（HTTP ${status}）。`, 502, 'AI_PROVIDER_UNAVAILABLE')
+    }
+    throw new FormFillProviderError(`AI 服务拒绝了本次请求（HTTP ${status}）。`, 502, 'AI_PROVIDER_REJECTED')
+  }
 
   let content = ''
   try {

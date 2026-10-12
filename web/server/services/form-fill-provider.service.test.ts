@@ -20,6 +20,26 @@ test('compacts resolved profile into form-fill evidence without composition meta
   assert.equal(JSON.stringify(evidence).includes('overLimit'), false)
 })
 
+test('drops the legacy snapshot once a resume version carries the profile', () => {
+  const evidence = buildFillEvidence({
+    basics: { fullName: '张三' },
+    resumeVersion: { id: 'resume-1', type: 'BASE', content: '基础简历正文' },
+    legacyContent: '旧版简历正文',
+  })
+
+  // The snapshot is only a fallback, and the whole evidence block is re-sent
+  // with every batch of a form — so carrying both pays for the same CV twice.
+  assert.equal(evidence.resumeContent, '基础简历正文')
+  assert.equal(evidence.legacyContent, '')
+})
+
+test('keeps the legacy snapshot when there is no resume version', () => {
+  const evidence = buildFillEvidence({ basics: {}, legacyContent: '旧版简历正文' })
+
+  assert.equal(evidence.resumeContent, '')
+  assert.equal(evidence.legacyContent, '旧版简历正文')
+})
+
 test('builds ordered deterministic candidates for education, internships and projects', () => {
   const fills = buildStructuredFillCandidates({
     basics: { phone: '13800138000', documentNumber: '110101199001011234', targetCities: ['北京'] },
@@ -113,4 +133,28 @@ test('keeps education fields on the same record when dates appear before school 
   assert.match(byId.self, /Vue 与 TypeScript/)
   assert.equal(byId.platform, 'GitHub')
   assert.equal(byId['social-url'], 'https://github.com/example')
+})
+
+const twoLinkedAccounts = {
+  basics: {},
+  resumeVersion: { content: '[GitHub](https://github.com/example)\n[知乎](https://www.zhihu.com/people/example)' },
+}
+
+test('leaves an ambiguous social link to the model instead of guessing', () => {
+  const fills = buildStructuredFillCandidates(twoLinkedAccounts, [{ id: 'homepage', label: '个人主页' }])
+
+  // Two linked accounts cannot be matched to one generic box by position. This
+  // layer's answer is final — a field it fills is dropped from the model's list
+  // — so a wrong URL written here would never be corrected.
+  assert.deepEqual(fills, [])
+})
+
+test('matches a social box that names its own platform', () => {
+  const byId = Object.fromEntries(buildStructuredFillCandidates(twoLinkedAccounts, [
+    { id: 'github', label: 'GitHub 主页链接' },
+    { id: 'zhihu', label: '知乎主页链接' },
+  ]).map(fill => [fill.fieldId, fill.value]))
+
+  assert.equal(byId.github, 'https://github.com/example')
+  assert.equal(byId.zhihu, 'https://www.zhihu.com/people/example')
 })

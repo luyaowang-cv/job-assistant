@@ -49,6 +49,33 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 >
 > 改 `.env` 后必须 `up -d` 重建容器，`restart` 不会重新读取环境变量。
 
+## 数据库迁移
+
+**生产镜像只含 `.output`**——容器里既没有 Prisma CLI 也没有 schema；`db` 服务只绑回环地址，公网连不上。所以迁移要在**本机**通过 SSH 隧道对着服务器上的库执行。
+
+```bash
+# 1) 先备份。迁移可能不可逆，这是唯一的退路。
+ssh root@114.134.185.94 'bash /root/backup.sh'
+
+# 2) 建隧道：把服务器的 5432 映射到本机 5433（保持这个终端不关）
+ssh -N -L 5433:127.0.0.1:5432 root@114.134.185.94
+
+# 3) 另开终端，在仓库的 web/ 目录下应用迁移。
+#    密码取自服务器 ~/job-assistant/.env 里的 POSTGRES_PASSWORD。
+cd web
+DATABASE_URL='postgresql://job_assistant:<POSTGRES_PASSWORD>@127.0.0.1:5433/job_assistant?schema=public' \
+  pnpm db:migrate:deploy
+
+# 4) 重启 web 容器，让它用上新的表结构
+ssh root@114.134.185.94 'cd ~/job-assistant && docker compose -f docker-compose.prod.yml up -d web'
+```
+
+要点：
+
+- 用 `pnpm db:migrate:deploy`（`prisma migrate deploy`）而**不是** `pnpm db:migrate`：后者是 `migrate dev`，会检测 drift、开 shadow database、并交互式询问迁移名，在无人值守场景直接失败。
+- `migrate deploy` 幂等，已应用过的迁移会被跳过，可以安全重跑。
+- **顺序是先迁移、后上代码**：新代码可能依赖新列，反过来的话会有一小段时间接口报错。
+
 ## 备份与恢复
 
 - 备份脚本：`/root/backup.sh`（每天 3:17 cron 自动跑）
@@ -63,6 +90,10 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 - `POSTGRES_PASSWORD` / `BETTER_AUTH_SECRET` / `AI_KEY_ENCRYPTION_KEY`（密钥）
 - `ALLOW_PUBLIC_SIGNUP=true`（开放注册总开关）
 - `ADMIN_EMAILS`（管理员邮箱，逗号分隔）
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM`（邮件发信，见 `web/.env.example` 的注释）
+- `MAIL_DEV_LOG_ONLY`（仅本地开发用，生产必须为 `false`）
+
+> **换 `BETTER_AUTH_SECRET` 会让已发出的邮箱验证链接立即作废**——验证用的是无状态令牌，不落库。有效期只有 1 小时，影响面有限，但轮换密钥时要知道这一点。
 
 ## 常见问题
 

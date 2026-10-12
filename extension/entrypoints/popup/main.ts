@@ -39,6 +39,17 @@ const workbenchOrigin = 'https://offerscoming.cn'
 // runaway page, not a target: the batch builder keeps real forms well under it.
 const MAX_FILL_BATCHES = 60
 
+/** Attempts per batch. A batch that still fails is skipped; the rest carry on. */
+const FILL_BATCH_ATTEMPTS = 3
+/** One second, then three: long enough for a per-minute limit to free a slot. */
+const FILL_RETRY_DELAYS_MS = [1_000, 3_000]
+/**
+ * Breathes between batches so a fast form does not trip a requests-per-minute
+ * cap. Twenty back-to-back calls is what turned a working fill into a mid-form
+ * HTTP 429 in the first place.
+ */
+const FILL_BATCH_PACING_MS = 400
+
 type CaptureResult = {
   companyName?: string
   jobTitle?: string
@@ -54,6 +65,7 @@ type ApiSuccess<T> = {
 
 type ApiFailure = {
   error?: {
+    code?: string
     message?: string
     details?: Array<{
       path?: Array<string | number>
@@ -61,6 +73,38 @@ type ApiFailure = {
     }>
   }
 }
+
+/**
+ * Carries the response's status and machine-readable code alongside the message
+ * the user sees. Without them a caller cannot tell a rate limit — which clears
+ * on its own — from a rejected API key, which never will.
+ */
+class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+/** Codes where a second attempt can plausibly succeed. */
+const RETRYABLE_CODES = new Set([
+  'NETWORK_UNREACHABLE',
+  'AI_PROVIDER_RATE_LIMITED',
+  'AI_PROVIDER_UNAVAILABLE',
+  'AI_PROVIDER_TIMEOUT',
+  // A truncated reply is a sampling accident; the next attempt usually parses.
+  'AI_PROVIDER_INVALID_RESPONSE',
+])
+
+function isRetryable(error: unknown) {
+  if (!(error instanceof ApiError)) return false
+  if (RETRYABLE_CODES.has(error.code)) return true
+  // An unrecognised 5xx is the workbench itself failing, which is worth one more
+  // try. An unrecognised 4xx is this request being wrong, which is not.
+  return !error.code && error.status >= 500
+}
+
+const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
 type SavedApplication = {
   id: string
@@ -299,19 +343,68 @@ function readJobPageDetails(): CaptureResult {
 }
 
 async function readApi<T>(path: string, init?: RequestInit) {
-  const response = await fetch(`${workbenchOrigin}${path}`, {
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-    ...init,
-  })
+  let response: Response
+  try {
+    response = await fetch(`${workbenchOrigin}${path}`, {
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      ...init,
+    })
+  }
+  catch {
+    // A dropped connection never produced a status, so it is named here rather
+    // than surfacing as the browser's own "Failed to fetch".
+    throw new ApiError('无法连接工作台，请确认 https://offerscoming.cn 可正常访问。', 0, 'NETWORK_UNREACHABLE')
+  }
   const body = await response.json().catch(() => ({})) as ApiSuccess<T> & ApiFailure
   if (!response.ok || !('data' in body)) {
     const detail = body.error?.details?.[0]
     const detailPath = detail?.path?.length ? `${detail.path.join('.')}：` : ''
     const detailMessage = detail?.message ? `${detailPath}${detail.message}` : ''
     const message = body.error?.message ?? `工作台请求失败（HTTP ${response.status}）。`
-    throw new Error(detailMessage ? `${message} ${detailMessage}` : message)
+    throw new ApiError(detailMessage ? `${message} ${detailMessage}` : message, response.status, body.error?.code ?? '')
   }
   return body.data
+}
+
+/**
+ * One batch of fields, retried on the failures that can clear on their own.
+ *
+ * `onRetry` reports progress so a three-second wait does not look like a hang.
+ * A non-retryable error escapes on the first attempt: a rejected key or a
+ * malformed request fails identically however many times it is sent.
+ */
+async function requestFillPreview(
+  profileId: string,
+  batch: FormFieldDescriptor[],
+  onRetry: (attempt: number) => void,
+) {
+  let lastError: unknown
+  for (let attempt = 0; attempt < FILL_BATCH_ATTEMPTS; attempt += 1) {
+    try {
+      return await readApi<AiFillPreview>('/api/v1/form-fill/preview', {
+        method: 'POST',
+        body: JSON.stringify({ profileId, fields: batch.map(field => ({
+          id: field.id,
+          label: field.label,
+          context: field.context,
+          name: field.name,
+          placeholder: field.placeholder,
+          inputType: field.inputType,
+          controlType: field.controlType,
+          options: field.options,
+          multiple: field.multiple,
+        })) }),
+      })
+    }
+    catch (error) {
+      lastError = error
+      const delay = FILL_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || !isRetryable(error)) break
+      onRetry(attempt + 1)
+      await pause(delay)
+    }
+  }
+  throw lastError
 }
 
 async function checkWorkbench() {
@@ -553,27 +646,24 @@ async function fillCurrentPage() {
     const appliedIds = new Set<string>()
     const unavailableIds = new Set<string>()
     const aiFieldIds = new Set(aiFields.map(field => field.id))
+    // The fields of a batch that never returned an answer. Tracked by id rather
+    // than inferred from a batch counter, so one failed batch can be reported
+    // without claiming the batches after it failed too.
+    const failedFieldIds = new Set<string>()
     let provider = ''
     let model = ''
     let completedBatches = 0
     let failure = ''
 
     for (const [index, batch] of batches.entries()) {
-      setResult(fillResultElement, `AI 填写中：第 ${index + 1} / ${batches.length} 批…`)
+      const batchLabel = `第 ${index + 1} / ${batches.length} 批`
+      setResult(fillResultElement, `AI 填写中：${batchLabel}…`)
+      // Space the requests out. A fast form is what trips a per-minute cap in
+      // the first place, and pacing costs less than the retry it avoids.
+      if (index > 0) await pause(FILL_BATCH_PACING_MS)
       try {
-        const preview = await readApi<AiFillPreview>('/api/v1/form-fill/preview', {
-          method: 'POST',
-          body: JSON.stringify({ profileId: profile.id, fields: batch.map(field => ({
-            id: field.id,
-            label: field.label,
-            context: field.context,
-            name: field.name,
-            placeholder: field.placeholder,
-            inputType: field.inputType,
-            controlType: field.controlType,
-            options: field.options,
-            multiple: field.multiple,
-          })) }),
+        const preview = await requestFillPreview(profile.id, batch, (attempt) => {
+          setResult(fillResultElement, `AI 填写中：${batchLabel}…（连接不稳定，第 ${attempt} 次重试）`)
         })
         provider = preview.provider
         model = preview.model
@@ -588,10 +678,14 @@ async function fillCurrentPage() {
         completedBatches += 1
       }
       catch (error) {
-        // Everything already written and read back stays in place; stopping here
-        // keeps a broken provider from being called once per remaining batch.
-        failure = error instanceof Error ? error.message : 'AI 填写请求失败。'
-        break
+        // Everything already written and read back stays in place, and the
+        // remaining batches still run: one rejected or timed-out batch no
+        // longer costs the rest of the form.
+        failure = failure || (error instanceof Error ? error.message : 'AI 填写请求失败。')
+        for (const field of batch) failedFieldIds.add(field.id)
+        // A bad key or a rejected request fails identically for every batch, so
+        // the rest are abandoned rather than re-sent one by one.
+        if (!isRetryable(error)) break
       }
     }
 
@@ -601,10 +695,17 @@ async function fillCurrentPage() {
       if (!aiFieldIds.has(entry.fieldId) || entry.status === 'skipped_existing' || entry.status === 'skipped_sensitive') return safeEntry
       if (appliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: `AI 已填写（${provider} / ${model}）。` }
       if (unavailableIds.has(entry.fieldId)) return { ...safeEntry, status: 'needs_manual' as const, reason: 'AI 已给出建议，但页面控件未能应用。' }
-      // A batch that never ran keeps the plan's own reason: “档案中没有该字段的
-      // 可用内容” tells the user what to do, where “AI 未执行” only repeats the
-      // headline. The summary already reports the batch failure.
-      if (failure && completedBatches < batches.length) return safeEntry
+      // A field whose batch never returned an answer keeps the plan's own reason
+      // (“档案中没有该字段的可用内容” still tells the user what to do) and adds
+      // why nothing was asked of it this round.
+      if (failedFieldIds.has(entry.fieldId)) {
+        const batchReason = String(entry.reason ?? '').trim().replace(/。$/, '')
+        return {
+          ...safeEntry,
+          status: 'needs_manual' as const,
+          reason: `${batchReason ? `${batchReason}；` : ''}其所在批次接口请求失败，本次未填写。`,
+        }
+      }
       // Keep the plan's own reason alongside the AI outcome. “档案里没有语言能力
       // 那一段，AI 也答不出来” points at the profile; “AI 未给出可用答案” alone
       // suggests the tool failed when it actually declined to invent.
@@ -626,8 +727,9 @@ async function fillCurrentPage() {
 
     const batchSummary = batches.length > 1 ? `已完成 ${completedBatches}/${batches.length} 批。` : ''
     if (failure) {
+      const failed = failedFieldIds.size ? `有 ${failedFieldIds.size} 项因接口失败未填写，已在下方标出。` : ''
       const kept = report.summary.filled ? `已写入并校验的 ${report.summary.filled} 项保留在页面上，可直接使用或手动修改。` : ''
-      setResult(fillResultElement, `${unreachedFrameWarning}${batchSummary}${failure} ${kept}`, true)
+      setResult(fillResultElement, `${unreachedFrameWarning}${batchSummary}${failure} ${failed}${kept}`, true)
       return
     }
     setResult(

@@ -5,7 +5,7 @@
 - 插件中的“网申档案”选择器直接使用工作台 `GET /api/v1/application-profiles` 结果；不维护插件私有档案或裁剪版档案。
 - 用户点击“AI 填写”后，插件读取所选档案的 resolved fill-context，并将当前页面全部空白、可编辑且可程序化处理的字段 descriptor 交给本地规则或服务端 AI。项目、实习/工作、校园经历、自我评价、日期、描述、普通单选和单选下拉不得因类别而被前置排除。
 - 页面已有值不覆盖；密码、验证码、文件上传、支付/银行卡和同意声明仍不扫描进 AI 请求。AI 不得补造档案没有的事实，未解析字段进入结果报告。
-- 打招呼模块必须展示工作台 ResumeVersion 选择器，不展示“粘贴简历文本”。用户选择版本并点击生成后，插件使用该版本已保存 content 调用既有 Application Materials preview。
+- ~~打招呼模块必须展示工作台 ResumeVersion 选择器，不展示“粘贴简历文本”。用户选择版本并点击生成后，插件使用该版本已保存 content 调用既有 Application Materials preview。~~（**2026-09-26 移除**：打招呼模块已下线，改为开放性问题回答，见「Current-job capture」一节。）
 - 读取并保存当前岗位时，当前页有效 HTTP(S) URL 写入 Application API 的 `jobUrl`；该值随后作为 Job.url 在投递看板显示。
 
 ## F-034 重复字段与 Universe Design 控件
@@ -15,13 +15,100 @@
 - custom-select 仅点击唯一精确文本匹配的可见 option；没有唯一匹配时不操作并进入报告。
 - 一次填写中先应用 radio/custom-select，再应用普通文本。初始 disabled 的 descriptor 可发送给 AI；应用时仍禁用且未被前序选择解锁则报告不可用。
 
+## 网申填写链路重构（2026-09-26）
+
+本节记录一次**未走 F-xxx 编号流程**的重构，它修订了上面的若干条目。以下为当前生效的契约。
+
+### 匹配：从锚定全匹配改为打分制
+
+- 规则表从约 30 条（仅 `basic` / `education`）扩展为 **64 条 / 472 个别名 / 覆盖 9 个板块**。命中断言改为打分：完全相等 0.99、标签包含关键词 0.91、关键词包含标签 0.80，超过 0.68 命中。
+- **修订 F-005B**：该条要求「radio/checkbox、自定义下拉、multi-select、模糊选项匹配、期望工作地点、教育经历、日期控件与重复目标映射一律 `needs_manual`」**不再成立**。这些类别现在都可以填，前提是通过下面两项检查。
+- 放宽的代价由两个机制承担，二者都是**否决**而非减分：
+  - **区块门控**：字段所属板块（由字段自身文字 + 页面上下文推断）与规则板块不一致时否决。日期类规则必须同板块；其余规则需标签完全相等才能跨板块。
+  - **描述符反例**：`姓名拼音` 不匹配姓名；`公司性质` 不匹配公司名；实体名标签与日期规则双向互斥。
+- 反例只读**字段自身的描述**（label / name / placeholder），**不含周边上下文**——否则旁边一个「学校名称」会把真正的「开始时间」误判成日期违规。
+- 重复板块（教育、实习/工作、项目、校园、奖项、证书、语言）按页面顺序映射到档案记录。某条记录已被占用时**不再回退到其他记录**，而是报告 `needs_manual`——重复填写一条记录比留空更糟。
+- 「档案里有这一板块、但记录已用完」的字段标记 `skipAi`，不交给模型（模型只会编造）。例外：档案里**完全没有**这一板块时仍然交给 AI，因为简历正文仍在模型的证据里。
+
+### 写入：完整事件契约 + 回读校验
+
+- **修订 F-012**：写入流程为 `focus` → `beforeinput` → 原生 prototype setter → `input(data)` → **等待 48ms** → `change` → 真实 `blur()`，然后校验。48ms 是承重的：受控组件的状态更新可能延后一个任务，不等会让 `change` / `blur` 的校验读到旧值。
+- 整批写入后统一等待 120ms 做一次延迟复核，捕捉「写入被接受、随后被框架改回」的控件。
+- 读回比对容忍页面重新格式化：先比精确相等，再退化为相互包含。
+- 每字段的装饰性等待从 400ms 降至 138ms（滚动高亮 220→90ms，收尾 180ms 移除）。
+
+### 分批 AI
+
+- **修订 F-010**：AI 调用不再整页一次，改为按板块与记录拆批，逐批「分析 → 写入 → 回读校验」。**单批失败不丢弃已写入并校验的内容**，报告说明已完成几批、保留了几项。
+- 长文本字段（描述、自我评价等）单独成批，避免与其他字段竞争输出预算而触发截断；同一记录的字段保持在同一批，防止跨记录串写。
+- 批次上限 16 字段 / 1700 估算输出量；页面拆出超过 60 批时**直接拒绝**，不调用 AI 也不改动页面。
+
+### 页面覆盖
+
+- **新增**：广度优先遍历**开放的** Shadow DOM。扫描、文本写入、下拉选项查找三处必须走同一套根节点遍历，否则 `form-field-N` 不再指向计划构建时的那个控件。
+- **新增**：`allFrames: true` 逐帧注入；字段 id 以 `frameId::localId` 命名空间化，写入按帧分组回发，某一帧失败不影响其他帧。**每个 frame 从 0 开始编号自己的控件**，不加前缀必然串味。
+- **新增**：拆分的日期控件（年/月/日 × 开始/结束）从字段名拆词识别（`RecruitmentPortalEducation_StartDate_Month` → 板块 + 角色 + 部件），只写入对应部件。同一范围的年月共用记录索引；无法确定所属板块时报告而非猜测。
+- **修订 F-023**：该条「自定义下拉、`readonly` combobox、multi-select、异步搜索、级联与日期选择器一律不得由扩展点击或填写」**不再成立**。其中自定义下拉本就与 F-014 定义的「打开面板并点击选项」互相矛盾；现在 multi-select 与拆分日期控件也可填写，**原生 `select` 的多选**按分隔符逐个匹配唯一选项后设置 `selected`。
+
+### 不变量（未变）
+
+- 只填空白字段，**不覆盖已有内容**。
+- 密码、验证码、文件上传、支付/银行卡、同意声明仍不扫描、不填写。
+- **仍然永不自动提交、不自动点击、不自动发送、不自动保存**，提交前由用户逐项核对。
+- 页面已有值、DOM/HTML、Cookie、浏览器状态仍不出现在任何 AI 请求里。
+
+## 网申填写链路重构（2026-09-30）
+
+本节与上一节同性质，记录一次**未走 F-xxx 编号流程**的重构，它修订了上一节的「分批 AI」两条。
+
+### 分批：原子块 + 贪心装箱
+
+- **修订上一节「长文本字段（描述、自我评价等）单独成批」**：该条**不再成立**。叙述字段不再独占批次，改为按成本预算装箱。一个含 5 个「工作描述/项目描述」的表单原会因此产生至少 5 个请求，叠加无节流的逐批调用后，一次填写要发 20 次以上。
+- **修订上一节「批次上限 16 字段 / 1700 估算输出量」**：改为 **24 字段 / 3200 估算输出量**。3200 由服务端的 `max_tokens`（4096）倒推；字段上限取 24 而非 30，是因为每个字段还要支付约 14 token 的 JSON 信封（`"fieldId":"form-field-12",`），30 个字段会把信封顶到上限。
+- **新增**：分层结构。先按 `(板块, 记录)` 把页面切成**原子块**，一条记录不可拆（描述必须与它所属的公司同批）；再按页面顺序**贪心 next-fit 装箱**。**一个原子块只在其自身就超过一整批预算时才允许被拆开**——这是唯一的不变量例外。
+- **删除**上一节隐含的「换记录且已有 8 字段即封批」阈值规则。批内最多横跨几条记录是成本预算的推论，两条规则叠加正是碎片化的来源。
+- **修订**：判断字段是否为长文本，只读 `label` / `name` / `placeholder`，**不读 `context`**。`context` 含扫描器写入的「相邻字段：…」，读它会把「结束时间」按旁边的「工作描述」计价，使每个挨着描述框的字段都变成一个独立请求。
+- **新增**：批次严格按页面顺序、**不允许重排**。模型靠**顺序**推断答案属于哪条记录，因此一个批次必须是页面上连续的一段窗口。
+
+### 失败恢复
+
+- **修订**：批次失败**不再中断整轮填写**。原先 `catch` 内直接 `break`，一个批次失败即放弃其后所有批次；现在跳过该批次继续，其字段在报告中单独标注「其所在批次接口请求失败」。已写入并校验的内容全部保留。
+- **新增**：可重试与致命的分野。`AI_PROVIDER_RATE_LIMITED` / `AI_PROVIDER_UNAVAILABLE` / `AI_PROVIDER_TIMEOUT` / `AI_PROVIDER_INVALID_RESPONSE` / `NETWORK_UNREACHABLE` 及未识别 code 的 5xx，按 1s、3s 退避重试，每批最多 3 次；`AI_KEY_INVALID` / `AI_KEY_NOT_CONFIGURED` / `AI_PROVIDER_REJECTED` 立即终止——重试结果必然相同，只会消耗用户额度。
+- **新增**：批次之间固定 400ms 间隔。一次填写要连发数个请求，主动节流比事后重试便宜。
+- **新增**：`form-fill/preview` 的错误码透传契约（详见 `api-conventions.md` F-032）。此前所有上游失败统一折叠为 502 `AI_PROVIDER_ERROR`，调用方无法区分该退避还是该停。
+
+### 请求体积
+
+- **新增**：`buildFillEvidence` 在简历版本存在时不再附带 `legacyContent`（它是 `resumeContent` 的兜底，后者非空时前者是同一份 CV 的过期渲染）；两者均设 12000 字符上限。档案内容随**每一次**批次请求重传，减小它是按批次数倍增的收益。
+
+### 页面覆盖：控件选择器
+
+- **修订**：三处索引源（扫描、文本写入、选择写入）现在共用同一个 `CONTROL_SELECTOR` 字面量。**选择器不一致会让 `form-field-N` 指向另一个控件，而且不报错**——写入看上去完全正常。新增源码级测试锁定三者逐字相同。
+- **修复**：`contenteditable` 此前只按字面量 `"true"` 匹配。HTML 里最常见的写法 `<div contenteditable>`（空属性值）与 `contenteditable="plaintext-only"` 都不等于 `"true"`，**这类富文本编辑器此前完全不被扫描到，因此任何一层都看不见它**——规则层和 AI 都无从谈起。现在三种写法都匹配，且判定与文本写入统一走 `isRichText()`，不再直接比较属性字符串。
+- **未变**：跨域 iframe 仍受 `ATS_FORM_HOSTS` 名单限制，名单外的厂商仍需手工添加。
+
+### 规则层：宁可漏不可错
+
+- **新增原则**：结构化取值层的答案**是终局**——字段一旦在这里被填上，就从模型的字段列表里移除了。因此**规则层宁可返回空（交给 AI），也不可写入一个看似合理但错误的答案**，后者永远不会被纠正。
+- **修复**：`resumeFacts` 此前用 `find` 只取**第一个**匹配的社交链接，于是同时问 GitHub 与知乎的表单会把 GitHub 的 URL 写进知乎的框。现在返回全部候选，且**只在无歧义时写入**：字段标签指名平台（如「知乎主页链接」）→ 按平台取；标签是泛称且候选唯一 → 取该唯一项；**标签是泛称而候选有多个 → 返回空交给 AI**。
+- **修复**：section 判定漏了「主页链接」而取值分支包含它，导致只写「主页链接」的字段永远进不了该分支（死代码）。现已对齐，并补上「个人主页」「领英」等别名。
+
+### 已知局限（待办）
+
+- 服务端尚未读上游的 `finish_reason`，因此**截断**与**格式错误**都表现为 `AI_PROVIDER_INVALID_RESPONSE`，无法对截断单独降级（把该批对半重发）。
+- 成本常数（叙述 850 / 富文本 360 / 长选项 180 / 普通 95）**未经实测校准**，3200 因此是估值。校准方法：记录每次调用的 `usage.completion_tokens` 与该批 `Σ estimateFieldCost` 的比值。
+- 上一节的「页面覆盖」局限未变：不在 `ATS_FORM_HOSTS` 名单内的跨域 iframe 仍然扫不到，其中表单既不进规则层也不进 AI。
+
 ## Permissions and activation
 
-- The Chromium extension uses only `activeTab`, `scripting`, `clipboardWrite`, and the local workbench host permission `http://127.0.0.1:3000/*`.
-- No recruitment-site host permission, content script, background polling, cookie access, or history access is allowed.
-- Page reading, workbench writes, greeting generation, and clipboard copies are each initiated by an explicit user click.
+- 扩展申请 `activeTab`、`scripting`、`clipboardWrite`、`storage`（保存开放题对话），以及工作台域名 `https://offerscoming.cn/*`。
+- 另申请**已知 ATS 厂商域名**的 host 权限（20 个厂商 → 41 条 origin 模式，见 `extension/wxt.config.ts`）。原因：`activeTab` 只授予顶层文档的 origin，而很多公司的招聘页把网申表单**嵌在厂商域名的跨域 iframe 里**；没有常驻权限就完全扫不到，而且**逐帧拒绝注入时不报错**，表现为「这个页面没有表单」。
+- 仍然不申请 `<all_urls>`；仍然没有 content script、后台轮询、cookie 访问或历史访问。跨域嵌入的表单必然来自厂商自己的域名，因此用清单而非通配。
+- 页面读取、工作台写入与剪贴板复制均由用户显式点击发起。
 
-## Current-job capture and greeting
+> 2026-09-26 修订：原文为「只使用 `activeTab`、`scripting`、`clipboardWrite` 与 `http://127.0.0.1:3000/*`」+「不允许招聘站点 host 权限」。工作台域名随 F-042 迁到公网，host 权限清单见上。
+
+## Current-job capture
 
 - The extension reads text nodes from the current tab only after a click. It excludes `input`, `textarea`, `select`, `option`, `button`, `script`, and `style`, so existing form values are neither read nor sent.
 - Capture must select a bounded job-detail section using site-specific detail selectors first and visible semantic anchors (such as `职位描述` / `职位要求`) second. It must never use all visible page text as the JD fallback. JD extraction ends before a subsequent section such as `招聘者`、活跃状态、App/沟通引导、`工作地址`、推荐岗位或页脚。
@@ -29,7 +116,8 @@
 - `salaryMin` and `salaryMax` use the existing Application API's integer yuan-per-month fields. They may be prefilled only from an unambiguous salary range such as `20-30K`; obfuscated icon-font text, annual packages and unclear units remain blank and editable.
 - JD whitespace normalization is deterministic: it may collapse text-node whitespace and join whitespace that splits adjacent Chinese characters or Chinese punctuation, but must not paraphrase, infer, add or remove JD facts.
 - Before it calls `POST /api/v1/applications`, it displays editable `companyName`, `jobTitle`, `location`, `salaryMin`, `salaryMax`, `jobUrl`, and `description`. Only the explicit save click creates an Application through the existing Zod-validated API and its normal event record.
-- A greeting preview calls the existing `POST /api/v1/applications/:id/materials/preview` only for an Application saved by the current popup session. `resumeText` exists only in popup memory and the one preview request; it is not sent to a persistence API or extension storage.
+- **开放性问题回答**（2026-09-26 起取代打招呼）：弹窗用**当前选中的网申档案**生成开放题答案，支持连续追问。接口 `POST /api/v1/open-questions/answer` 无状态——客户端携带完整对话，服务端把档案当作唯一事实依据；提示词要求档案里没有的信息用 `【】` 占位，不得编造公司名等事实。对话按档案保存在 `chrome.storage.local`（`storage` 权限的唯一用途），不写入数据库、不写入页面；不引入岗位或简历上下文，也不需要先保存岗位。
+- ~~打招呼预览~~：原 `POST /api/v1/applications/:id/materials/preview` 调用已随打招呼模块移除。服务端接口、`application-materials` service/schema 与 `ApplicationMaterial` 表**暂未清理**（`job-library.service.ts` 仍会在删除投递时级联清理该表）。
 - The extension never automatically fills, clicks, sends, submits, or saves anything on a recruitment page.
 
 ## Failure behavior
@@ -42,6 +130,8 @@
 - The local rule module is a pure, deterministic function. It receives only a field descriptor (`id`, visible label, `name`, `placeholder`, input `type`, option labels and a boolean `hasValue`) plus the user-selected ApplicationProfile. It must not receive, retain or report the existing field value.
 - For F-007, the page-side scan derives `visible label` in this order: explicitly associated or wrapping `label`; `aria-labelledby`/`aria-label`; a short label element in the nearest supported form-item container (`.el-form-item`, `.ant-form-item`, `.form-item`, `.form-group` or table row); then a short, visible adjacent label-like element. It removes decorative required markers and trailing colons. Arbitrary long container text, page text and input values are never label sources. A missing or ambiguous label remains unnamed and is never made eligible for automatic filling.
 - Each field is classified as `basic`, `education`, `work`, `project`, `skill`, `language`, `certificate`, `campus`, `award`, `date`, `sensitive` or `unknown`. A plan entry is exactly one of `filled`, `skipped_existing`, `skipped_sensitive` or `needs_manual`, with a human-readable reason.
+> ⚠️ **本节的「一律 `needs_manual`」清单已被 2026-09-26 修订**，见下方「网申填写链路重构」。
+
 - Only a single, unambiguous, high-confidence basic mapping is eligible for the later fill step: full name, mobile phone, email, residence city, country/region, gender, WeChat ID, political status, document type or age. Age is calculated only from a valid full `YYYY-MM-DD` birth date in the selected profile, using the local current date. A basic mapping may fill a blank text-like control, or a native non-multiple `select` only when exactly one option's visible text equals the value after whitespace/punctuation normalization. Radio/checkbox controls, custom dropdowns, multi-selects, fuzzy option matches, expected-work-location selectors, education blocks, date controls and any duplicate target mapping remain `needs_manual`.
 - Password, verification code/CAPTCHA, bank/payment, privacy or legal declaration/consent, upload/file and any password/file input are excluded when indicated by the field's own label, name or placeholder. In the local personal-use mode, identity and emergency-contact facts are candidate-profile data: explicit labels use a local rule first, then AI may use the saved value if still unresolved. Existing values are always `skipped_existing` before a fill value is considered.
 - The report contains field metadata, status and reason. It never contains pre-existing form values, does not persist page fields, and does not trigger any DOM mutation; T-005 alone may apply `filled` plan entries after the user clicks Start.
@@ -94,4 +184,6 @@
 - 扩展仍只调用用户明确选择的 ApplicationProfile fill-context。服务端优先从 current ApplicationProfileVersion 的 resolved view 生成 localFacts/aiContext；无新版本时允许 legacy adapter 回退。
 - 扩展不得直接调用素材库、variant、迁移 preview、影响分析、同步、事件或历史版本 API，不得把 resolved 内容写入 extension storage 或日志。
 - F-023 不新增浏览器权限、后台轮询、招聘站点 host permission 或自动提交能力。现有只填空字段、写前复检与禁止提交规则保持不变。
-- `.ud__select`、`input[role="combobox"][readonly]`、multi-select、异步搜索、级联与日期选择器一律不得由扩展点击或填写；它们保持人工处理。扩展也不得点击 selector 的清除按钮。
+> ⚠️ **本条与 F-014 本就互相矛盾，且已被 2026-09-26 修订**（multi-select 与拆分日期控件现在可填写）。见下方「网申填写链路重构」。
+
+- ~~`.ud__select`、`input[role="combobox"][readonly]`、multi-select、异步搜索、级联与日期选择器一律不得由扩展点击或填写；它们保持人工处理。扩展也不得点击 selector 的清除按钮。~~

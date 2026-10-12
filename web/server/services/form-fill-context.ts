@@ -21,6 +21,14 @@ function referenceExperience(candidate: unknown) {
   }
 }
 
+/**
+ * The resume markdown is re-sent with every batch of a form, so its size is
+ * paid for as many times as the page has batches. It is a second rendering of
+ * facts that mostly already appear structured above, but it is also the only
+ * place some self-evaluation prose lives, so it is capped rather than dropped.
+ */
+const MAX_RESUME_CONTENT_CHARS = 12_000
+
 export function buildFillEvidence(value: unknown) {
   const profile = record(value)
   const references = array(profile.references)
@@ -43,6 +51,7 @@ export function buildFillEvidence(value: unknown) {
     return { title: block.title, fields }
   }).filter(section => section.fields.length)
   const resumeVersion = record(profile.resumeVersion)
+  const resumeContent = typeof resumeVersion.content === 'string' ? resumeVersion.content : ''
   const explicitWorkExperiences = array(profile.workExperiences)
   const explicitProjects = array(profile.projects)
   const referencedInternships = references.filter(candidate => record(candidate).type === 'INTERNSHIP').map(referenceExperience)
@@ -60,8 +69,13 @@ export function buildFillEvidence(value: unknown) {
     certificates: array(profile.certificates),
     campusExperiences: array(profile.campusExperiences),
     awards: array(profile.awards),
-    resumeContent: typeof resumeVersion.content === 'string' ? resumeVersion.content : '',
-    legacyContent: typeof profile.legacyContent === 'string' ? profile.legacyContent : '',
+    resumeContent: resumeContent.slice(0, MAX_RESUME_CONTENT_CHARS),
+    // Carried only when it is the sole source. `buildStructuredFillCandidates`
+    // already reads it as the fallback behind `resumeContent`, and the model has
+    // no use for a superseded rendering of the same CV on every batch.
+    legacyContent: resumeContent
+      ? ''
+      : (typeof profile.legacyContent === 'string' ? profile.legacyContent : '').slice(0, MAX_RESUME_CONTENT_CHARS),
   }
 }
 
@@ -134,7 +148,10 @@ function resumeFacts(content: string) {
     certificates: honorParts.filter(part => certificatePattern.test(part)).map(name => ({ name })),
     languages: honorParts.filter(part => /(?:CET[-\s]?\d|大学英语|雅思|托福|IELTS|TOEFL)/i.test(part)).map(name => ({ name, detail: name })),
     selfEvaluation: markdownSection(content, /(?:自我评价|个人评价|个人总结|专业总结|职业概述|专业技能)/i).join('\n').slice(0, 1000),
-    socialUrl: urls.find(url => /(?:github|gitee|gitlab|linkedin|zhihu|xiaohongshu|weibo)/i.test(url)) ?? '',
+    // Every linked profile, not only the first. Which one a box wants is the
+    // caller's question; answering it here by position would hand a 知乎 box the
+    // GitHub URL.
+    socialUrls: Array.from(new Set(urls.filter(url => /(?:github|gitee|gitlab|linkedin|zhihu|xiaohongshu|weibo)/i.test(url)))),
   }
 }
 
@@ -146,6 +163,18 @@ function platformForUrl(value: string) {
   if (/zhihu/i.test(value)) return '知乎'
   if (/xiaohongshu/i.test(value)) return '小红书'
   if (/weibo/i.test(value)) return '微博'
+  return ''
+}
+
+/** The platform a *field label* names, which is how a repeated box is told apart. */
+function platformFromLabel(label: string) {
+  if (/github/i.test(label)) return 'GitHub'
+  if (/gitee/i.test(label)) return 'Gitee'
+  if (/gitlab/i.test(label)) return 'GitLab'
+  if (/linkedin|领英/i.test(label)) return 'LinkedIn'
+  if (/zhihu|知乎/i.test(label)) return '知乎'
+  if (/xiaohongshu|小红书/i.test(label)) return '小红书'
+  if (/weibo|微博/i.test(label)) return '微博'
   return ''
 }
 
@@ -205,7 +234,7 @@ export function buildStructuredFillCandidates(value: unknown, fields: FillField[
     if (/(?:证书名称|资格证书)/i.test(label)) section = 'certificate'
     if (/(?:语言|精通程度|熟练程度)/i.test(label)) section = 'language'
     if (/(?:自我评价|个人评价|个人总结)/i.test(label)) section = 'self'
-    if (/(?:社交平台|URL\s*\/\s*ID|社交账号)/i.test(label)) section = 'social'
+    if (/(?:社交平台|URL\s*\/\s*ID|社交账号|主页链接|个人主页)/i.test(label)) section = 'social'
     if (/(?:作品名称|作品链接|作品地址)/i.test(label)) section = 'portfolio'
 
     if (/^(?:姓名|真实姓名|中文姓名|full\s*name|legal\s*name)(?:\s*\|.*)?$/i.test(label)) push(field.id, basics.fullName)
@@ -295,8 +324,19 @@ export function buildStructuredFillCandidates(value: unknown, fields: FillField[
 
     if (section === 'self' && /(?:自我评价|个人评价|个人总结)/i.test(label)) push(field.id, savedSelfEvaluation)
     if (section === 'social') {
-      if (/(?:社交平台)/i.test(label)) push(field.id, platformForUrl(resume.socialUrl))
-      else if (/(?:URL\s*\/\s*ID|社交账号|主页链接)/i.test(label)) push(field.id, resume.socialUrl)
+      // Two linked accounts in the profile (a GitHub and a 知乎) cannot be
+      // matched to two boxes by position: the 知乎 box would be handed the
+      // GitHub URL. This layer's answer is final — once a field is filled here
+      // it is dropped from the model's list — so an ambiguous match is worse
+      // than none. Only an exact platform match, or a lone candidate, is
+      // written; everything else is left for the model to resolve from the
+      // label, which is exactly what it is good at.
+      const named = platformFromLabel(label)
+      const matched = (named
+        ? resume.socialUrls.find(url => platformForUrl(url) === named)
+        : resume.socialUrls.length === 1 ? resume.socialUrls[0] : '') ?? ''
+      if (/(?:社交平台)/i.test(label)) push(field.id, platformForUrl(matched))
+      else if (/(?:URL\s*\/\s*ID|社交账号|主页链接|个人主页)/i.test(label)) push(field.id, matched)
     }
   }
 
