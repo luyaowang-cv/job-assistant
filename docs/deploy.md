@@ -102,6 +102,12 @@ ssh root@114.134.185.94 'cd ~/job-assistant && docker compose -f docker-compose.
 - **全站 `ERR_TOO_MANY_REDIRECTS`（死循环）**：典型成因是 **Cloudflare 的 SSL 模式是 `Flexible`，而源站 Caddy 强制 HTTPS 跳转**——Cloudflare 用 HTTP 回源、源站要求 HTTPS，一来一回就无限重定向。修法：Cloudflare → SSL/TLS → 概述，把加密模式改成 **`Full`**（我们的证书是 Let's Encrypt 签的，Full/Full-strict 都可用）。
   - **诊断方法**：用 `curl -sIL --resolve "offerscoming.cn:443:<Cloudflare的IP>" https://offerscoming.cn/` 绕过 DNS 强制走 Cloudflare，看跳转次数；再对比多个 DNS 的解析结果（`nslookup` vs 公共 DoH），判断是否 DNS 传播未完成。
 - **网站间歇性超时、SSH 却正常**：先确认 `https://www.cloudflare.com/cdn-cgi/trace` 的 `colo=` 是不是被路由到了 HKG/NRT/SIN 这类亚洲节点。如果 A 记录已经是灰云还出现超时，问题在线路而非服务器。
+- **整站打不开、SSH 却进得去（浏览器一直转圈或 `ERR_CONNECTION_TIMED_OUT`）**：先去服务器确认是不是内存被吃穿。典型现场是 `systemctl status systemd-journald` 报 **`Watchdog timeout (limit 3min)`**、`journalctl` 提示 **`Failed to start Journal Service`**，紧跟着一条 **`Failed to start Snap Daemon`**。
+  - **为什么是 journald**：它被 systemd 看门狗 SIGABRT 之后会撞上启动频率限制，于是报「Failed to start」。snapd 的 unit 里有 `After=systemd-journald.socket`，**它是被连累的，跟故障本身无关**——不用管 snap，也不要以为是谁装了什么东西。
+  - **根因几乎总是内存，不是磁盘**。2026-10-12 那次的实测：`/` 只用了 21%、`dmesg` 里一条 OOM-kill 记录都没有，但 `free -h` 的 **available 只剩 52Mi**（整机 1.7G），`docker stats` 显示 `job-assistant-web` 一个容器独占 **1.26GiB**。系统不停换页 → journald 连续 3 分钟拿不到 CPU → 被看门狗杀掉 → 整站不可用约 25 分钟，而**三个容器一个都没重启**：`restart: unless-stopped` 保护的是容器，没有任何东西保护宿主机。
+  - **为什么会涨到 1.26G**：`node-cluster` 按 CPU 核数起 worker（这台 2 核 = 2 个 Node 进程），从上次部署算起 11 天一路涨上去。**每次部署重建容器等于给内存按一次重置键**，所以平时根本感觉不到。修法见 `docker-compose.prod.yml` 里的 `NITRO_CLUSTER_WORKERS` 和 `mem_limit`。
+  - **排查顺序**：`free -h`（available 是不是只剩几十兆）→ `docker stats --no-stream`（哪个容器在吃）→ `dmesg -T | grep -iE "blocked for more than|killed process"` → `docker logs -t job-assistant-web | ...`（**注意 `-t` 的时间戳是 UTC，北京时间要减 8 小时**）。
+  - **别一上来怀疑磁盘或备份**：备份 cron 在 03:17 且只是 `pg_dump | gzip`，`/data/backups` 实测才 12M，跟上午的故障对不上。
 - **简历 PDF 导出**：服务器未装 Chrome，需设 `RESUME_CHROMIUM_PATH` 指向浏览器。
 - **飞书同步/登录**：OAuth 回调需改成线上域名 `https://offerscoming.cn/api/v1/integrations/feishu/callback`。
 - **浏览器插件**：连 `https://offerscoming.cn`（`extension/wxt.config.ts` 与 `popup/main.ts`）；打包用 `pnpm zip`。
