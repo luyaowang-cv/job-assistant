@@ -1,0 +1,26 @@
+# 统一按 LF 存储。
+#
+# 仓库里的文本文件一直是 LF，但 Windows 上的编辑器（或某些工具）会悄悄写成 CRLF，
+# 于是 git 把整个文件标成改动。2026-10-12 一次 pull 之后就出现了 47 个文件、
+# 19000+ 行的假 diff —— 增删行数完全相等，实质内容一个字没变，真正的改动会
+# 淹没在里面。这里显式声明，让 git 在任何平台上进出都按 LF 处理。
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换（text=auto 一般能自动识别，这里写明是保险）。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.gz binary
+*.xlsx binary
+*.dump binary
+
+# Windows 批处理必须保持 CRLF，否则 cmd 解析会出问题。当前仓库没有这类文件，
+# 先留着，免得以后加了才发现。
+*.bat text eol=crlf
+*.cmd text eol=crlf
