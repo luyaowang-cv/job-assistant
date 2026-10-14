@@ -41,6 +41,13 @@ body::-webkit-scrollbar,
   --space-4: 16px;
   --space-6: 24px;
   --space-8: 32px;
+  /* 「固定窗口」页面（高度锁到视口、内容在页面内部滚）要在 calc 里扣掉的固定占位合计：
+     20(外壳上内边距) + 60(顶栏) + 10(顶栏下外边距) + 20(外壳下内边距) = 110。
+     扣完底边正好落在左侧栏底边（sticky + calc(100vh - 40px) → 视口下方 20px）上。
+     顶栏是 Element Plus 的 --el-header-height（60px），不是 h-14 的 56px；
+     顶栏高度或外壳内边距以后有改动，这里要跟着改。
+     想额外留底部余量的页面（agent 用 150、interview-prep 用 128）自己另算，不用这个值。 */
+  --workbench-window-chrome: 110px;
   --radius-control: 10px;
   --radius-surface: 16px;
   --el-color-primary: var(--workbench-blue);
@@ -152,6 +159,17 @@ select {
   width: 100%;
   min-width: 0;
   margin: 0;
+}
+
+/* 「固定窗口」页面：高度锁到视口，多出来的内容在页面内部滚，页面本身不往下长。
+   必须写确定的算式，不能用 height: 100%——.workbench-main 的高度来自 flex 拉伸，
+   外层 .workbench-shell 只有 min-height，百分比在这种链条里会退化成 auto，
+   页面就只剩内容高度（agent 页面踩过同一个坑）。
+   底部内边距一并清掉：.material-page 默认给 56px，留着底边就比左侧栏高一截。
+   用两个类（.page-rail.workbench-window = 0,2,0）压过 .material-page，不依赖样式注入顺序。 */
+.page-rail.workbench-window {
+  height: calc(100vh - var(--workbench-window-chrome));
+  padding-bottom: 0;
 }
 
 .page-rail--narrow {
@@ -545,6 +563,20 @@ select {
 .material-page { padding: 20px 3px 56px; }
 .material-surface { padding: var(--space-6); border: 1px solid rgba(255,255,255,.78); border-radius: var(--radius-surface); background: rgba(255,254,250,.7); box-shadow: 0 10px 23px rgba(89,96,98,.07), inset 0 1px rgba(255,255,255,.7); backdrop-filter: blur(13px) saturate(108%); }
 .material-surface--transparent { background: rgba(255,255,255,.46); }
+/* 贴合视口的卡片：头/脚固定，中间自己滚，卡片本身不把页面撑长。
+   用于"页面不往下长、两张卡底边对齐"的编辑页（网申档案）。
+   滚动位置的暗示走 ::after 的内阴影，而不是可见滚动条：只在确实有内容滚出这一侧时才出现，
+   所以没有可滚内容时它什么都不画；用内阴影而不是渐变遮罩，是因为卡片表面是半透明的，
+   遮罩需要一个不透明的近似色，会在卡片上留下接缝。 */
+.workbench-surface--fit { display: flex; flex-direction: column; min-height: 0; padding: 0; }
+.workbench-surface__head { flex: none; padding: var(--space-6) var(--space-6) var(--space-4); }
+.workbench-surface__scroll { position: relative; flex: 1; min-height: 0; }
+.workbench-surface__body { position: absolute; inset: 0; overflow-y: auto; padding: 0 var(--space-6) var(--space-6); scrollbar-width: none; -ms-overflow-style: none; }
+.workbench-surface__body::-webkit-scrollbar { width: 0; height: 0; }
+.workbench-surface__foot { flex: none; padding: var(--space-4) var(--space-6); border-top: 1px solid rgba(190,204,195,.7); }
+.workbench-surface__scroll::after { content: ''; position: absolute; inset: 0; pointer-events: none; --hint-top: none; --hint-bottom: none; box-shadow: var(--hint-top), var(--hint-bottom); transition: box-shadow 160ms ease; }
+.workbench-surface__scroll.is-top::after { --hint-top: inset 0 14px 14px -14px rgba(61,70,75,.3); }
+.workbench-surface__scroll.is-bottom::after { --hint-bottom: inset 0 -14px 14px -14px rgba(61,70,75,.3); }
 .workbench-table-shell--transparent { background: rgba(255,255,255,.34); }
 .workbench-table-shell--transparent .el-table { --el-table-tr-bg-color: rgba(255,255,255,.24); --el-table-row-hover-bg-color: rgba(255,255,255,.4); }
 .personal-education-item { padding: var(--space-4); border: 1px solid rgba(112,132,120,.16); border-radius: var(--radius-control); background: rgba(255,255,255,.46); }
