@@ -39,3 +39,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .fill-entry-filled { color: #0f766e; }
 .fill-entry-skipped-existing, .fill-entry-skipped-sensitive { color: #64748b; }
 .fill-entry-needs-manual { color: #b45309; }
+
+.memory-list { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
+.memory-entry { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 7px; }
+.memory-question { margin: 0; color: #334155; font-size: 12px; overflow-wrap: anywhere; }
+.memory-answer { margin: 0; grid-column: 1; color: #0f766e; font-size: 12px; overflow-wrap: anywhere; }
+.memory-scope { margin: 0; grid-column: 1; color: #94a3b8; font-size: 11px; }
+.memory-entry button { grid-row: 1 / 4; grid-column: 2; align-self: center; min-height: 26px; padding: 3px 8px; font-size: 11px; }
+.memory-empty { margin: 0; color: #94a3b8; font-size: 12px; }
