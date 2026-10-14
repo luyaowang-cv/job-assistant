@@ -1,0 +1,41 @@
+{
+  "name": "示例网申档案（按 2026-10-13 那份北森页面填的回放用）",
+  "basics": {
+    "fullName": "王路瑶",
+    "gender": "女",
+    "birthDate": "2001-11-11",
+    "phone": "13800000000",
+    "email": "wangluyao@example.com",
+    "city": "北京市",
+    "nativePlace": "河北省邯郸市",
+    "countryRegion": "中国",
+    "politicalStatus": "共青团员",
+    "ethnicity": "汉族",
+    "documentType": "居民身份证",
+    "targetCities": ["北京市"]
+  },
+  "educations": [
+    { "school": "北方工业大学", "college": "信息学院", "major": "物联网工程", "educationLevel": "硕士研究生", "startDate": "2024-09", "endDate": "2027-06" },
+    { "school": "北方工业大学", "major": "物联网工程", "educationLevel": "本科", "startDate": "2019-09", "endDate": "2023-06" }
+  ],
+  "workExperiences": [
+    { "company": "某某科技有限公司", "title": "前端开发实习生", "startDate": "2026-04", "endDate": "", "description": "负责运营后台表单引擎，抽象出 12 个可复用字段组件。" },
+    { "company": "某某网络科技", "title": "前端开发实习生", "startDate": "2026-01", "endDate": "2026-03", "description": "负责活动页搭建与性能优化。" }
+  ],
+  "projects": [
+    { "name": "Offer来 · 秋招求职工作台", "role": "独立开发", "startDate": "2026-08", "endDate": "", "description": "Nuxt 4 全栈工作台 + MV3 浏览器插件，90 个接口 / 28 张表。" },
+    { "name": "基于改进 YOLOv8 的检测算法", "role": "第二作者", "startDate": "2026-04", "endDate": "2026-10", "description": "负责数据增强与消融实验，mAP 提升 3.2 个百分点。" }
+  ],
+  "skills": ["TypeScript", "Vue 3", "Nuxt", "Node.js", "PostgreSQL", "Prisma", "LangChain", "Git", "Docker"],
+  "certificates": [
+    { "name": "华为 ICT 初级工程师", "detail": "2025-05" },
+    { "name": "全国计算机等级考试二级", "detail": "2024-09" }
+  ],
+  "strategy": {
+    "targetLocations": ["北京市"],
+    "expectedSalary": "15001～25000",
+    "availableDate": "一个月内",
+    "recruitmentSource": "BOSS直聘",
+    "referralCode": ""
+  }
+}

@@ -621,3 +621,20 @@ model CareerAgentMessage {
 
   @@index([conversationId, createdAt])
 }
+
+// better-auth 内置限流器的持久化后端。
+// 为什么不用默认的进程内存：本项目用 node-cluster 预设起多个 worker 进程，
+// 内存计数在每个 worker 各存一份，限额会被放大成 N 倍且重启即清零。
+//
+// model 名与字段名由 better-auth 的内部约定决定，不要重命名：
+// 适配器读写的是 prisma.rateLimit，字段固定为 key / count / lastRequest。
+// lastRequest 是毫秒时间戳，必须用 BigInt——它是 13 位数字，超出 Int 范围。
+model RateLimit {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  count       Int
+  lastRequest BigInt
+
+  // 供电过期记录批量清理使用。
+  @@index([lastRequest])
+}

@@ -38,7 +38,11 @@ export const formFillPreviewSchema = z.object({
   fields: z.array(formFillFieldSchema).min(1).max(500),
 }).strict()
 
-const modelFillSchema = z.object({
+/**
+ * One answer. Exported because the streaming path validates answers one at a time
+ * as they arrive, and the two paths must agree on what an answer is.
+ */
+export const modelFillSchema = z.object({
   fieldId,
   value: z.string().trim().min(1).max(4_000),
 }).strict()

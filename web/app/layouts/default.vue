@@ -73,6 +73,15 @@ async function handleLogout() {
           <span class="text-[#7b899a]">{{ currentMeta.group }}</span><span class="text-[#a2adba]">/</span><strong class="font-medium text-[#31445b]">{{ currentMeta.label }}</strong>
         </div>
         <div class="flex items-center gap-3">
+          <!-- 软提醒：邮箱未验证不构成使用门槛，只是提示用户顺手补上。 -->
+          <button
+            v-if="user && !user.emailVerified"
+            type="button"
+            class="cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-[13px] text-[#b07a5e] hover:underline"
+            @click="navigateTo('/verify-email?pending=1')"
+          >
+            邮箱未验证
+          </button>
           <span class="workbench-mode"><i />{{ user?.email ?? '未登录' }}</span>
           <el-button size="small" text @click="handleLogout">退出</el-button>
         </div>

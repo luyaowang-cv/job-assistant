@@ -12,7 +12,6 @@ const saving = ref(false)
 const deleting = ref(false)
 const search = ref('')
 const type = ref('')
-const tags = ref<string[]>([])
 const editorOpen = ref(false)
 const editingId = ref<string | null>(null)
 const form = reactive({ type: 'PROJECT', title: '', organization: '', role: '', techStackText: '', tags: [] as string[], startDate: '', endDate: '', current: false, projectUrl: '', variantName: '简短版', content: '' })
@@ -40,7 +39,7 @@ function cardMeta(card: Card) {
 async function load() {
   loading.value = true
   try {
-    const response = await $fetch<{ data: ListResponse }>('/api/v1/material-cards', { query: { search: search.value, type: type.value || undefined, tags: tags.value.join(','), pageSize: 100 } })
+    const response = await $fetch<{ data: ListResponse }>('/api/v1/material-cards', { query: { search: search.value, type: type.value || undefined, pageSize: 100 } })
     cards.value = response.data.items
     if (selected.value) selected.value = cards.value.find(card => card.id === selected.value?.id) ?? null
   } catch { ElMessage.error('素材库读取失败。') } finally { loading.value = false }
@@ -136,22 +135,19 @@ async function removeCard() {
   catch { ElMessage.error('删除失败，请重试。') }
   finally { deleting.value = false }
 }
-watch([search, type, tags], () => void load(), { deep: true })
+watch([search, type], () => void load(), { deep: true })
 onMounted(() => void load())
 </script>
 
 <template>
-  <section class="page-rail material-page">
+  <section class="page-rail material-page material-library-page workbench-window">
     <div class="material-surface material-library">
-      <header class="material-surface__header">
-        <div><span class="application-board__eyebrow">MATERIAL LIBRARY</span><h1>可复用素材库</h1><p>事实只维护一份，文案按版本固定引用。</p></div>
-        <el-button type="primary" @click="beginCreate">＋ 新建素材</el-button>
-      </header>
-      <div class="material-toolbar">
+      <!-- 一行：搜索 + 类型 + 新建素材。标题和说明文案按需求去掉，页面靠侧边栏告知在哪里 -->
+      <header class="material-surface__header material-toolbar">
         <el-input v-model="search" clearable placeholder="搜索标题或文案" />
         <el-select v-model="type" clearable placeholder="全部类型"><el-option v-for="(label, key) in typeLabels" :key="key" :label="label" :value="key" /></el-select>
-        <el-select v-model="tags" multiple filterable allow-create placeholder="标签全部匹配" />
-      </div>
+        <el-button type="primary" class="material-library__create" @click="beginCreate">＋ 新建素材</el-button>
+      </header>
       <div v-loading="loading" class="material-layout">
         <div class="card-list" role="list" aria-label="素材卡片">
           <button v-for="card in cards" :key="card.id" class="material-card-row" :class="{ active: selected?.id === card.id }" type="button" @click="selected = card">
@@ -211,7 +207,54 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
-.material-library{padding:24px}.material-surface__header h1{margin:4px 0 6px}.material-toolbar{display:grid;grid-template-columns:2fr 1fr 1.4fr;gap:12px;align-items:center;margin:20px 0}.material-layout{display:grid;grid-template-columns:minmax(280px,.9fr) minmax(360px,1.4fr);gap:18px;min-height:520px}.card-list,.card-detail{border:1px solid var(--el-border-color-lighter);border-radius:16px;background:var(--el-bg-color);padding:12px}.card-list{display:flex;flex-direction:column;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;max-height:290px;overflow:auto;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}.time-grid{grid-template-columns:1fr 1fr}.time-grid :deep(.el-date-editor){width:100%}.end-date-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;width:100%}.form-help{width:100%;margin:7px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5}.facts-note{align-self:start;display:grid;gap:4px;margin-top:30px;padding:10px 12px;border-left:3px solid var(--el-color-primary);background:var(--el-color-primary-light-9);color:var(--el-text-color-regular);font-size:12px}.facts-note b{font-size:13px;color:var(--el-text-color-primary)}
-@media(max-width:900px){.material-toolbar{grid-template-columns:1fr 1fr}.material-layout{grid-template-columns:1fr}.card-detail{min-height:360px}}
-@media(max-width:560px){.material-library{padding:16px}.material-toolbar,.dialog-grid{grid-template-columns:1fr}.material-surface__header{align-items:flex-start;gap:12px}.material-card-row{grid-template-columns:auto 1fr}}
+/* 固定窗口：高度由 .workbench-window 锁到视口（底边和左侧栏底边齐平），
+   卡片列表和详情各自在框内滚，页面不再随卡片数量越撑越长。
+   必须靠确定的算式——百分比在这个外壳里会退化成 auto，那就又变回"随内容长高"了。
+   520px 的下限放在最外层这个圆角框上、而不是内层 grid 上：窗口很矮时内层溢出会把内容
+   甩到框外面去；撑在最外层则整页回退成可以滚，内容始终在框内。 */
+.page-rail.material-library-page { display: flex; flex-direction: column; }
+.material-library { flex: 1; min-height: 520px; display: flex; flex-direction: column; padding: 24px; }
+.material-surface__header { flex: none; }
+/* 工具栏：搜索框和类型筛选共用同一个固定宽高，主按钮仍然贴右。
+   宽度用变量是为了"一样宽"由结构保证；高度也必须两个都写死——Element Plus 自带的
+   .el-select__wrapper{min-height:32px} 和全局那条 .el-select__wrapper{min-height:40px}
+   优先级相同（都是 0,1,0），实测赢的是 EP 那条：搜索框 40px、筛选框 32px，两个框就不一样高。
+   这里用 `.material-surface__header.material-toolbar` + :deep（编译后 0,3,0）压过它们，
+   跟样式注入顺序无关。别只写一个类去压全局那条——那又变成看打包顺序了。 */
+.material-surface__header.material-toolbar { --material-filter-width: 200px; --material-filter-height: 32px; display: flex; align-items: center; justify-content: flex-start; gap: var(--space-3); margin-bottom: var(--space-4); }
+.material-surface__header.material-toolbar :deep(.el-input),
+.material-surface__header.material-toolbar :deep(.el-select) { flex: none; width: var(--material-filter-width); }
+.material-surface__header.material-toolbar :deep(.el-input__wrapper),
+.material-surface__header.material-toolbar :deep(.el-select__wrapper) { min-height: var(--material-filter-height); box-sizing: border-box; }
+/* 整行压到 32px，和投递记录、岗位库两条工具栏一致（按钮本来也是 32px，这里写出来是为了自成一体） */
+.material-surface__header.material-toolbar :deep(.el-button) { min-height: var(--material-filter-height); }
+.material-library__create { margin-left: auto; }
+.material-layout{display:grid;grid-template-columns:minmax(280px,.9fr) minmax(360px,1.4fr);gap:18px;flex:1;min-height:0}
+.card-list,.card-detail{border:1px solid var(--el-border-color-lighter);border-radius:16px;background:var(--el-bg-color);padding:12px;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(116,132,124,.32) transparent}
+.card-list::-webkit-scrollbar,.card-detail::-webkit-scrollbar{width:8px}
+.card-list::-webkit-scrollbar-track,.card-detail::-webkit-scrollbar-track{background:transparent}
+.card-list::-webkit-scrollbar-thumb,.card-detail::-webkit-scrollbar-thumb{border-radius:4px;background:rgba(116,132,124,.28)}
+/* 用 grid + align-content:start，而不是 flex 列：flex 项默认会收缩，
+   卡片会被压扁去适应框高，而不是让框滚起来。 */
+.card-list{display:grid;align-content:start;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}.time-grid{grid-template-columns:1fr 1fr}.time-grid :deep(.el-date-editor){width:100%}.end-date-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;width:100%}.form-help{width:100%;margin:7px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5}.facts-note{align-self:start;display:grid;gap:4px;margin-top:30px;padding:10px 12px;border-left:3px solid var(--el-color-primary);background:var(--el-color-primary-light-9);color:var(--el-text-color-regular);font-size:12px}.facts-note b{font-size:13px;color:var(--el-text-color-primary)}
+/* 单列之后就没有"和侧边栏并排"这回事了，解除锁高：回到普通文档流，页面整体滚。
+   这里的高度/内边距覆盖要压过全局的 .page-rail.workbench-window——scoped 会给选择器
+   加上 [data-v-x]，所以下面这个选择器比全局那条更具体，不受样式注入顺序影响。 */
+@media(max-width:900px){
+  .page-rail.material-library-page{height:auto;padding:20px 3px 40px}
+  .page-rail.material-library-page .material-library{min-height:0}
+  .material-layout{grid-template-columns:1fr;min-height:0}
+  .card-list,.card-detail{overflow:visible}
+  .card-detail{min-height:360px}
+}
+@media(max-width:560px){
+  .material-library{padding:16px}
+  /* 手机上工具栏竖排：搜索框、类型、新建素材各占一行，固定宽度这时放开成整行 */
+  .material-surface__header.material-toolbar{flex-direction:column;align-items:stretch}
+  .material-surface__header.material-toolbar :deep(.el-input),
+  .material-surface__header.material-toolbar :deep(.el-select){width:100%}
+  .material-library__create{margin-left:0}
+  .dialog-grid{grid-template-columns:1fr}
+  .material-card-row{grid-template-columns:auto 1fr}
+}
 </style>

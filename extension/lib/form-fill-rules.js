@@ -6,7 +6,7 @@
  * retained nor appear in the report.
  *
  * Matching is scored rather than all-or-nothing. Every candidate field is run
- * against a rule table covering nine profile sections, and the best rule above
+ * against a rule table covering ten profile sections, and the best rule above
  * SCORE_THRESHOLD wins. Two mechanisms keep that broad coverage from filling
  * the wrong box:
  *
@@ -20,6 +20,9 @@
  * Repeated sections additionally map the Nth page block onto the Nth saved
  * record, so a second “公司名称” box reads the second internship.
  */
+
+import { isBinaryQuestion, isPresentToggle } from './field-shape.js'
+import { isEmptyStateText } from './form-labels.js'
 
 const SCORE_THRESHOLD = 0.68
 
@@ -76,6 +79,7 @@ const OPTION_ALIASES = [
 const SECTION_ALIASES = {
   education: ['教育', '学历', '学校', '院校', '专业', '学位', '毕业', 'education', 'school', 'university', 'academic'],
   work: ['工作经历', '工作经验', '实习经历', '实习经验', '任职', '公司', '单位', 'work', 'internship', 'employment'],
+  research: ['科研经历', '科研项目', '研究经历', '学术成果', '论文', '课题', 'research', 'paper', 'thesis', 'publication'],
   project: ['项目经历', '项目经验', '项目名称', '项目描述', 'project'],
   campus: ['校园经历', '社团', '学生工作', '活动经历', 'campus', 'activity'],
   awards: ['获奖', '奖项', '荣誉', '竞赛', 'award', 'honor', 'prize'],
@@ -87,6 +91,9 @@ const SECTION_ALIASES = {
 /** Section hints tested in order; the first hit wins. */
 const SECTION_HINTS = [
   ['awards', /获奖名称|奖项名称|荣誉名称|获奖时间|竞赛名称|awardname|awardtitle/i],
+  // 科研排在项目前面：一块标题写「科研项目经历」时算科研，里面的「项目名称」由 project
+  // 规则跨段填上（它的记录池里也含科研，见 buildContext 的 projects）。
+  ['research', /科研经历|科研项目|科研名称|科研成果|研究经历|研究成果|研究项目|论文名称|论文题目|论文标题|课题名称|学术成果|researchname|papername|papertitle/i],
   ['project', /项目经历|项目名称|项目角色|项目链接|项目描述|项目内容|projectexperience|projectname|projectrole|projectdescription/i],
   ['education', /学校名称|毕业院校|入学时间|毕业时间|schoolname|educationlevel|universityname/i],
   ['work', /公司名称|工作经历|实习经历|任职经历|companyname|workexperience|employment/i],
@@ -101,12 +108,13 @@ const BASIC_OWN_WORDS = /出生日期|出生年月|生日|birthdate|dateofbirth|
 /** Own wording that means “free text”: never lock these to a section. */
 const FREE_TEXT_OWN_WORDS = /自我描述|自我评价|个人总结|个人优势|个人简介|个人概述|自我介绍|selfdescription|selfsummary|personalsummary|profilesummary/i
 
-const REPEATABLE_SECTIONS = ['education', 'work', 'project', 'campus', 'awards', 'certificates', 'languages']
+const REPEATABLE_SECTIONS = ['education', 'work', 'project', 'research', 'campus', 'awards', 'certificates', 'languages']
 
 const ANCHOR_KEYS = {
   education: 'education.school',
   work: 'work.company',
   project: 'project.name',
+  research: 'research.name',
   campus: 'campus.name',
   awards: 'awards.name',
   certificates: 'certificates.name',
@@ -138,7 +146,7 @@ const RULES = [
   { key: 'basics.documentType', section: 'basic', aliases: ['证件类型', '个人证件', '个人证件类型', '证件类别', 'documenttype', 'idtype'], read: c => c.basics.documentType },
   { key: 'basics.ethnicity', section: 'basic', aliases: ['民族', '族别', 'ethnicity', 'ethnicgroup'], read: c => c.basics.ethnicity },
   { key: 'basics.politicalStatus', section: 'basic', aliases: ['政治面貌', '政治身份', '党派', 'politicalstatus', 'politicalaffiliation'], read: c => c.basics.politicalStatus },
-  { key: 'basics.nativePlace', section: 'basic', aliases: ['籍贯', '原籍', 'nativeplace', 'hometown', 'placeoforigin'], read: c => c.basics.nativePlace },
+  { key: 'basics.nativePlace', section: 'basic', aliases: ['籍贯', '原籍', '生源地', '生源所在地', '生源', 'nativeplace', 'hometown', 'placeoforigin'], read: c => c.basics.nativePlace },
   { key: 'basics.householdLocation', section: 'basic', aliases: ['户籍', '户籍所在地', '户口', '户口所在地', '户口性质', 'householdregistration'], read: c => c.basics.householdLocation },
   { key: 'basics.city', section: 'basic', aliases: ['现居城市', '居住城市', '现居住地', '当前所在地', '目前所在城市', '所在城市', '所在地区', '常住地', '城市', 'currentcity', 'currentlocation', 'city'], read: c => c.basics.city },
   { key: 'basics.countryRegion', section: 'basic', aliases: ['国家', '国家地区', '国籍', 'country', 'nationality'], read: c => c.basics.countryRegion },
@@ -155,6 +163,8 @@ const RULES = [
   // inside an experience block; marking it as a date lets the section hint
   // decide, because dates never cross sections on a label match alone.
   { key: 'basics.availableDate', section: 'basic', aliases: ['到岗时间', '最早到岗', '可到岗时间', '可到岗', '入职时间', '可入职时间', '到岗日期', 'availabledate'], date: true, read: c => c.availableDate },
+  { key: 'basics.recruitmentSource', section: 'basic', aliases: ['招聘来源', '招聘信息来源', '信息来源', '获知渠道', '获知途径', '了解渠道', '招聘渠道', '渠道来源', '从何获知', '了解到招聘的渠道', 'recruitmentsource'], read: c => c.recruitmentSource },
+  { key: 'basics.referralCode', section: 'basic', aliases: ['推荐码', '内推码', '内推人', '推荐人', '推荐码（选填）', 'referralcode'], read: c => c.referralCode },
   { key: 'basics.selfEvaluation', section: 'basic', aliases: ['自我评价', '自我介绍', '个人简介', '个人评价', '个人总结', '个人优势', '自我描述', '个人陈述', 'selfintroduction', 'aboutme', 'selfassessment', 'profilesummary'], multiline: true, read: c => c.selfEvaluation },
 
   // ------------------------------------------------------------- education
@@ -175,22 +185,40 @@ const RULES = [
 
   // ------------------------------------------------------------------ work
   { key: 'work.company', section: 'work', collection: 'works', aliases: ['公司', '公司名称', '实习公司', '单位', '单位名称', '企业名称', '工作单位', '实习单位', '任职单位', 'company', 'companyname', 'organization', 'employer'], read: (c, i) => c.works[i]?.company },
-  { key: 'work.title', section: 'work', collection: 'works', aliases: ['岗位', '职位', '岗位名称', '职位名称', '实习岗位', '担任职务', '任职岗位', '角色', 'position', 'title', 'jobtitle', 'role'], read: (c, i) => c.works[i]?.title },
+  { key: 'work.title', section: 'work', collection: 'works', aliases: ['岗位', '职位', '岗位名称', '职位名称', '实习岗位', '担任职务', '任职岗位', '职务', '角色', 'position', 'title', 'jobtitle', 'role'], read: (c, i) => c.works[i]?.title },
   { key: 'work.startDate', section: 'work', collection: 'works', aliases: ['实习开始', '实习开始时间', '工作开始', '工作开始时间', '任职开始时间', '入职时间', '入职日期', '开始时间', '起始时间', 'startdate', 'begindate', 'from'], date: true, read: (c, i) => c.works[i]?.startDate },
   { key: 'work.endDate', section: 'work', collection: 'works', aliases: ['实习结束', '实习结束时间', '工作结束', '工作结束时间', '任职结束时间', '离职时间', '离职日期', '结束时间', 'enddate', 'finishdate', 'to'], date: true, endOfMonth: true, read: (c, i) => c.works[i]?.endDate },
-  { key: 'work.description', section: 'work', collection: 'works', aliases: ['工作内容', '工作描述', '主要职责', '岗位职责', '工作职责', '实习内容', '核心职责', '职责及业绩', '工作业绩', '工作成果', '描述', 'jobdescription', 'responsibilities', 'duties', 'description'], multiline: true, read: (c, i) => c.works[i]?.description },
+  { key: 'work.description', section: 'work', collection: 'works', aliases: ['工作内容', '工作描述', '主要职责', '岗位职责', '工作职责', '职责', '实习内容', '核心职责', '职责及业绩', '工作业绩', '工作成果', '描述', 'jobdescription', 'responsibilities', 'duties', 'description'], multiline: true, read: (c, i) => c.works[i]?.description },
   // “无实习经历”是常见的阻断项：不勾选就无法提交，而档案里没有经历时答案本就是确定的。
   { key: 'work.none', section: 'work', aliases: ['没有实习经历', '无实习经历', '暂无实习经历', '没有工作经历', '无工作经历', '暂无工作经历', 'noworkexperience', 'nointernshipexperience'], checkbox: true, skipReason: '档案中存在实习或工作经历，此项不应勾选。', read: c => (c.works.length === 0 ? 'true' : '') },
 
   // --------------------------------------------------------------- project
   { key: 'project.name', section: 'project', collection: 'projects', aliases: ['项目名称', '项目名', '项目', 'projectname', 'project'], read: (c, i) => c.projects[i]?.name },
-  { key: 'project.role', section: 'project', collection: 'projects', aliases: ['项目角色', '担任角色', '项目职位', '项目职务', 'projectrole', 'myrole'], read: (c, i) => c.projects[i]?.role },
+  { key: 'project.role', section: 'project', collection: 'projects', aliases: ['项目角色', '担任角色', '项目职位', '项目职务', '职务', 'projectrole', 'myrole'], read: (c, i) => c.projects[i]?.role },
   { key: 'project.startDate', section: 'project', collection: 'projects', aliases: ['项目开始', '项目开始时间', '项目开始日期', '项目起始', '项目起始时间', '开始时间', 'startdate', 'from'], date: true, read: (c, i) => c.projects[i]?.startDate },
   { key: 'project.endDate', section: 'project', collection: 'projects', aliases: ['项目结束', '项目结束时间', '项目结束日期', '项目截止时间', '结束时间', 'enddate', 'to'], date: true, endOfMonth: true, read: (c, i) => c.projects[i]?.endDate },
-  { key: 'project.description', section: 'project', collection: 'projects', aliases: ['项目描述', '项目内容', '项目职责', '项目成果', '项目详情', '项目介绍', '项目经历描述', '负责内容', '描述', 'projectdescription', 'projectdetails', 'contribution'], multiline: true, read: (c, i) => c.projects[i]?.description },
+  { key: 'project.description', section: 'project', collection: 'projects', aliases: ['项目描述', '项目内容', '项目职责', '项目中职责', '项目成果', '项目详情', '项目介绍', '项目经历描述', '负责内容', '描述', 'projectdescription', 'projectdetails', 'contribution'], multiline: true, read: (c, i) => c.projects[i]?.description },
+
+  // --------------------------------------------------------------- research
+  // 科研经历在校招表里常常是独立一块（论文/课题），也常被并进「项目经历」。
+  // 这里只认真正属于科研的说法，表里写「项目名称」的仍交给 project 规则；
+  // 而科研记录也拼进了 projects 集合（见 buildContext），所以并成一栏时照样填得上。
+  // role 是「作者顺位 / 研究角色」——素材库给 RESEARCH 卡的就是这个标签。
+  { key: 'research.name', section: 'research', collection: 'research', aliases: ['论文名称', '论文题目', '论文标题', '论文', '科研项目名称', '科研经历名称', '科研名称', '研究项目名称', '课题名称', '课题', '毕业论文', '研究成果名称', '学术成果名称', 'researchname', 'papername', 'papertitle', 'thesistitle', 'researchproject'], read: (c, i) => c.research[i]?.name },
+  { key: 'research.role', section: 'research', collection: 'research', aliases: ['作者顺位', '作者排名', '作者排序', '作者身份', '第几作者', '论文作者', '科研角色', '研究角色', '论文排名', 'authorrank', 'authororder', 'authorship'], read: (c, i) => c.research[i]?.role },
+  { key: 'research.startDate', section: 'research', collection: 'research', aliases: ['科研开始时间', '课题开始时间', '论文开始时间', '科研起始时间', '研究开始时间', '开始时间', 'startdate'], date: true, read: (c, i) => c.research[i]?.startDate },
+  { key: 'research.endDate', section: 'research', collection: 'research', aliases: ['科研结束时间', '课题结束时间', '论文结束时间', '科研截止时间', '研究结束时间', '结束时间', 'enddate'], date: true, endOfMonth: true, read: (c, i) => c.research[i]?.endDate },
+  { key: 'research.description', section: 'research', collection: 'research', aliases: ['科研描述', '科研内容', '论文摘要', '论文简介', '课题描述', '研究内容', '科研经历描述', '研究成果', '论文内容', '描述', 'researchdescription', 'paperabstract', 'abstract'], multiline: true, read: (c, i) => c.research[i]?.description },
 
   // ------------------------------------------------------------------ skills
   { key: 'skills.list', section: 'skills', aliases: ['专业技能', '个人技能', '技能特长', '核心技能', '专业能力', '掌握技能', '技能', 'skills', 'technicalskills'], read: c => c.skills },
+  // Columns the profile has no shape for. `skills` is a flat list of names, so
+  // there is no per-skill duration and no per-skill description anywhere in it —
+  // and a model asked for them writes “3 年” and a sentence about each one, nine
+  // times on one real form. `noAnswer` keeps those rows out of the model's hands
+  // rather than filling them with something nobody checked.
+  { key: 'skills.duration', section: 'skills', aliases: ['使用时间总计', '使用时长', '使用时间', '用时', '掌握时长'], noAnswer: true, read: () => '' },
+  { key: 'skills.description', section: 'skills', aliases: ['技能描述', '技能说明', '技能详情'], multiline: true, noAnswer: true, read: () => '' },
 
   // ------------------------------------------------------------------ campus
   { key: 'campus.name', section: 'campus', collection: 'campus', aliases: ['校园经历名称', '校园经历', '社团名称', '组织名称', '学生工作名称', '活动名称', 'campusname', 'organizationname'], read: (c, i) => c.campus[i]?.name },
@@ -356,9 +384,28 @@ function buildContext(profile) {
   const basics = record(root.basics)
   const strategy = record(root.strategy)
   const references = array(root.references).map(record)
-  const fromReference = type => references
-    .filter(reference => text(reference.type).toUpperCase() === type)
-    .map((reference) => ({ ...record(reference.facts), title: reference.title, description: reference.content, content: reference.content }))
+  // A material card and a legacy record do not name their parts the same way. The
+  // card keeps its heading in `title` (公司名称 / 项目名称 / 奖项名称 …，见素材库各类型的
+  // 标题标签) and its copy in the variant `content`; the rules read `company` / `name` /
+  // `detail` and `description`. Handing the card straight through meant a card-sourced
+  // internship reported 「所选资料档案没有该字段的可用内容」 for 公司名称 and put the
+  // company name into 职位名称, because `work.title` reads `title`.
+  const fromReference = (type) => {
+    return references
+      .filter(reference => text(reference.type).toUpperCase() === type)
+      .map((reference) => {
+        const facts = record(reference.facts)
+        const heading = text(reference.title)
+        const body = text(reference.content)
+        const base = { ...facts, cardTitle: heading, description: body, content: body }
+        // 实习/工作：卡片标题是公司名，职位在 facts.role 里。
+        if (type === 'INTERNSHIP' || type === 'WORK') return { ...base, company: heading, title: text(facts.role) }
+        // 奖项/证书只有「名称 + 说明」两个字段。
+        if (type === 'AWARD' || type === 'CERTIFICATE') return { ...base, title: heading, name: heading, detail: body }
+        // 项目/校园：名称是卡片标题，角色从 facts 来。
+        return { ...base, title: heading, name: heading, role: text(facts.role) }
+      })
+  }
   const named = value => array(value).map(item => (typeof item === 'string' ? { name: item } : record(item)))
   const explicitWork = array(root.workExperiences).map(record)
   const explicitProjects = array(root.projects).map(record)
@@ -392,7 +439,10 @@ function buildContext(profile) {
     // reads top-down from the most recent record.
     educations: array(root.educations).map(record).sort((left, right) => text(right.endDate).localeCompare(text(left.endDate))),
     works: explicitWork.length ? explicitWork : fromReference('INTERNSHIP'),
-    projects: explicitProjects.length ? explicitProjects : fromReference('PROJECT'),
+    // 科研记录同时挂在 research 和 projects 下面：表单把「科研经历」单列一块时走 research，
+    // 并进「项目经历」时走 projects（项目记录排在前面，不够了才轮到科研）。
+    research: fromReference('RESEARCH'),
+    projects: (explicitProjects.length ? explicitProjects : fromReference('PROJECT')).concat(fromReference('RESEARCH')),
     campus: named(root.campusExperiences).concat(fromReference('CAMPUS')),
     awards: named(root.awards).concat(fromReference('AWARD')),
     certificates: named(root.certificates).concat(fromReference('CERTIFICATE')),
@@ -402,6 +452,10 @@ function buildContext(profile) {
     targetCity: array(basics.targetCities).map(text).filter(Boolean)[0] ?? array(strategy.targetLocations).map(text).filter(Boolean)[0] ?? '',
     expectedSalary: text(strategy.expectedSalary),
     availableDate: text(strategy.availableDate),
+    // Saved on the profile all along, and never read until a real form asked for
+    // them by name (“招聘信息来源”, “推荐码”) and both came back as unanswerable.
+    recruitmentSource: text(strategy.recruitmentSource),
+    referralCode: text(strategy.referralCode),
   }
 }
 
@@ -423,7 +477,12 @@ function recordsFor(context, rule) {
 
 /** The label used for reporting, mirroring what the page showed the user. */
 function fieldLabel(field) {
-  return normalizeText(field.label) || normalizeText(field.name) || normalizeText(field.placeholder) || '未命名字段'
+  // “请选择” is what the page shows *before* an answer, not what the column is
+  // called. Reporting it as the field's name reads like the tool understood the
+  // form when it did not, so a placeholder that only says “请选择” is skipped.
+  return [field.label, field.name, field.placeholder]
+    .map(normalizeText)
+    .find(value => value && !isEmptyStateText(value)) || '未命名字段'
 }
 
 function fieldIdentityText(field) {
@@ -492,15 +551,40 @@ const DATE_ROLE_WORDS = {
   start: ['start', 'begin', 'from', 'since'],
 }
 
-/** Which end of a date range a control holds. */
+const DATE_ROLE_TEXT = {
+  end: /结束|截止|离职|毕业/,
+  start: /开始|起始|入学|入职|起止/,
+}
+
+/**
+ * Which end of a date range a control holds.
+ *
+ * A split date box often carries nothing but its unit character — “年”, “月” —
+ * while which end of the range it is belongs to the block around it
+ * (“入学时间 年 月 至 毕业时间 年 月”). Three sources are read, ordered by how
+ * directly each speaks about this one control: the role the scanner read off the
+ * surrounding block, the control's own wording, then the block text the control
+ * was scanned with. Without the last two, every split date on a form whose
+ * inputs carry opaque names is unanswerable — which is most of them.
+ */
 function dateRoleOf(field) {
+  const declared = normalizeText(field?.dateRole)
+  if (declared === 'start' || declared === 'end') return declared
   const words = identifierWords(field)
   for (const [role, candidates] of Object.entries(DATE_ROLE_WORDS)) {
     if (candidates.some(candidate => words.has(candidate))) return role
   }
-  const text = normalize(`${field?.label ?? ''} ${field?.name ?? ''} ${field?.placeholder ?? ''}`)
-  if (/结束|截止|离职|毕业/.test(text)) return 'end'
-  if (/开始|起始|入学|入职|起止/.test(text)) return 'start'
+  const own = `${field?.label ?? ''} ${field?.name ?? ''} ${field?.placeholder ?? ''}`
+  for (const [role, pattern] of Object.entries(DATE_ROLE_TEXT)) {
+    if (pattern.test(own)) return role
+  }
+  // `context` leads with the text of the block the control sits in and then adds
+  // the scanner's own annotations (“；相邻字段：…”). Only that leading block text
+  // may decide the role, or a neighbour's label would.
+  const block = String(field?.context ?? '').split('；')[0] ?? ''
+  for (const [role, pattern] of Object.entries(DATE_ROLE_TEXT)) {
+    if (pattern.test(block)) return role
+  }
   return ''
 }
 
@@ -612,7 +696,14 @@ function scoreRule(rule, field, signals, sectionHint, descriptor, sections) {
   if (rule.multiline && controlType === 'textarea') total += 0.06
   if (rule.date && signals.visible.some(signal => /日期|时间|年月|date|month|year/.test(signal))) total += 0.05
   if (rule.checkbox && inputType === 'checkbox') total += 0.08
-  return Math.max(0, Math.min(total, 1))
+  // Deliberately not capped at 1. The boosts are what order two rules that both
+  // match a label exactly, and clamping the total meant a checkbox, a page hint and
+  // a repeated section all ranked equal once the base score was already 0.99 — so
+  // “开始时间”, which appears six times across a real form's education, internship
+  // and project blocks, was resolved to the education rule every time and the other
+  // four blocks went unanswered. The threshold this is compared against (0.68) is
+  // the only consumer, and it is a floor, not a probability.
+  return Math.max(0, total)
 }
 
 function bestRuleFor(field) {
@@ -812,7 +903,7 @@ function needsManual(field, category, reason, target) {
 /**
  * Builds a report and no-DOM fill plan from safe field metadata.
  *
- * The plan covers nine profile sections so that most of a form is answered from
+ * The plan covers ten profile sections so that most of a form is answered from
  * saved data before the AI fallback is asked for anything.
  *
  * @param {object} profile
@@ -853,6 +944,30 @@ export function buildFillPlan(profile, fields) {
     }
     const match = bestRuleFor(field)
     if (!match?.rule) {
+      // A “至今” box is not a question: it is the end of a range, and it is
+      // answered from the same fact the end-date box beside it is answered from.
+      // It is resolved after the records are known, in `resolvePresentToggles`.
+      if (isPresentToggle(field)) {
+        decisions.set(field, {
+          entry: { ...needsManual(field, category, '这是「至今」开关，但没能确定它属于哪一段经历，需要你确认。'), skipAi: true },
+        })
+        continue
+      }
+      // A question whose only answers are 是/否, with no saved fact behind it, is
+      // one a model can only guess at — and a guess is indistinguishable from an
+      // answer in the report. “是否有亲属在本公司工作” is a decision about the
+      // employer's own records, not a fact about the applicant, so it goes to the
+      // person who can make it. Once answered, the answer memory keeps it and this
+      // never costs a manual step again.
+      if (isBinaryQuestion(field)) {
+        decisions.set(field, {
+          entry: {
+            ...needsManual(field, category, '这是是非题，档案里没有可以判断它的事实，需要你自己确认（确认一次就会被记住）。'),
+            skipAi: true,
+          },
+        })
+        continue
+      }
       if (match?.datePart) {
         // One component of a split date with no block to read from. Handing it
         // to a model gets a whole date written into a year box, so it is named
@@ -879,7 +994,6 @@ export function buildFillPlan(profile, fields) {
   const entries = descriptors.map((field) => {
     const decided = decisions.get(field)
     if (decided) return decided.entry
-
     const candidate = candidateByField.get(field)
     const { rule } = candidate
     const category = rule.section
@@ -921,6 +1035,8 @@ export function buildFillPlan(profile, fields) {
         ?? (isRepeatable && recordIndex > 0
           ? `档案中没有第 ${recordIndex + 1} 条对应记录。`
           : '所选资料档案没有该字段的可用内容。')
+      // A column the profile has no shape for is not a column to guess at.
+      if (rule.noAnswer) return { ...needsManual(field, category, reason, rule.key), skipAi: true }
       return needsManual(field, category, reason, rule.key)
     }
     const value = rule.date ? formatDateValue(rawValue, field, rule, candidate.datePart) : rawValue
@@ -941,6 +1057,8 @@ export function buildFillPlan(profile, fields) {
     })
   })
 
+  resolvePresentToggles(entries, descriptors, context)
+
   return {
     entries,
     summary: entries.reduce((summary, entry) => {
@@ -948,6 +1066,85 @@ export function buildFillPlan(profile, fields) {
       return summary
     }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
   }
+}
+
+/** Wording that means an end date has not arrived yet. */
+const ONGOING_END_DATE = /^(?:至今|现在|目前|直至|至今为止|在职|仍在职)$/
+
+/**
+ * The field that opens a repeating block, per section. A block's later fields
+ * inherit its section and its record number from the anchor above them.
+ */
+const BLOCK_ANCHORS = {
+  work: /单位名称|公司名称|实习单位|任职单位/,
+  project: /项目名称/,
+  research: /论文名称|论文题目|论文标题|科研项目名称|课题名称/,
+  education: /学校名称|毕业院校/,
+  campus: /社团名称|组织名称/,
+  awards: /奖项名称|获奖名称/,
+  certificates: /证书名称/,
+  languages: /语言名称/,
+}
+
+/**
+ * Answers the “至今” boxes from the record each one sits under.
+ *
+ * The box is checked exactly when that record has no end date, so this is a fact
+ * the profile already holds rather than a question.
+ *
+ * Which record is found from the page structure rather than from the plan's own
+ * results: on a real form the end-date box of a block usually *already has a
+ * value*, and such a field is short-circuited to “已有内容” before any rule is
+ * matched — so asking the plan which block this toggle belongs to finds nothing.
+ * Walking the block anchors in page order always works, whether the blocks are
+ * filled or empty. The neighbouring-labels hint cannot be used for this: on a real
+ * form it lists fields from the block *after* this one too, which is how an
+ * education row ends up attributed to work.
+ *
+ * Only a box that no rule placed is written. A box the page already has content in
+ * keeps that content: unchecking something the applicant ticked by hand is not this
+ * function's business.
+ */
+function resolvePresentToggles(entries, descriptors, context) {
+  const blocksPerSection = new Map()
+  let block = null
+
+  descriptors.forEach((field, index) => {
+    const label = normalizeText(field.label)
+    for (const [section, anchor] of Object.entries(BLOCK_ANCHORS)) {
+      if (!anchor.test(label)) continue
+      const seen = blocksPerSection.get(section) ?? 0
+      blocksPerSection.set(section, seen + 1)
+      block = { section, record: seen }
+      break
+    }
+    if (!isPresentToggle(field)) return
+
+    const entry = entries[index]
+    if (!entry || entry.status !== 'needs_manual' || entry.skipAi !== true || !block) return
+    const rule = RULES.find(item => item.key === `${block.section}.endDate`)
+    const records = rule ? recordsFor(context, rule) ?? [] : []
+    const endDate = text(records[block.record]?.endDate)
+
+    if (!endDate || ONGOING_END_DATE.test(endDate)) {
+      entries[index] = {
+        ...entry,
+        status: 'filled',
+        reason: '这段经历没有结束时间，勾选「至今」。',
+        target: rule?.key,
+        record: block.record,
+        value: 'true',
+      }
+      return
+    }
+    // It stays unchecked, which needs no write; saying so beats leaving the box in
+    // the manual pile for an answer the profile already gave.
+    entries[index] = {
+      ...entry,
+      status: 'skipped_existing',
+      reason: `这段经历有结束时间（${endDate}），不需要勾选「至今」。`,
+    }
+  })
 }
 
 function describeRule(rule, recordIndex) {

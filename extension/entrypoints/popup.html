@@ -25,6 +25,18 @@
         <button id="fill-current-page" class="primary" type="button" disabled>AI 填写当前页面</button>
         <p id="fill-result" class="result" role="status"></p>
         <div id="fill-report" class="fill-report" aria-live="polite"></div>
+        <button id="copy-page-structure" type="button">导出当前页字段结构（发给开发做站点适配）</button>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <h2>记住的答案</h2>
+          <button id="clear-memory" type="button">清空</button>
+        </div>
+        <p class="hint">档案里没有、每家公司都会问到的问题（是否…、承诺、招聘信息来源、年薪期望）。你在页面上填一次，点下面的按钮记住，以后再遇到同样的问题就直接填，不再问 AI。是非题和公司相关的答案只在你填过的那家站点复用。</p>
+        <button id="remember-page" type="button">记住我在这页补填的答案</button>
+        <p id="memory-result" class="result" role="status"></p>
+        <div id="memory-list" class="memory-list" aria-live="polite"></div>
       </section>
 
       <section class="card">

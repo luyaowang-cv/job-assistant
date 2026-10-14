@@ -1,7 +1,6 @@
-import { getAiProviderRuntime } from './ai-provider-setting.service'
-import { getApplicationProfileFillContext } from './application-profile.service'
 import { buildFillEvidence, buildStructuredFillCandidates } from './form-fill-context'
 import { modelFormFillResponseSchema, type FormFillPreviewInput } from '../schemas/form-fill'
+import { fillEventStream } from '../utils/ai-stream'
 
 export class FormFillProviderError extends Error {
   constructor(message: string, readonly statusCode: number, readonly code: string) {
@@ -9,8 +8,48 @@ export class FormFillProviderError extends Error {
   }
 }
 
+/**
+ * The database and settings modules are loaded on demand rather than imported.
+ *
+ * `lib/prisma` throws at import time when `DATABASE_URL` is unset, so a static
+ * import makes this file impossible to load in a test process — which is how the
+ * rest of this module's arithmetic ends up untested. The repository's other
+ * streaming service defers the same two lookups for the same reason.
+ */
+const runtimeFromSettings = async () => {
+  const { getAiProviderRuntime } = await import('./ai-provider-setting.service')
+  return getAiProviderRuntime()
+}
+
+const contextFromDatabase = async (profileId: string) => {
+  const { getApplicationProfileFillContext } = await import('./application-profile.service')
+  return getApplicationProfileFillContext(profileId)
+}
+
+/** The configured provider, as the streaming path needs it. */
+type StreamRuntime = Awaited<ReturnType<typeof runtimeFromSettings>>
+
+const PROVIDER_TIMEOUT_MS = 60_000
+/** A whole form in one streamed call may legitimately run long; nothing blocks on it. */
+const STREAM_PROVIDER_TIMEOUT_MS = 240_000
+
+/**
+ * The ceiling on one batch's answer, stated rather than inherited.
+ *
+ * Leaving `max_tokens` unset means the provider's own default decides, and those
+ * differ wildly (DeepSeek defaults to 4096, gpt-4o-mini to 16384). A reply cut
+ * off mid-JSON parses as invalid and costs the whole batch, so the limit is
+ * pinned to a value the extension's batch budget is sized against.
+ *
+ * The streaming path is not bound by this: its answers are handed over as they
+ * arrive, so a reply that runs long — or is cut off at the ceiling — still leaves
+ * every completed answer in place.
+ */
+const MAX_FILL_OUTPUT_TOKENS = 4_096
+const MAX_STREAM_OUTPUT_TOKENS = 12_000
+
 export async function previewAiFormFill(input: FormFillPreviewInput) {
-  const profileContext = await getApplicationProfileFillContext(input.profileId)
+  const profileContext = await contextFromDatabase(input.profileId)
   if (!profileContext) throw new FormFillProviderError('所选网申档案不存在或不可访问。', 404, 'PROFILE_NOT_FOUND')
 
   const structuredFills = buildStructuredFillCandidates(profileContext.aiContext, input.fields)
@@ -21,25 +60,10 @@ export async function previewAiFormFill(input: FormFillPreviewInput) {
     return { fills: structuredFills, unresolvedIds: [], provider: 'local-profile', model: 'structured-facts' }
   }
 
-  const runtime = await getAiProviderRuntime()
+  const runtime = await runtimeFromSettings()
   if (!runtime.apiKey) throw new FormFillProviderError('尚未配置当前 Provider 对应的服务端 API Key，请先完成 AI 设置。', 409, 'AI_KEY_NOT_CONFIGURED')
 
-  const prompt = JSON.stringify({
-    task: 'Fill an online job-application form using only the selected candidate profile. Return JSON only.',
-    rules: [
-      'Use the entire resolved profile, including basics, education, projects, internships, work, campus experience, skills, awards, self-evaluation blocks, strategy, and selected resume content.',
-      'Answer every field only when the profile contains a direct or clearly derived fact.',
-      'Do not invent facts. Return unresolvedIds for fields without enough evidence.',
-      'For select fields, use one of the provided option labels exactly whenever possible.',
-      'For repeated experience fields, use label/context/order to select the matching experience and its organization, role, dates, or description.',
-      'Do not return a field as unresolved merely because its label repeats. Use page order, same-label occurrence, neighbouring labels, field name, and profile order to map it.',
-      'For self-evaluation, prefer a saved self-evaluation; otherwise you may concisely summarize only facts explicitly demonstrated in the profile or resume.',
-      'Use complete saved descriptions for textarea fields and concise values for short inputs. Preserve date formats requested by labels or placeholders.',
-    ],
-    profile: buildFillEvidence(profileContext.aiContext),
-    fields: aiFields,
-    output: { fills: [{ fieldId: 'field id from fields', value: 'suggested text' }], unresolvedIds: ['field ids with no answer'] },
-  })
+  const prompt = buildFillPrompt(profileContext.aiContext, aiFields)
 
   let response: Response
   try {
@@ -50,18 +74,43 @@ export async function previewAiFormFill(input: FormFillPreviewInput) {
         model: runtime.model,
         temperature: 0.1,
         response_format: { type: 'json_object' },
+        max_tokens: MAX_FILL_OUTPUT_TOKENS,
         messages: [
           { role: 'system', content: 'You are a precise job-application assistant. Return only the requested JSON object.' },
           { role: 'user', content: prompt },
         ],
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     })
   }
-  catch {
-    throw new FormFillProviderError('AI 服务暂时不可用，请检查 API 设置后重试。', 502, 'AI_PROVIDER_UNAVAILABLE')
+  catch (error) {
+    // A timeout and a dropped connection are both transient, but naming which
+    // one happened is what lets a caller decide to wait rather than re-check
+    // its own settings.
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    throw new FormFillProviderError(
+      timedOut ? 'AI 服务响应超时，请稍后重试。' : 'AI 服务暂时不可用，请检查 API 设置后重试。',
+      502,
+      timedOut ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_UNAVAILABLE',
+    )
   }
-  if (!response.ok) throw new FormFillProviderError(`AI 服务请求失败（HTTP ${response.status}）。`, 502, 'AI_PROVIDER_ERROR')
+  // The upstream status is the only thing that separates a failure worth
+  // retrying from one that will fail identically every time: a 429 clears on its
+  // own, a rejected key never does. Collapsing them into one 502 left the caller
+  // with no way to tell, so they are mapped through here.
+  if (!response.ok) {
+    const status = response.status
+    if (status === 429) {
+      throw new FormFillProviderError('AI 服务请求过于频繁（HTTP 429），请稍后重试。', 429, 'AI_PROVIDER_RATE_LIMITED')
+    }
+    if (status === 401 || status === 403) {
+      throw new FormFillProviderError('AI 服务的 API Key 无效或没有权限，请在“AI 设置”中检查。', 502, 'AI_KEY_INVALID')
+    }
+    if (status >= 500) {
+      throw new FormFillProviderError(`AI 服务暂时不可用（HTTP ${status}）。`, 502, 'AI_PROVIDER_UNAVAILABLE')
+    }
+    throw new FormFillProviderError(`AI 服务拒绝了本次请求（HTTP ${status}）。`, 502, 'AI_PROVIDER_REJECTED')
+  }
 
   let content = ''
   try {
@@ -84,4 +133,108 @@ export async function previewAiFormFill(input: FormFillPreviewInput) {
   const unresolvedIds = input.fields.map(field => field.id).filter(id => !filledIds.has(id))
 
   return { fills, unresolvedIds, provider: runtime.provider, model: runtime.model }
+}
+
+/**
+ * The prompt both paths send. Kept in one place so a batch answer and a single-call
+ * answer are the same answer.
+ */
+function buildFillPrompt(aiContext: unknown, fields: FormFillPreviewInput['fields']) {
+  return JSON.stringify({
+    task: 'Fill an online job-application form using only the selected candidate profile. Return JSON only.',
+    rules: [
+      'Use the entire resolved profile, including basics, education, projects, internships, work, campus experience, skills, awards, self-evaluation blocks, strategy, and selected resume content.',
+      'Answer every field only when the profile contains a direct or clearly derived fact.',
+      'Do not invent facts. Return unresolvedIds for fields without enough evidence.',
+      'For select fields, use one of the provided option labels exactly whenever possible.',
+      'For repeated experience fields, use label/context/order to select the matching experience and its organization, role, dates, or description.',
+      'Do not return a field as unresolved merely because its label repeats. Use page order, same-label occurrence, neighbouring labels, field name, and profile order to map it.',
+      'For self-evaluation, prefer a saved self-evaluation; otherwise you may concisely summarize only facts explicitly demonstrated in the profile or resume.',
+      'Use complete saved descriptions for textarea fields and concise values for short inputs. Preserve date formats requested by labels or placeholders.',
+      // The whole form is in this one call, so the model can and should use it.
+      'Fields from the same section arrive in page order. Use the fields around one to decide what it means, and answer related fields consistently with each other.',
+    ],
+    profile: buildFillEvidence(aiContext),
+    fields,
+    output: { fills: [{ fieldId: 'field id from fields', value: 'suggested text' }], unresolvedIds: ['field ids with no answer'] },
+  })
+}
+
+export async function streamAiFormFill(
+  input: FormFillPreviewInput,
+  dependencies: {
+    getContext?: (profileId: string) => Promise<{ aiContext: unknown } | null>
+    getRuntime?: () => Promise<StreamRuntime>
+    fetcher?: typeof fetch
+  } = {},
+) {
+  const getContext = dependencies.getContext ?? contextFromDatabase
+  const profileContext = await getContext(input.profileId)
+  if (!profileContext) throw new FormFillProviderError('所选网申档案不存在或不可访问。', 404, 'PROFILE_NOT_FOUND')
+
+  const structuredFills = buildStructuredFillCandidates(profileContext.aiContext, input.fields)
+  const structuredIds = new Set(structuredFills.map(fill => fill.fieldId))
+  const aiFields = input.fields.filter(field => !structuredIds.has(field.id))
+
+  const getRuntime = dependencies.getRuntime ?? runtimeFromSettings
+  const runtime = await getRuntime()
+  if (aiFields.length === 0) {
+    const provider = 'local-profile'
+    const model = 'structured-facts'
+    return {
+      stream: fillEventStream({ provider, model, allowedIds: new Set(), structured: structuredFills }),
+      provider,
+      model,
+    }
+  }
+  if (!runtime.apiKey) throw new FormFillProviderError('尚未配置当前 Provider 对应的服务端 API Key，请先完成 AI 设置。', 409, 'AI_KEY_NOT_CONFIGURED')
+
+  let response: Response
+  try {
+    response = await (dependencies.fetcher ?? fetch)(`${runtime.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${runtime.apiKey}` },
+      body: JSON.stringify({
+        model: runtime.model,
+        temperature: 0.1,
+        max_tokens: MAX_STREAM_OUTPUT_TOKENS,
+        stream: true,
+        messages: [
+          { role: 'system', content: 'You are a precise job-application assistant. Return only the requested JSON object.' },
+          { role: 'user', content: buildFillPrompt(profileContext.aiContext, aiFields) },
+        ],
+      }),
+      signal: AbortSignal.timeout(STREAM_PROVIDER_TIMEOUT_MS),
+    })
+  }
+  catch (error) {
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    throw new FormFillProviderError(
+      timedOut ? 'AI 服务响应超时，请稍后重试。' : 'AI 服务暂时不可用，请检查 API 设置后重试。',
+      502,
+      timedOut ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_UNAVAILABLE',
+    )
+  }
+  if (!response.ok) {
+    const status = response.status
+    if (status === 429) throw new FormFillProviderError('AI 服务请求过于频繁（HTTP 429），请稍后重试。', 429, 'AI_PROVIDER_RATE_LIMITED')
+    if (status === 401 || status === 403) throw new FormFillProviderError('AI 服务的 API Key 无效或没有权限，请在“AI 设置”中检查。', 502, 'AI_KEY_INVALID')
+    if (status >= 500) throw new FormFillProviderError(`AI 服务暂时不可用（HTTP ${status}）。`, 502, 'AI_PROVIDER_UNAVAILABLE')
+    throw new FormFillProviderError(`AI 服务拒绝了本次请求（HTTP ${status}）。`, 502, 'AI_PROVIDER_REJECTED')
+  }
+
+  // The deterministic answers are known before the model is asked anything, so they
+  // are sent first: the applicant sees them land while the model is still thinking.
+  const allowedIds = new Set(aiFields.map(field => field.id))
+  return {
+    stream: fillEventStream({
+      provider: runtime.provider,
+      model: runtime.model,
+      allowedIds,
+      structured: structuredFills,
+      source: response.body ?? undefined,
+    }),
+    provider: runtime.provider,
+    model: runtime.model,
+  }
 }

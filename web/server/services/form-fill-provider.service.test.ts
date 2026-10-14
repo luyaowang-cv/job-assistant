@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildFillEvidence, buildStructuredFillCandidates } from './form-fill-context'
+import { streamAiFormFill } from './form-fill-provider.service'
+import { formFillPreviewSchema } from '../schemas/form-fill'
 
 test('compacts resolved profile into form-fill evidence without composition metadata', () => {
   const evidence = buildFillEvidence({
@@ -18,6 +20,26 @@ test('compacts resolved profile into form-fill evidence without composition meta
   assert.equal(evidence.resumeContent, '基础简历正文')
   assert.equal(JSON.stringify(evidence).includes('variantId'), false)
   assert.equal(JSON.stringify(evidence).includes('overLimit'), false)
+})
+
+test('drops the legacy snapshot once a resume version carries the profile', () => {
+  const evidence = buildFillEvidence({
+    basics: { fullName: '张三' },
+    resumeVersion: { id: 'resume-1', type: 'BASE', content: '基础简历正文' },
+    legacyContent: '旧版简历正文',
+  })
+
+  // The snapshot is only a fallback, and the whole evidence block is re-sent
+  // with every batch of a form — so carrying both pays for the same CV twice.
+  assert.equal(evidence.resumeContent, '基础简历正文')
+  assert.equal(evidence.legacyContent, '')
+})
+
+test('keeps the legacy snapshot when there is no resume version', () => {
+  const evidence = buildFillEvidence({ basics: {}, legacyContent: '旧版简历正文' })
+
+  assert.equal(evidence.resumeContent, '')
+  assert.equal(evidence.legacyContent, '旧版简历正文')
 })
 
 test('builds ordered deterministic candidates for education, internships and projects', () => {
@@ -113,4 +135,188 @@ test('keeps education fields on the same record when dates appear before school 
   assert.match(byId.self, /Vue 与 TypeScript/)
   assert.equal(byId.platform, 'GitHub')
   assert.equal(byId['social-url'], 'https://github.com/example')
+})
+
+const twoLinkedAccounts = {
+  basics: {},
+  resumeVersion: { content: '[GitHub](https://github.com/example)\n[知乎](https://www.zhihu.com/people/example)' },
+}
+
+test('leaves an ambiguous social link to the model instead of guessing', () => {
+  const fills = buildStructuredFillCandidates(twoLinkedAccounts, [{ id: 'homepage', label: '个人主页' }])
+
+  // Two linked accounts cannot be matched to one generic box by position. This
+  // layer's answer is final — a field it fills is dropped from the model's list
+  // — so a wrong URL written here would never be corrected.
+  assert.deepEqual(fills, [])
+})
+
+test('matches a social box that names its own platform', () => {
+  const byId = Object.fromEntries(buildStructuredFillCandidates(twoLinkedAccounts, [
+    { id: 'github', label: 'GitHub 主页链接' },
+    { id: 'zhihu', label: '知乎主页链接' },
+  ]).map(fill => [fill.fieldId, fill.value]))
+
+  assert.equal(byId.github, 'https://github.com/example')
+  assert.equal(byId.zhihu, 'https://www.zhihu.com/people/example')
+})
+
+// ------------------------------------------------------------ streaming path
+
+const streamRuntime = {
+  provider: 'OPENAI_COMPATIBLE' as const,
+  baseUrl: 'https://api.example.com/v1',
+  model: 'test-model',
+  apiKeyConfigured: true,
+  apiKey: 'test-key',
+}
+
+const streamInput = formFillPreviewSchema.parse({
+  profileId: 'profile-1',
+  fields: [
+    { id: 'name', label: '姓名', controlType: 'input', inputType: 'text' },
+    { id: 'school', label: '学校名称', controlType: 'input', inputType: 'text' },
+    { id: 'major', label: '专业名称', controlType: 'input', inputType: 'text' },
+  ],
+})
+
+/** A provider reply, streamed: `frames` are the SSE frames as the model writes them. */
+function streamingProvider(frames: string[]) {
+  const encoder = new TextEncoder()
+  return async function fetcher() {
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const frame of frames) controller.enqueue(encoder.encode(frame))
+        controller.close()
+      },
+    }), { status: 200 })
+  } as unknown as typeof fetch
+}
+
+const delta = (content: string) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
+const stop = (finishReason: string) => `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: finishReason }] })}\n\ndata: [DONE]\n\n`
+
+async function drain(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    text += decoder.decode(value, { stream: true })
+  }
+  return text.split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, string>)
+}
+
+test('fills a whole form in one streamed call, answering as each decision is written', async () => {
+  const requests: Array<Record<string, unknown>> = []
+  const encoder = new TextEncoder()
+  const fetcher: typeof fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        // One call, every field, and the answer to the second field arrives split
+        // across two chunks on purpose.
+        controller.enqueue(encoder.encode(delta('{"fills":[{"fieldId":"school","value":"北方工业大学"},')))
+        controller.enqueue(encoder.encode(delta('{"fieldId":"major","va')))
+        controller.enqueue(encoder.encode(delta('lue":"物联网工程"}]}')))
+        controller.enqueue(encoder.encode(stop('stop')))
+        controller.close()
+      },
+    }), { status: 200 })
+  }
+
+  const generated = await streamAiFormFill(streamInput, {
+    getContext: async () => ({ aiContext: { basics: { fullName: '张三' } } }),
+    getRuntime: async () => streamRuntime,
+    fetcher,
+  })
+  const events = await drain(generated.stream)
+  const request = requests[0]
+
+  // One request for the form, and it is a streaming one. This is what removes the
+  // per-batch calls that tripped the provider's per-minute allowance.
+  assert.equal(requests.length, 1)
+  assert.equal(request?.stream, true)
+  assert.equal(request?.model, 'test-model')
+  assert.equal(request?.max_tokens, 12_000)
+  assert.equal(JSON.stringify(request?.messages ?? '').includes('学校名称'), true)
+
+  assert.deepEqual(events, [
+    // The deterministic answer goes first: it is known before the model is asked.
+    { type: 'fill', fieldId: 'name', value: '张三' },
+    { type: 'fill', fieldId: 'school', value: '北方工业大学' },
+    { type: 'fill', fieldId: 'major', value: '物联网工程' },
+    { type: 'done', provider: 'OPENAI_COMPATIBLE', model: 'test-model' },
+  ])
+})
+
+test('keeps the answers it managed to write when the reply is cut off', async () => {
+  const generated = await streamAiFormFill(streamInput, {
+    getContext: async () => ({ aiContext: {} }),
+    getRuntime: async () => streamRuntime,
+    fetcher: streamingProvider([
+      delta('{"fills":[{"fieldId":"school","value":"北方工业大学"},{"fieldId":"major","value":"物联'),
+      stop('length'),
+    ]),
+  })
+
+  const events = await drain(generated.stream)
+
+  // Under batching this was the whole batch lost, retried, and cut off in the same
+  // place — three times the wait for the same loss.
+  assert.deepEqual(events.filter(item => item.type === 'fill'), [
+    { type: 'fill', fieldId: 'school', value: '北方工业大学' },
+  ])
+  assert.equal(events.some(item => item.type === 'warning'), true)
+  assert.equal(events.at(-1)?.type, 'done')
+})
+
+test('drops an answer for a field this request never sent', async () => {
+  const generated = await streamAiFormFill(streamInput, {
+    getContext: async () => ({ aiContext: {} }),
+    getRuntime: async () => streamRuntime,
+    fetcher: streamingProvider([
+      delta('{"fills":[{"fieldId":"form-field-999","value":"别人的格子"},{"fieldId":"school","value":"北方工业大学"}]}'),
+      stop('stop'),
+    ]),
+  })
+
+  const events = await drain(generated.stream)
+
+  // Ids are positions: a stale one names a different control, and writing into it is
+  // worse than writing nothing.
+  assert.deepEqual(events.filter(item => item.type === 'fill'), [
+    { type: 'fill', fieldId: 'school', value: '北方工业大学' },
+  ])
+})
+
+test('reports a provider that refuses the streamed request', async () => {
+  await assert.rejects(
+    streamAiFormFill(streamInput, {
+      getContext: async () => ({ aiContext: {} }),
+      getRuntime: async () => streamRuntime,
+      fetcher: async () => new Response('{"error":{"message":"rate limited"}}', { status: 429 }),
+    }),
+    (error: Error & { code?: string }) => error.code === 'AI_PROVIDER_RATE_LIMITED',
+  )
+})
+
+test('sends nothing to the model when the profile already answers every field', async () => {
+  let called = false
+  const generated = await streamAiFormFill(
+    formFillPreviewSchema.parse({ profileId: 'profile-1', fields: [{ id: 'name', label: '姓名', controlType: 'input', inputType: 'text' }] }),
+    {
+      getContext: async () => ({ aiContext: { basics: { fullName: '张三' } } }),
+      getRuntime: async () => streamRuntime,
+      fetcher: async () => { called = true; return new Response(null, { status: 200 }) },
+    },
+  )
+
+  const events = await drain(generated.stream)
+  assert.equal(called, false)
+  assert.deepEqual(events, [
+    { type: 'fill', fieldId: 'name', value: '张三' },
+    { type: 'done', provider: 'local-profile', model: 'structured-facts' },
+  ])
 })

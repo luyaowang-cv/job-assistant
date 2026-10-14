@@ -14,6 +14,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # 只绑回环地址，供生产数据库迁移时经 SSH 隧道接入；公网不可达。
+    # 迁移流程见 docs/deploy.md 的「数据库迁移」一节。
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U job_assistant -d job_assistant"]
       interval: 5s
@@ -30,6 +34,11 @@ services:
     image: ghcr.io/luyaowang-cv/job-assistant-web:latest
     container_name: job-assistant-web
     restart: unless-stopped
+    # 硬兜底。没有它，Node 涨到哪算哪，最后陪葬的是同机的 journald 和 postgres
+    # ——2026-10-12 就是这样：web 占到 1.26GiB、整机 available 只剩 52Mi，
+    # systemd-journald 被饿到 watchdog 超时，整站不可用 25 分钟，而 web 容器
+    # 自己毫发无伤。有它，最坏情况只是 web 被 OOM 掉、被 restart 策略拉起来。
+    mem_limit: 900m
     environment:
       DATABASE_URL: postgresql://job_assistant:${POSTGRES_PASSWORD}@db:5432/job_assistant?schema=public
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?请在 .env 设置 BETTER_AUTH_SECRET}
@@ -44,6 +53,24 @@ services:
       FEISHU_TOKEN_ENCRYPTION_KEY: ${FEISHU_TOKEN_ENCRYPTION_KEY:-}
       FEISHU_AUTO_SYNC_ENABLED: ${FEISHU_AUTO_SYNC_ENABLED:-true}
       RESUME_CHROMIUM_PATH: ${RESUME_CHROMIUM_PATH:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_SECURE: ${SMTP_SECURE:-true}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      MAIL_DEV_LOG_ONLY: ${MAIL_DEV_LOG_ONLY:-false}
+      # 单进程堆上限。和 postgres、caddy 分着用这台 1.7G 的机器，而 node-cluster
+      # 会起多个 worker：不限制时每个 worker 的默认上限约 1.5G，加起来足以把 db
+      # 挤到 OOM-kill。448M 是配合下面的 mem_limit 定的——旧生代加上新生代和堆外
+      # 开销，单进程 RSS 大约落在 600~650M，离 900M 的天花板还有余量。
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=448}
+      # worker 数量，默认取 CPU 核数（这台是 2 核 → 2 个 Node 进程，各自常驻几百兆）。
+      # 实测两个装不下：容器常年占 1.26GiB，整机 available 只剩 52Mi，就是上面那次
+      # 事故的来源。2 核并发渲染那点收益换不回一次整机宕机，固定为 1。
+      # 注意必须写 1：Nitro 的取值是 `parseInt(env || "") || os.cpus().length`，
+      # 写 0 会被 `||` 当成空值，退回按核数算。
+      NITRO_CLUSTER_WORKERS: ${NITRO_CLUSTER_WORKERS:-1}
     # 不再对外暴露端口：HTTPS 由 caddy 终结，caddy 通过内部网络访问 web:3000
     expose:
       - "3000"
