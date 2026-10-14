@@ -105,12 +105,22 @@ export async function createComposedResumeVersion(resumeId: string, composition:
   })
 }
 
-export async function listApplicationProfileVersions(profileId: string) {
+/**
+ * A profile's versions, newest first.
+ *
+ * `limit` exists because the interface stopped presenting history as a concept: the
+ * page only ever wants the current content, and without a limit it would pull every
+ * version ever saved — each with its references — on every visit.
+ */
+export async function listApplicationProfileVersions(profileId: string, options: { limit?: number } = {}) {
   const user = await getCurrentUser()
   const profile = await prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id } })
   if (!profile) return null
   return prisma.applicationProfileVersion.findMany({
-    where: { applicationProfileId: profileId }, include: { composition: { include: compositionInclude } }, orderBy: { createdAt: 'desc' },
+    where: { applicationProfileId: profileId },
+    include: { composition: { include: compositionInclude } },
+    orderBy: { createdAt: 'desc' },
+    ...(options.limit ? { take: options.limit } : {}),
   })
 }
 

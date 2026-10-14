@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>网申档案 · 原型 v4</title>
+<style>
+:root{
+  color-scheme:light;
+  --workbench-ink:#3d464b; --workbench-slate:#64716d; --workbench-subtle:#52605b;
+  --workbench-mist:#f2f3f0; --workbench-solid:#fcfbf8; --workbench-control:rgba(255,254,250,.92);
+  --workbench-blue:#7a9689; --workbench-blue-deep:#668476; --workbench-border:rgba(116,132,124,.24);
+  --workbench-focus:rgba(99,137,120,.3); --danger:#b4715f;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-6:24px; --space-8:32px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--workbench-mist);color:var(--workbench-ink);font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
+h2{font-size:15px;margin:0}
+h3{font-size:14px;margin:0}
+p{margin:0}
+.hint{font-size:12px;color:var(--workbench-slate)}
+
+.page-rail{width:min(100%,1240px);height:100vh;margin:0 auto;padding:var(--space-6);display:flex;flex-direction:column}
+.layout{flex:1;min-height:0;display:grid;grid-template-columns:320px minmax(0,1fr);gap:var(--space-4);align-items:stretch}
+.material-surface{background:var(--workbench-solid);border:1px solid var(--workbench-border);border-radius:16px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.card-head{padding:var(--space-6) var(--space-6) var(--space-4);flex:none}
+.card-foot{flex:none;padding:var(--space-4) var(--space-6);border-top:1px solid var(--workbench-border)}
+
+/* 滚动区：滚动条藏掉，用"上/下边缘的渐隐阴影"提示还能滚。
+   四层背景是 CSS 的经典做法：两层 local 渐变盖住两端、两层 scroll 阴影跟着视口走，
+   于是顶部没滚时不显示上阴影、滚到底时不显示下阴影——阴影本身就是滚动位置的提示。 */
+.card-body{
+  flex:1;min-height:0;overflow-y:auto;padding:0 var(--space-6) var(--space-6);
+  scrollbar-width:none;                                   /* Firefox */
+  background:
+    linear-gradient(var(--workbench-solid) 30%, rgba(252,251,248,0)) top / 100% 24px no-repeat local,
+    linear-gradient(rgba(252,251,248,0), var(--workbench-solid) 70%) bottom / 100% 24px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(61,70,75,.22), rgba(61,70,75,0)) top / 100% 14px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(61,70,75,.22), rgba(61,70,75,0)) bottom / 100% 14px no-repeat scroll;
+}
+.card-body::-webkit-scrollbar{width:0;height:0}            /* Chrome / Edge / Safari */
+
+.btn{height:40px;padding:0 var(--space-4);border-radius:10px;border:1px solid var(--workbench-border);background:var(--workbench-control);color:var(--workbench-subtle);font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:var(--space-2);white-space:nowrap;flex:none}
+.btn:hover{border-color:var(--workbench-blue);color:var(--workbench-ink)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn--primary{background:var(--workbench-blue);border-color:var(--workbench-blue);color:#fff}
+.btn--primary:hover:not([disabled]){background:var(--workbench-blue-deep);border-color:var(--workbench-blue-deep);color:#fff}
+.btn--danger{border-color:var(--danger);color:var(--danger);background:transparent}
+.btn--danger:hover{border-color:#8f4b39;color:#8f4b39}
+.btn--quiet{height:32px;padding:0 var(--space-3);font-size:12px;background:transparent;border-color:transparent;color:var(--workbench-slate)}
+.btn--quiet:hover{color:var(--workbench-blue-deep);border-color:transparent;text-decoration:underline}
+
+/* 卡片头部：切换"在编辑哪一份"，以及新建 */
+.head-row{display:flex;gap:var(--space-2);align-items:center}
+.head-row select.control{flex:1;min-width:0}
+.head-row .btn{height:40px}
+.section-label{font-size:12px;letter-spacing:.08em;color:var(--workbench-slate);margin:var(--space-6) 0 var(--space-3);padding-bottom:var(--space-2);border-bottom:1px solid var(--workbench-border)}
+.section-label:first-of-type{margin-top:var(--space-4)}
+.field{display:grid;gap:var(--space-1);margin-bottom:var(--space-3)}
+.field > span{font-size:13px;color:var(--workbench-subtle)}
+.control{height:40px;border:1px solid var(--workbench-border);border-radius:10px;background:var(--workbench-control);padding:0 var(--space-3);font:inherit;font-size:14px;color:var(--workbench-ink);width:100%}
+.control:focus{outline:2px solid var(--workbench-focus);outline-offset:1px}
+select.control{cursor:pointer}
+
+.main-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--space-4);border-bottom:1px solid var(--workbench-border)}
+.main-head__state{display:grid;gap:var(--space-1)}
+.main-head__actions{display:flex;gap:var(--space-2);align-items:center}
+
+.block{margin-top:var(--space-6)}
+.block:first-of-type{margin-top:var(--space-4)}
+.block__head{display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);padding-bottom:var(--space-2);border-bottom:1px solid var(--workbench-border)}
+.block__actions{display:flex;gap:var(--space-1);align-items:center}
+.block__empty{margin-top:var(--space-3);padding:var(--space-4);border:1px dashed var(--workbench-border);border-radius:12px;color:var(--workbench-slate);font-size:13px}
+
+.library{margin-top:var(--space-3);border:1px solid var(--workbench-border);border-radius:12px;background:var(--workbench-control);padding:var(--space-3);display:grid;gap:var(--space-2)}
+.library__head{display:flex;justify-content:space-between;align-items:center;gap:var(--space-2)}
+.library__list{display:grid;gap:var(--space-1);max-height:240px;overflow:auto;scrollbar-width:none}
+.library__list::-webkit-scrollbar{width:0;height:0}
+.library__item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-2);align-items:baseline;text-align:left;padding:var(--space-2) var(--space-3);border:1px solid transparent;border-radius:8px;background:transparent;font:inherit;cursor:pointer;color:var(--workbench-ink)}
+.library__item:hover{border-color:var(--workbench-blue);background:rgba(122,150,137,.08)}
+.library__type{font-size:11px;color:var(--workbench-slate);white-space:nowrap}
+.library__meta{font-size:12px;color:var(--workbench-slate)}
+.new-block{display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
+.new-block .hint{flex:1;min-width:180px}
+
+.field-row{margin-top:var(--space-3);padding:var(--space-4);border:1px solid var(--workbench-border);border-radius:14px;background:var(--workbench-control);display:grid;gap:var(--space-3)}
+.field-row__head{display:flex;justify-content:space-between;align-items:baseline;gap:var(--space-3)}
+.field-row__picks{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:var(--space-2)}
+.field-row__picks--empty{grid-template-columns:minmax(0,1fr)}
+.card-preview{display:grid;gap:var(--space-2);padding:var(--space-3);border:1px solid var(--workbench-border);border-radius:10px;background:rgba(255,254,251,.6)}
+.card-preview__meta{font-size:12px;color:var(--workbench-slate)}
+.card-preview__content{margin:0;font-size:13px;line-height:1.7;white-space:pre-wrap}
+.field-row__foot{display:flex;justify-content:space-between;align-items:center;gap:var(--space-3);font-size:12px;color:var(--workbench-slate)}
+.over{color:#8a5a44}
+.warn{padding:var(--space-3) var(--space-4);border-radius:12px;background:rgba(215,169,149,.18);font-size:13px;margin:var(--space-4) 0 0}
+@media(max-width:760px){
+  body{overflow:auto}
+  .page-rail{height:auto;min-height:100vh;padding:var(--space-4)}
+  .layout{grid-template-columns:1fr;min-height:0}
+  .card-body{overflow:visible}
+  .field-row__picks{grid-template-columns:1fr}
+  .main-head{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<section class="page-rail">
+  <div class="layout">
+    <!-- 左：这份档案是谁、投什么 -->
+    <aside class="material-surface">
+      <!-- 头部：切换"在编辑哪一份" + 新建。它是页面的上下文控件，不是档案的属性。 -->
+      <div class="card-head">
+        <div class="head-row">
+          <select class="control" id="picker"></select>
+          <button class="btn" id="create">＋ 新建档案</button>
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="section-label" style="margin-top:0">这份档案</div>
+        <label class="field"><span>名称</span><input class="control" id="name" /></label>
+
+        <div class="section-label">策略</div>
+        <label class="field"><span>期望地点</span><input class="control" id="cities" /></label>
+        <label class="field"><span>期望薪资</span><input class="control" id="salary" /></label>
+        <label class="field"><span>可到岗时间</span><input class="control" id="available" /></label>
+        <label class="field"><span>招聘来源</span><input class="control" id="source" /></label>
+
+        <div class="section-label">投递用简历</div>
+        <label class="field"><span>简历版本</span>
+          <select class="control" id="resume">
+            <option>dense-two-page（2 页紧凑）</option>
+            <option>app-dev（应用开发向）</option>
+            <option>暂不挂载</option>
+          </select>
+        </label>
+        <p class="hint">导出 PDF 和投递时用这一份。填表的文案不来自它，来自右边每个字段引用的素材卡。</p>
+      </div>
+    </aside>
+
+    <!-- 右：这份档案往表单里填什么 -->
+    <main class="material-surface">
+      <div class="card-head main-head">
+        <div class="main-head__state">
+          <h2>这份档案往表单里填什么</h2>
+          <p class="hint" id="state">每个字段从素材库里引用一段固定文案，插件按它填表。</p>
+        </div>
+        <div class="main-head__actions">
+          <button class="btn btn--danger" id="delete">删除档案</button>
+          <button class="btn btn--primary" id="save" disabled>保存档案</button>
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div id="warn"></div>
+        <div id="blocks"></div>
+      </div>
+
+      <div class="card-foot new-block" id="new-block-row"></div>
+    </main>
+  </div>
+</section>
+
+<script>
+const CARDS = [
+  { id:'c1', title:'Offer来 · 秋招求职工作台', type:'项目经历', facts:{ role:'独立开发', organization:'个人项目', startDate:'2025.01', endDate:'2025.06' },
+    variants:[ { id:'v1', name:'网申版', content:'把岗位采集、简历管理、网申填写收进一个工作台；前端 Nuxt 4，服务端 90 个接口，插件负责网申表单的规则与模型填写。' },
+               { id:'v2', name:'简历版', content:'独立完成 Nuxt 4 + MV3 插件的求职工作台，含 90 个接口与 28 张表。' } ] },
+  { id:'c2', title:'某某科技 · 前端开发实习', type:'实习经历', facts:{ role:'前端开发实习生', organization:'某某科技有限公司', startDate:'2025.07', endDate:'2025.09' },
+    variants:[ { id:'v3', name:'网申版', content:'负责运营后台表单引擎，抽象出 12 个可复用字段组件，首屏加载从 3.1s 优化到 1.4s。' } ] },
+  { id:'c3', title:'改进 YOLOv8 的检测算法', type:'科研经历', facts:{ role:'第二作者', organization:'校级科研项目', startDate:'2024.03', endDate:'2024.12' },
+    variants:[ { id:'v4', name:'网申版', content:'负责数据增强与消融实验，mAP 提升 3.2 个百分点。' } ] },
+  { id:'c4', title:'校科技协会 · 技术部负责人', type:'校园经历', facts:{ role:'技术部负责人', organization:'校科技协会', startDate:'2023.09', endDate:'2024.06' },
+    variants:[ { id:'v5', name:'网申版', content:'组织 6 场技术分享，负责新人培训与项目评审。' } ] },
+  { id:'c5', title:'为什么选择我们公司', type:'自定义问答', facts:{},
+    variants:[ { id:'v6', name:'网申版', content:'我更希望做能被人直接用到的东西，贵司在大模型上的投入和我做过的项目方向一致。' } ] },
+]
+const BLOCKS = [
+  { key:'self', title:'自我评价', fields:[ { key:'selfEvaluation', label:'自我评价', limit:500, source:null } ] },
+  { key:'project', title:'项目经历', fields:[ { key:'project1', label:'项目经历 1', limit:2000, source:{ cardId:'c1', variantId:'v1' } } ] },
+  { key:'internship', title:'实习经历', fields:[ { key:'internship1', label:'实习经历 1', limit:2000, source:{ cardId:'c2', variantId:'v3' } } ] },
+  { key:'campus', title:'校园经历', fields:[ { key:'campus1', label:'校园经历 1', limit:1000, source:null } ] },
+  { key:'awards', title:'荣誉奖项', fields:[ { key:'award1', label:'荣誉奖项 1', limit:1000, source:null } ] },
+]
+const PROFILES = [
+  { id:'p1', name:'应用开发 / 大模型', cities:'北京市', salary:'15001～25000', available:'一个月内', source:'BOSS直聘', resume:'dense-two-page（2 页紧凑）', blocks:BLOCKS },
+  { id:'p2', name:'银行类国企', cities:'北京市 / 石家庄市', salary:'面议', available:'2026-07-01', source:'公司官网', resume:'app-dev（应用开发向）',
+    blocks:[ { key:'self', title:'自我评价', fields:[ { key:'selfEvaluation', label:'自我评价', limit:500, source:null } ] },
+             { key:'internship', title:'实习经历', fields:[ { key:'internship1', label:'实习经历 1', limit:2000, source:{ cardId:'c2', variantId:'v3' } } ] } ] },
+  { id:'p3', name:'教育机构（备用）', cities:'', salary:'', available:'', source:'', resume:'暂不挂载', blocks:[] },
+]
+
+const state = { id:'p1', draft:null, dirty:false, picking:null, addingBlock:false }
+const $ = id => document.getElementById(id)
+const profile = () => PROFILES.find(p => p.id === state.id)
+const blocks = () => state.draft ?? structuredClone(profile().blocks)
+const cardOf = key => CARDS.find(c => c.id === key)
+function touch() { state.dirty = true; render() }
+function edit(mutate) { const copy = blocks(); mutate(copy); state.draft = copy; touch() }
+const period = card => [card.facts.startDate, card.facts.endDate].filter(Boolean).join(' — ')
+
+function render() {
+  const p = profile()
+  $('picker').innerHTML = PROFILES.map(item => `<option value="${item.id}"${item.id === p.id ? ' selected' : ''}>${item.name}</option>`).join('')
+  $('name').value = p.name
+  $('cities').value = p.cities; $('salary').value = p.salary; $('available').value = p.available
+  $('source').value = p.source; $('resume').value = p.resume
+  $('state').textContent = state.dirty ? '有未保存的改动' : '每个字段从素材库里引用一段固定文案，插件按它填表。'
+  $('save').disabled = !state.dirty
+
+  const all = blocks().flatMap(b => b.fields)
+  const missing = all.filter(f => !f.source).length
+  $('warn').innerHTML = missing
+    ? `<div class="warn">还有 <b>${missing}</b> 个字段没有引用素材卡：填表时这些字段只能靠基础档案里的事实或 AI，文案不会来自素材库。</div>`
+    : ''
+
+  $('blocks').innerHTML = blocks().map(block => `
+    <section class="block">
+      <div class="block__head">
+        <h3>${block.title}</h3>
+        <div class="block__actions">
+          <button class="btn btn--quiet" data-insert="${block.key}">＋ 插入素材卡片</button>
+          <button class="btn btn--quiet" data-drop="${block.key}">移除模块</button>
+        </div>
+      </div>
+      ${state.picking === block.key ? `
+        <div class="library">
+          <div class="library__head">
+            <span class="hint">从素材库挑一张卡，插到这个模块里</span>
+            <button class="btn btn--quiet" data-cancel="1">取消</button>
+          </div>
+          <div class="library__list">
+            ${CARDS.map(card => `<button class="library__item" data-pick="${card.id}" data-block="${block.key}">
+              <span class="library__type">${card.type}</span>
+              <span><b>${card.title}</b><span class="library__meta">${period(card) ? ` · ${period(card)}` : ''}</span></span>
+            </button>`).join('')}
+          </div>
+        </div>` : ''}
+      ${block.fields.length ? block.fields.map(field => {
+        const card = cardOf(field.source?.cardId)
+        const variant = card?.variants.find(v => v.id === field.source?.variantId)
+        const count = variant ? [...variant.content].length : 0
+        return `<div class="field-row">
+          <div class="field-row__head">
+            <strong>${field.label}</strong>
+            ${card ? `<span class="hint">${card.type} · 引用自素材库</span>` : '<span class="hint">这个字段还没有内容</span>'}
+          </div>
+          <div class="field-row__picks${card ? '' : ' field-row__picks--empty'}">
+            <select class="control" data-card="${field.key}">
+              <option value="">选择素材卡片…</option>
+              ${CARDS.map(c => `<option value="${c.id}"${c.id === field.source?.cardId ? ' selected' : ''}>${c.title}</option>`).join('')}
+            </select>
+            ${card ? `<select class="control" data-variant="${field.key}">${card.variants.map(v => `<option value="${v.id}"${v.id === field.source?.variantId ? ' selected' : ''}>${v.name}</option>`).join('')}</select>` : ''}
+          </div>
+          ${card ? `<div class="card-preview">
+            <span class="card-preview__meta">${[card.facts.role, card.facts.organization, period(card)].filter(Boolean).join(' · ')}</span>
+            <p class="card-preview__content">${variant?.content ?? ''}</p>
+          </div>` : ''}
+          <div class="field-row__foot">
+            <span>${card ? '改文案请去素材库改这张卡的版本，这里只选引用' : '不引用素材卡时，插件只能用基础事实或 AI'}</span>
+            <span class="${field.limit && count > field.limit ? 'over' : ''}">${count} / ${field.limit ?? '不限'}${field.limit && count > field.limit ? ' · 超出上限' : ''}</span>
+          </div>
+        </div>`
+      }).join('') : '<p class="block__empty">这个模块还没有素材。点右上角「＋ 插入素材卡片」从素材库挑一张。</p>'}
+    </section>`).join('') || '<p class="block__empty" style="margin-top:var(--space-4)">这份档案还没有模块。用下面的「＋ 添加模块」建第一个，例如"实习经历"。</p>'
+
+  $('new-block-row').innerHTML = state.addingBlock
+    ? `<input class="control" id="new-block-name" style="max-width:260px" placeholder="模块名称，例如：科研经历" />
+       <button class="btn" id="confirm-block">添加</button>
+       <button class="btn btn--quiet" id="cancel-block">取消</button>`
+    : `<button class="btn btn--quiet" id="add-block">＋ 添加模块</button>
+       <span class="hint">模块是一组字段（如"实习经历"）；素材卡是字段的内容来源</span>`
+  $('add-block')?.addEventListener('click', () => { state.addingBlock = true; render(); $('new-block-name')?.focus() })
+  $('cancel-block')?.addEventListener('click', () => { state.addingBlock = false; render() })
+  $('confirm-block')?.addEventListener('click', () => {
+    const title = ($('new-block-name')?.value ?? '').trim(); if (!title) return
+    edit(copy => copy.push({ key: `block-${Date.now()}`, title, fields: [] }))
+    state.addingBlock = false; render()
+  })
+}
+
+for (const id of ['name','cities','salary','available','source','resume']) $(id).addEventListener('input', touch)
+$('picker').addEventListener('change', event => {
+  if (state.dirty && !confirm('有未保存的改动，切过去会丢掉。继续？')) { render(); return }
+  state.id = event.target.value; state.draft = null; state.dirty = false; state.picking = null; render()
+})
+$('create').addEventListener('click', () => {
+  const count = PROFILES.length + 1
+  const fresh = { id: `p${Date.now()}`, name: `新档案 ${count}`, cities: '', salary: '', available: '', source: '', resume: '暂不挂载', blocks: [] }
+  PROFILES.push(fresh)
+  state.id = fresh.id; state.draft = null; state.picking = null; state.dirty = true
+  render()
+  $('name').focus(); $('name').select()
+})
+$('save').addEventListener('click', () => {
+  const p = profile(); const copy = blocks()
+  Object.assign(p, { name: $('name').value.trim() || p.name, cities: $('cities').value, salary: $('salary').value,
+    available: $('available').value, source: $('source').value, resume: $('resume').value, blocks: copy })
+  state.draft = null; state.dirty = false
+  $('save').textContent = '已保存'; setTimeout(() => { $('save').textContent = '保存档案'; render() }, 1200)
+  render()
+})
+$('delete').addEventListener('click', () => confirm('删除后该档案将从工作台移除，且不可恢复。确认删除？'))
+$('blocks').addEventListener('click', event => {
+  const insert = event.target.closest('[data-insert]')
+  if (insert) { state.picking = state.picking === insert.dataset.insert ? null : insert.dataset.insert; render(); return }
+  if (event.target.closest('[data-cancel]')) { state.picking = null; render(); return }
+  const pick = event.target.closest('[data-pick]')
+  if (pick) {
+    const card = cardOf(pick.dataset.pick); const blockKey = pick.dataset.block
+    const variant = card.variants.find(v => v.name === '网申版') ?? card.variants[0]
+    edit(copy => {
+      const block = copy.find(b => b.key === blockKey)
+      block.fields.push({ key: `${blockKey}-${Date.now()}`, label: `${block.title} ${block.fields.length + 1}`, limit: 1000, source: { cardId: card.id, variantId: variant.id } })
+    })
+    state.picking = null; render(); return
+  }
+  const drop = event.target.closest('[data-drop]')
+  if (drop) {
+    const block = blocks().find(b => b.key === drop.dataset.drop)
+    if (confirm(`移除「${block.title}」模块及其 ${block.fields.length} 个字段？`)) edit(copy => { copy.splice(copy.indexOf(copy.find(b => b.key === drop.dataset.drop)), 1) })
+  }
+})
+$('blocks').addEventListener('change', event => {
+  const cardPick = event.target.closest('[data-card]')
+  if (cardPick) {
+    edit(copy => { const field = copy.flatMap(b => b.fields).find(f => f.key === cardPick.dataset.card)
+      field.source = cardPick.value ? { cardId: cardPick.value, variantId: cardOf(cardPick.value).variants[0].id } : null })
+    return
+  }
+  const variantPick = event.target.closest('[data-variant]')
+  if (variantPick) edit(copy => { copy.flatMap(b => b.fields).find(f => f.key === variantPick.dataset.variant).source.variantId = variantPick.value })
+})
+render()
+</script>
+</body>
+</html>
