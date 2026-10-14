@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildFillPlan, classifyField, reconcileFillOutcome } from './form-fill-rules.js'
-import { applyChoiceEntries, applyFillEntries, scanVisibleFormFields } from './form-page-bridge.js'
+import { applyChoiceEntries, applyFillEntries, collectControlValues, scanVisibleFormFields } from './form-page-bridge.js'
 
 const profile = {
   basics: {
@@ -532,10 +532,34 @@ test('walks open shadow roots in every page-side pass', () => {
     scanVisibleFormFields.toString(),
     applyFillEntries.toString(),
     applyChoiceEntries.toString(),
+    collectControlValues.toString(),
   ]) {
     assert.match(source, /shadowRoot/)
     assert.match(source, /const queryAll = /)
   }
+})
+
+test('names controls the same way in every page-side pass', () => {
+  // An id is a control's position in the selector's result, so a pass that spells
+  // one of these differently files a value against the wrong question — silently,
+  // because nothing about the write would look wrong.
+  const idSpellings = [
+    'form-field-${index}',
+    'radio-group-${anchorIndex}',
+    'custom-select-${index}',
+  ]
+  const scan = scanVisibleFormFields.toString()
+  const read = applyFillEntries.toString()
+  const choice = applyChoiceEntries.toString()
+  const collect = collectControlValues.toString()
+
+  for (const spelling of idSpellings) {
+    assert.ok(scan.includes(spelling), `扫描缺少 ${spelling}`)
+    assert.ok(collect.includes(spelling), `取值器缺少 ${spelling}`)
+  }
+  assert.ok(read.includes('form-field-${index}'))
+  assert.ok(choice.includes('radio-group-${anchorIndex}'))
+  assert.ok(choice.includes('custom-select-${index}'))
 })
 
 test('keeps scanned fields in DOM order with repeated-label context', () => {
@@ -550,7 +574,7 @@ test('scans and writes through the very same control selector', () => {
   // that differs by even one branch sends a value to the wrong box — silently,
   // since nothing about the write would look wrong.
   const declaration = /const CONTROL_SELECTOR = '([^']+)'/
-  const selectors = [scanVisibleFormFields, applyFillEntries, applyChoiceEntries]
+  const selectors = [scanVisibleFormFields, applyFillEntries, applyChoiceEntries, collectControlValues]
     .map(func => declaration.exec(func.toString())?.[1])
 
   assert.ok(selectors.every(Boolean), 'every page-side pass must declare CONTROL_SELECTOR')
@@ -587,3 +611,230 @@ test('supports common framework comboboxes and contenteditable controls generica
   assert.match(textApplySource, /scrollIntoView/)
   assert.match(textApplySource, /await pause/)
 })
+
+test('never asks a model to guess a yes/no answer', () => {
+  // The page is asking about the employer's own records, so the profile says
+  // nothing about it, and a coin flip is indistinguishable from an answer in the
+  // report. It goes to the person who can decide, and the answer memory keeps
+  // that decision for next time.
+  const plan = buildFillPlan(profile, [
+    { id: 'kin', label: '是否有亲属在交银集团工作', controlType: 'radio-group', inputType: 'radio', options: ['是', '否'], skipAi: false },
+    { id: 'channel', label: '招聘信息来源', controlType: 'select', options: ['BOSS直聘', '智联招聘', '其他'] },
+  ])
+
+  assert.equal(plan.entries[0].status, 'needs_manual')
+  assert.equal(plan.entries[0].skipAi, true)
+  assert.equal(plan.entries[0].reason, '这是是非题，档案里没有可以判断它的事实，需要你自己确认（确认一次就会被记住）。')
+  // Everything else that the rules cannot place is still worth asking the model,
+  // because the profile may well hold the answer in prose.
+  assert.equal(plan.entries[1].status, 'needs_manual')
+  assert.equal(plan.entries[1].skipAi, undefined)
+})
+
+test('answers a yes/no question from the profile when a rule covers it', () => {
+  // The gate is only for questions the profile cannot answer. “是否有实习经历”
+  // has a saved fact behind it, so it is answered rather than deferred.
+  const plan = buildFillPlan({ workExperiences: [] }, [
+    { id: 'none', label: '无实习经历', inputType: 'checkbox', controlType: 'input', options: [] },
+  ])
+
+  assert.equal(plan.entries[0].status, 'filled')
+  assert.equal(plan.entries[0].value, 'true')
+})
+
+test('does not mistake 男/女 for a yes/no question', () => {
+  const plan = buildFillPlan({ basics: { gender: '女' } }, [
+    { id: 'gender', label: '性别', controlType: 'radio-group', inputType: 'radio', options: ['男', '女'] },
+  ])
+
+  assert.equal(plan.entries[0].status, 'filled')
+  assert.equal(plan.entries[0].value, '女')
+})
+
+test('does not report a placeholder as the name of a field', () => {
+  // “请选择” is what the page shows before an answer, not what the column is
+  // called; printing it as the field's name reads like the tool understood the
+  // form when it did not.
+  const plan = buildFillPlan(profile, [
+    { id: 'unset', label: '', name: '', placeholder: '请选择', controlType: 'input', inputType: 'text' },
+    { id: 'named', label: '学历', name: '', placeholder: '请选择', controlType: 'input', inputType: 'text' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.label), ['未命名字段', '学历'])
+})
+
+test('reads a split date box from the unit beside it and the block it sits in', () => {
+  // A box whose whole visible name is “年” carries no other identity, which is
+  // why the unit and the end of the range are read on the page and handed over
+  // as `dateUnit` / `dateRole`. Without them this whole class of field — half of
+  // a real application form — is unanswerable.
+  const localProfile = { educations: [{ school: 'A 大学', startDate: '2021-09', endDate: '2025-06' }] }
+  // One block holds both ends, so its text is what says which section this is.
+  const context = '教育经历 入学时间 年 月 至 毕业时间 年 月'
+  const box = (id, dateUnit, dateRole) => ({
+    id,
+    label: '',
+    name: '',
+    placeholder: dateUnit === 'year' ? '年' : '月',
+    context,
+    controlType: 'input',
+    inputType: 'text',
+    dateUnit,
+    dateRole,
+  })
+  const plan = buildFillPlan(localProfile, [
+    box('sy', 'year', 'start'),
+    box('sm', 'month', 'start'),
+    box('ey', 'year', 'end'),
+    box('em', 'month', 'end'),
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.status), Array(4).fill('filled'))
+  assert.deepEqual(plan.entries.map(entry => entry.target), [
+    'education.startDate', 'education.startDate',
+    'education.endDate', 'education.endDate',
+  ])
+  // Unpadded: these boxes are almost always a plain list of numbers.
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['2021', '9', '2025', '6'])
+})
+
+test('finds which end of a date a bare unit box belongs to from its block text', () => {
+  // “入学时间” / “毕业时间” is written on the block around the box. Only the block
+  // text may decide the role — a neighbour's label must not.
+  const plan = buildFillPlan({ educations: [{ startDate: '2021-09', endDate: '2025-06' }] }, [
+    { id: 'y', label: '', name: '', placeholder: '年', controlType: 'input', inputType: 'text', dateUnit: 'year', context: '入学时间；页面字段 3/12；相邻字段：专业名称、学历' },
+  ])
+
+  assert.equal(plan.entries[0].status, 'filled')
+  assert.equal(plan.entries[0].target, 'education.startDate')
+  assert.equal(plan.entries[0].value, '2021')
+})
+
+test('leaves a bare unit box alone when its block names both ends of the range', () => {
+  // “起止时间 年 月 至 年 月” says which end nowhere: the boxes are ordered, not
+  // labelled. Guessing a role from that order is a claim the page never made.
+  const plan = buildFillPlan({ educations: [{ startDate: '2021-09' }] }, [
+    { id: 'y', label: '', name: '', placeholder: '年', controlType: 'input', inputType: 'text', dateUnit: 'year', context: '起止时间；页面字段 1/4' },
+  ])
+
+  assert.equal(plan.entries[0].status, 'needs_manual')
+})
+
+test('reads a bare 职责 box in the block it belongs to', () => {
+  // “职责” alone is what a work block calls its description box, and “项目中职责”
+  // is the project one. The project rule must win over the work rule for its own
+  // wording, or a project's duties would be answered from an internship's facts.
+  const localProfile = {
+    workExperiences: [{ company: '甲公司', description: '负责表单引擎' }],
+    projects: [{ name: 'Offer来', description: '独立开发求职工作台' }],
+  }
+  const plan = buildFillPlan(localProfile, [
+    { id: 'w', label: '职责', name: 'workResponsibilities', controlType: 'textarea', inputType: 'textarea' },
+    { id: 'p', label: '项目中职责', name: '', controlType: 'textarea', inputType: 'textarea' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.target), ['work.description', 'project.description'])
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['负责表单引擎', '独立开发求职工作台'])
+})
+
+test('answers the two questions the profile has always held the answers to', () => {
+  // 招聘信息来源 and 推荐码 have been on the profile since the strategy schema was
+  // written; no rule read them, so both came back as unanswerable on a real form
+  // while the answer sat in the profile the whole time.
+  const plan = buildFillPlan({ strategy: { recruitmentSource: 'BOSS直聘', referralCode: 'ABC123' } }, [
+    { id: 'src', label: '招聘信息来源', controlType: 'input', inputType: 'text' },
+    { id: 'code', label: '推荐码', controlType: 'input', inputType: 'text' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.status), ['filled', 'filled'])
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['BOSS直聘', 'ABC123'])
+})
+
+test('reads the field names one real ATS uses for facts the profile already has', () => {
+  // 生源地 is what 北森 calls 籍贯, and 职务 is what its project block calls the role.
+  const plan = buildFillPlan({
+    basics: { nativePlace: '河北省邯郸市' },
+    projects: [{ name: 'Offer来', role: '独立开发' }],
+  }, [
+    { id: 'origin', label: '生源地', controlType: 'input', inputType: 'text' },
+    { id: 'role', label: '职务', context: '相邻字段：项目名称、项目描述', controlType: 'input', inputType: 'text' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.target), ['basics.nativePlace', 'project.role'])
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['河北省邯郸市', '独立开发'])
+})
+
+test('does not ask a model for a column the profile has no shape for', () => {
+  // `skills` is a flat list of names: there is no per-skill duration and no
+  // per-skill description anywhere in the profile. Nine rows of “使用时间总计” on one
+  // real form would otherwise be nine invented durations.
+  const plan = buildFillPlan({ skills: ['TypeScript', 'Vue'] }, [
+    { id: 'dur', label: '使用时间总计', controlType: 'input', inputType: 'text' },
+    { id: 'desc', label: '技能描述', controlType: 'textarea', inputType: 'textarea' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.status), ['needs_manual', 'needs_manual'])
+  assert.deepEqual(plan.entries.map(entry => entry.skipAi), [true, true])
+  assert.equal(plan.entries[0].reason, '所选资料档案没有该字段的可用内容。')
+})
+
+test('reads the “至今” box from the end date of the record beside it', () => {
+  // 北森 renders 单位名称 / 开始时间 / 结束时间 / □至今 per block. The box is checked
+  // exactly when that record has no end date — a fact the profile already holds.
+  const localProfile = {
+    workExperiences: [
+      { company: '甲公司', title: '实习生', startDate: '2026-04', endDate: '' },
+      { company: '乙公司', title: '实习生', startDate: '2025-07', endDate: '2025-09' },
+    ],
+  }
+  const block = index => [
+    { id: `c${index}`, label: '单位名称', controlType: 'input', inputType: 'text' },
+    { id: `s${index}`, label: '开始时间', context: '相邻字段：单位名称、结束时间、至今', controlType: 'input', inputType: 'text' },
+    { id: `e${index}`, label: '结束时间', context: '相邻字段：开始时间、至今、单位名称', controlType: 'input', inputType: 'text' },
+    { id: `p${index}`, label: '至今', controlType: 'input', inputType: 'checkbox' },
+  ]
+  const plan = buildFillPlan(localProfile, [...block(1), ...block(2)])
+
+  assert.equal(plan.entries[3].status, 'filled')
+  assert.equal(plan.entries[3].value, 'true')
+  assert.equal(plan.entries[3].reason, '这段经历没有结束时间，勾选「至今」。')
+  // The finished record's box stays unchecked, and says why instead of joining the
+  // manual pile.
+  assert.equal(plan.entries[7].status, 'skipped_existing')
+  assert.equal(plan.entries[7].reason, '这段经历有结束时间（2025-09），不需要勾选「至今」。')
+})
+
+test('does not treat a “至今” box as a yes/no question', () => {
+  // It has no end-date box to belong to, so it stays manual — but the reason names
+  // the real problem rather than calling it a 是非题 the applicant must decide.
+  const plan = buildFillPlan({ workExperiences: [] }, [
+    { id: 'p', label: '至今', controlType: 'input', inputType: 'checkbox' },
+  ])
+
+  assert.equal(plan.entries[0].status, 'needs_manual')
+  assert.equal(plan.entries[0].skipAi, true)
+  assert.equal(plan.entries[0].reason, '这是「至今」开关，但没能确定它属于哪一段经历，需要你确认。')
+})
+
+test('never unchecks a box the applicant ticked herself', () => {
+  const localProfile = { workExperiences: [{ company: '甲公司', startDate: '2026-04', endDate: '' }] }
+  const plan = buildFillPlan(localProfile, [
+    { id: 'c', label: '单位名称', controlType: 'input', inputType: 'text' },
+    { id: 'e', label: '结束时间', context: '相邻字段：单位名称、至今', controlType: 'input', inputType: 'text' },
+    { id: 'p', label: '至今', controlType: 'input', inputType: 'checkbox', hasValue: true },
+  ])
+
+  assert.equal(plan.entries[2].status, 'skipped_existing')
+  assert.equal(plan.entries[2].reason, '字段已有内容，不会覆盖。')
+})
+
+test('fills 招聘来源 itself, not only its longer spellings', () => {
+  const plan = buildFillPlan({ strategy: { recruitmentSource: 'BOSS直聘' } }, [
+    { id: 'source', label: '招聘来源', controlType: 'input', inputType: 'text' },
+  ])
+
+  assert.equal(plan.entries[0].status, 'filled')
+  assert.equal(plan.entries[0].target, 'basics.recruitmentSource')
+  assert.equal(plan.entries[0].value, 'BOSS直聘')
+})
+
