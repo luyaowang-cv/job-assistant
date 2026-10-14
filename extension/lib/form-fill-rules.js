@@ -369,9 +369,28 @@ function buildContext(profile) {
   const basics = record(root.basics)
   const strategy = record(root.strategy)
   const references = array(root.references).map(record)
-  const fromReference = type => references
-    .filter(reference => text(reference.type).toUpperCase() === type)
-    .map((reference) => ({ ...record(reference.facts), title: reference.title, description: reference.content, content: reference.content }))
+  // A material card and a legacy record do not name their parts the same way. The
+  // card keeps its heading in `title` (公司名称 / 项目名称 / 奖项名称 …，见素材库各类型的
+  // 标题标签) and its copy in the variant `content`; the rules read `company` / `name` /
+  // `detail` and `description`. Handing the card straight through meant a card-sourced
+  // internship reported 「所选资料档案没有该字段的可用内容」 for 公司名称 and put the
+  // company name into 职位名称, because `work.title` reads `title`.
+  const fromReference = (type) => {
+    return references
+      .filter(reference => text(reference.type).toUpperCase() === type)
+      .map((reference) => {
+        const facts = record(reference.facts)
+        const heading = text(reference.title)
+        const body = text(reference.content)
+        const base = { ...facts, cardTitle: heading, description: body, content: body }
+        // 实习/工作：卡片标题是公司名，职位在 facts.role 里。
+        if (type === 'INTERNSHIP' || type === 'WORK') return { ...base, company: heading, title: text(facts.role) }
+        // 奖项/证书只有「名称 + 说明」两个字段。
+        if (type === 'AWARD' || type === 'CERTIFICATE') return { ...base, title: heading, name: heading, detail: body }
+        // 项目/校园：名称是卡片标题，角色从 facts 来。
+        return { ...base, title: heading, name: heading, role: text(facts.role) }
+      })
+  }
   const named = value => array(value).map(item => (typeof item === 'string' ? { name: item } : record(item)))
   const explicitWork = array(root.workExperiences).map(record)
   const explicitProjects = array(root.projects).map(record)

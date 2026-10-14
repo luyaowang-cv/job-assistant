@@ -828,6 +828,37 @@ test('never unchecks a box the applicant ticked herself', () => {
   assert.equal(plan.entries[2].reason, '字段已有内容，不会覆盖。')
 })
 
+test('reads a material-card reference the way the material library stores it', () => {
+  // 素材卡把「名称」放在 title（实习卡就是公司名，见素材库各类型的标题标签），
+  // 文案放在 variant 的 content 里；规则读的却是 company / name / detail。
+  // 两边不翻译的话，公司名称会空着、公司名还会被写进职位名称。
+  const localProfile = {
+    workExperiences: [],
+    projects: [],
+    references: [
+      { type: 'INTERNSHIP', title: '搜狐', facts: { organization: '推荐算法组', role: '算法实习生', startDate: '2025-06', endDate: '2025-09' }, content: '负责推荐排序特征工程。' },
+      { type: 'PROJECT', title: '多 Agent 前端迁移系统', facts: { role: '前端负责人', startDate: '2025-03', endDate: '2025-05' }, content: '用 LangGraph 编排多 Agent 完成迁移。' },
+      { type: 'AWARD', title: '全国大学生竞赛一等奖', facts: {}, content: '2025 年，国家级。' },
+    ],
+  }
+  const plan = buildFillPlan(localProfile, [
+    { id: 'company', label: '公司名称', controlType: 'input', inputType: 'text' },
+    { id: 'job', label: '职位名称', controlType: 'input', inputType: 'text' },
+    { id: 'work', label: '工作内容', controlType: 'textarea', inputType: 'textarea' },
+    { id: 'pname', label: '项目名称', controlType: 'input', inputType: 'text' },
+    { id: 'prole', label: '项目角色', controlType: 'input', inputType: 'text' },
+    { id: 'award', label: '奖项名称', controlType: 'input', inputType: 'text' },
+  ])
+  const value = id => plan.entries.find(entry => entry.fieldId === id)?.value
+
+  assert.equal(value('company'), '搜狐')
+  assert.equal(value('job'), '算法实习生')
+  assert.equal(value('work'), '负责推荐排序特征工程。')
+  assert.equal(value('pname'), '多 Agent 前端迁移系统')
+  assert.equal(value('prole'), '前端负责人')
+  assert.equal(value('award'), '全国大学生竞赛一等奖')
+})
+
 test('fills 招聘来源 itself, not only its longer spellings', () => {
   const plan = buildFillPlan({ strategy: { recruitmentSource: 'BOSS直聘' } }, [
     { id: 'source', label: '招聘来源', controlType: 'input', inputType: 'text' },
