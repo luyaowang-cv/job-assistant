@@ -41,17 +41,19 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 1. 本机提交并推送：
 
    ```bash
-   git add <具体文件> && git commit -m "feat/fix: ..." && git push origin codex/unified-career-agent
+   git add <具体文件> && git commit -m "feat/fix: ..." && git push origin main
    ```
 
    > 不要用 `git add -A` / `git add .`。仓库根目录曾出现过 5MB 的数据库导出 `deploy-data.sql`，
    > 一次全量 add 就会把它推进公开仓库。`.gitignore` 里已补 `*-data.sql` 兜底，但显式列文件更稳。
 
-   > **部署分支是 `codex/unified-career-agent`，不是 `main`。** `.github/workflows/deploy.yml` 里写的是
-   > `branches: - codex/unified-career-agent`，推到 `main` **不会触发 CI、也没有镜像**。
-   > 服务器上的 clone 也跟着这个分支走（`git branch --show-current` 应为 `codex/unified-career-agent`）。
-   > 这是迁移时踩到的坑：`git clone` 默认落在 `main`，结果拿到的 `docker-compose.prod.yml`
-   > 少了内存上限那次修复（`NITRO_CLUSTER_WORKERS` / `mem_limit`），而 `main` 落后部署分支 19 个提交。
+   > **部署分支是 `main`**（2026-10-14 起）：`.github/workflows/deploy.yml` 触发的是
+   > `branches: - main`，服务器上的 clone 也在这个分支上（`git branch --show-current` 应为 `main`）。
+   >
+   > 在那之前主线是 `codex/unified-career-agent`，`main` 只是个偶尔合并一次的镜像，于是它长期落后
+   > ——迁移时就踩过：新机 `git clone` 默认落在 `main`，拿到的 `docker-compose.prod.yml` 少了内存
+   > 上限那次修复（`NITRO_CLUSTER_WORKERS` / `mem_limit`）。现在 `main` 是唯一的主线，
+   > 那个分支已冻结、只当备份留着，**别再往它推**（推它不会触发 CI）。
 
 2. GitHub Actions 自动构建镜像（去 Actions 页等绿勾，或调 API 查）：
    `https://api.github.com/repos/luyaowang-cv/job-assistant/actions/runs?per_page=1`
@@ -60,7 +62,7 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 
    ```bash
    cd ~/job-assistant
-   git branch --show-current   # 必须是 codex/unified-career-agent
+   git branch --show-current   # 必须是 main
    git pull
    docker compose -f docker-compose.prod.yml pull
    docker compose -f docker-compose.prod.yml up -d
@@ -232,14 +234,14 @@ curl -fsSL https://get.docker.com | sh && docker --version && docker compose ver
 
 ```bash
 git clone https://github.com/luyaowang-cv/job-assistant.git ~/job-assistant
-cd ~/job-assistant && git fetch origin && git checkout codex/unified-career-agent
-git branch --show-current          # 必须是 codex/unified-career-agent，不是 main
+cd ~/job-assistant && git branch --show-current   # 必须是 main
 ```
 
-> **`git clone` 默认落在 `main`，而部署在 `codex/unified-career-agent`。** 这个坑这次真的踩了：
-> `main` 落后部署分支 19 个提交，于是新机拿到的 `docker-compose.prod.yml` 里没有内存上限那次修复
+> 现在 `git clone` 的默认分支就是部署分支（`main`），所以不再需要额外 checkout 一步。
+> 2026-10-14 之前部署在 `codex/unified-career-agent` 上，那时这条默认值反而是陷阱：
+> 新机拿到的是落后的 `main`，`docker-compose.prod.yml` 里少了内存上限那次修复
 > （`NITRO_CLUSTER_WORKERS` / `mem_limit`），容器在没有上限的情况下跑起来。
-> **clone 完第一件事就是 `git branch --show-current`。**
+> **clone 完第一件事仍然是 `git branch --show-current`** —— 它现在应该回答 `main`。
 
 ```bash
 # 密钥：从旧机直接拷，不要手抄（手抄会漏掉或抄错 base64 里的字符）
@@ -390,7 +392,7 @@ free -h
 | 症状 | 真因 |
 |---|---|
 | `ssh root@<IP>` 一直 `Permission denied` | 卖家给的是 `IP:端口`，端口不是 22，且走 NAT 转发 |
-| 新机起来后内存没有上限 | `git clone` 默认到 `main`，部署在 `codex/unified-career-agent` |
+| 新机起来后内存没有上限 | 当时 `git clone` 默认到 `main`，而部署在 `codex/unified-career-agent`（2026-10-14 把主线切到 `main` 之后这条陷阱消失） |
 | 备份脚本手动跑成功、cron 跑失败 | `git commit` 报 `Author identity unknown`；cron 不继承终端环境，身份要写进备份仓库自己的 `.git/config` |
 | 校验通过却报失败（退出码 141） | `grep -q` 命中即退，`zcat` 被 SIGPIPE，`pipefail` 把它算成管道失败 |
 | "每天都在正常备份"其实没有可用备份 | 旧脚本缺 `set -euo pipefail`，`pg_dump` 失败时用空文件覆盖了好备份 |

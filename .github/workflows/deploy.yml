@@ -3,7 +3,7 @@ name: build-and-push-web
 on:
   push:
     branches:
-      - codex/unified-career-agent
+      - main
 
 env:
   REGISTRY: ghcr.io
