@@ -869,3 +869,42 @@ test('fills 招聘来源 itself, not only its longer spellings', () => {
   assert.equal(plan.entries[0].value, 'BOSS直聘')
 })
 
+test('fills a 科研经历 block from a research card, author position included', () => {
+  const localProfile = {
+    references: [
+      { type: 'RESEARCH', title: 'DA-PhysDiff：扩散模型驱动的物理仿真', facts: { organization: '计算机学院', role: '第一作者', startDate: '2024-09', endDate: '2025-06' }, content: '提出了一种物理约束的扩散模型，发表于 AAAI 2025。' },
+    ],
+  }
+  const plan = buildFillPlan(localProfile, [
+    { id: 'name', label: '论文名称', controlType: 'input', inputType: 'text' },
+    { id: 'author', label: '作者顺位', controlType: 'input', inputType: 'text' },
+    { id: 'start', label: '开始时间', context: '相邻字段：论文名称、作者顺位', controlType: 'input', inputType: 'text' },
+    { id: 'desc', label: '科研描述', controlType: 'textarea', inputType: 'textarea' },
+  ])
+  const value = id => plan.entries.find(entry => entry.fieldId === id)?.value
+
+  assert.equal(value('name'), 'DA-PhysDiff：扩散模型驱动的物理仿真')
+  assert.equal(value('author'), '第一作者')
+  assert.equal(value('start'), '2024-09')
+  assert.equal(value('desc'), '提出了一种物理约束的扩散模型，发表于 AAAI 2025。')
+})
+
+test('puts research records behind projects when a form only has 项目经历 blocks', () => {
+  // 校招表常常只有一栏「项目经历」。科研记录拼在 projects 后面，所以项目不够时顶上，
+  // 但永远不会把科研挤到项目前面。
+  const localProfile = {
+    projects: [],
+    references: [
+      { type: 'PROJECT', title: '多 Agent 前端迁移系统', facts: {}, content: '用 LangGraph 编排多 Agent。' },
+      { type: 'RESEARCH', title: 'DA-PhysDiff', facts: {}, content: '物理约束的扩散模型。' },
+    ],
+  }
+  const plan = buildFillPlan(localProfile, [
+    { id: 'first', label: '项目名称', controlType: 'input', inputType: 'text' },
+    { id: 'second', label: '项目名称', controlType: 'input', inputType: 'text' },
+  ])
+  const value = id => plan.entries.find(entry => entry.fieldId === id)?.value
+
+  assert.equal(value('first'), '多 Agent 前端迁移系统')
+  assert.equal(value('second'), 'DA-PhysDiff')
+})

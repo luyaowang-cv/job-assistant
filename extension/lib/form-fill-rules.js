@@ -6,7 +6,7 @@
  * retained nor appear in the report.
  *
  * Matching is scored rather than all-or-nothing. Every candidate field is run
- * against a rule table covering nine profile sections, and the best rule above
+ * against a rule table covering ten profile sections, and the best rule above
  * SCORE_THRESHOLD wins. Two mechanisms keep that broad coverage from filling
  * the wrong box:
  *
@@ -79,6 +79,7 @@ const OPTION_ALIASES = [
 const SECTION_ALIASES = {
   education: ['教育', '学历', '学校', '院校', '专业', '学位', '毕业', 'education', 'school', 'university', 'academic'],
   work: ['工作经历', '工作经验', '实习经历', '实习经验', '任职', '公司', '单位', 'work', 'internship', 'employment'],
+  research: ['科研经历', '科研项目', '研究经历', '学术成果', '论文', '课题', 'research', 'paper', 'thesis', 'publication'],
   project: ['项目经历', '项目经验', '项目名称', '项目描述', 'project'],
   campus: ['校园经历', '社团', '学生工作', '活动经历', 'campus', 'activity'],
   awards: ['获奖', '奖项', '荣誉', '竞赛', 'award', 'honor', 'prize'],
@@ -90,6 +91,9 @@ const SECTION_ALIASES = {
 /** Section hints tested in order; the first hit wins. */
 const SECTION_HINTS = [
   ['awards', /获奖名称|奖项名称|荣誉名称|获奖时间|竞赛名称|awardname|awardtitle/i],
+  // 科研排在项目前面：一块标题写「科研项目经历」时算科研，里面的「项目名称」由 project
+  // 规则跨段填上（它的记录池里也含科研，见 buildContext 的 projects）。
+  ['research', /科研经历|科研项目|科研名称|科研成果|研究经历|研究成果|研究项目|论文名称|论文题目|论文标题|课题名称|学术成果|researchname|papername|papertitle/i],
   ['project', /项目经历|项目名称|项目角色|项目链接|项目描述|项目内容|projectexperience|projectname|projectrole|projectdescription/i],
   ['education', /学校名称|毕业院校|入学时间|毕业时间|schoolname|educationlevel|universityname/i],
   ['work', /公司名称|工作经历|实习经历|任职经历|companyname|workexperience|employment/i],
@@ -104,12 +108,13 @@ const BASIC_OWN_WORDS = /出生日期|出生年月|生日|birthdate|dateofbirth|
 /** Own wording that means “free text”: never lock these to a section. */
 const FREE_TEXT_OWN_WORDS = /自我描述|自我评价|个人总结|个人优势|个人简介|个人概述|自我介绍|selfdescription|selfsummary|personalsummary|profilesummary/i
 
-const REPEATABLE_SECTIONS = ['education', 'work', 'project', 'campus', 'awards', 'certificates', 'languages']
+const REPEATABLE_SECTIONS = ['education', 'work', 'project', 'research', 'campus', 'awards', 'certificates', 'languages']
 
 const ANCHOR_KEYS = {
   education: 'education.school',
   work: 'work.company',
   project: 'project.name',
+  research: 'research.name',
   campus: 'campus.name',
   awards: 'awards.name',
   certificates: 'certificates.name',
@@ -194,6 +199,16 @@ const RULES = [
   { key: 'project.endDate', section: 'project', collection: 'projects', aliases: ['项目结束', '项目结束时间', '项目结束日期', '项目截止时间', '结束时间', 'enddate', 'to'], date: true, endOfMonth: true, read: (c, i) => c.projects[i]?.endDate },
   { key: 'project.description', section: 'project', collection: 'projects', aliases: ['项目描述', '项目内容', '项目职责', '项目中职责', '项目成果', '项目详情', '项目介绍', '项目经历描述', '负责内容', '描述', 'projectdescription', 'projectdetails', 'contribution'], multiline: true, read: (c, i) => c.projects[i]?.description },
 
+  // --------------------------------------------------------------- research
+  // 科研经历在校招表里常常是独立一块（论文/课题），也常被并进「项目经历」。
+  // 这里只认真正属于科研的说法，表里写「项目名称」的仍交给 project 规则；
+  // 而科研记录也拼进了 projects 集合（见 buildContext），所以并成一栏时照样填得上。
+  // role 是「作者顺位 / 研究角色」——素材库给 RESEARCH 卡的就是这个标签。
+  { key: 'research.name', section: 'research', collection: 'research', aliases: ['论文名称', '论文题目', '论文标题', '论文', '科研项目名称', '科研经历名称', '科研名称', '研究项目名称', '课题名称', '课题', '毕业论文', '研究成果名称', '学术成果名称', 'researchname', 'papername', 'papertitle', 'thesistitle', 'researchproject'], read: (c, i) => c.research[i]?.name },
+  { key: 'research.role', section: 'research', collection: 'research', aliases: ['作者顺位', '作者排名', '作者排序', '作者身份', '第几作者', '论文作者', '科研角色', '研究角色', '论文排名', 'authorrank', 'authororder', 'authorship'], read: (c, i) => c.research[i]?.role },
+  { key: 'research.startDate', section: 'research', collection: 'research', aliases: ['科研开始时间', '课题开始时间', '论文开始时间', '科研起始时间', '研究开始时间', '开始时间', 'startdate'], date: true, read: (c, i) => c.research[i]?.startDate },
+  { key: 'research.endDate', section: 'research', collection: 'research', aliases: ['科研结束时间', '课题结束时间', '论文结束时间', '科研截止时间', '研究结束时间', '结束时间', 'enddate'], date: true, endOfMonth: true, read: (c, i) => c.research[i]?.endDate },
+  { key: 'research.description', section: 'research', collection: 'research', aliases: ['科研描述', '科研内容', '论文摘要', '论文简介', '课题描述', '研究内容', '科研经历描述', '研究成果', '论文内容', '描述', 'researchdescription', 'paperabstract', 'abstract'], multiline: true, read: (c, i) => c.research[i]?.description },
 
   // ------------------------------------------------------------------ skills
   { key: 'skills.list', section: 'skills', aliases: ['专业技能', '个人技能', '技能特长', '核心技能', '专业能力', '掌握技能', '技能', 'skills', 'technicalskills'], read: c => c.skills },
@@ -424,7 +439,10 @@ function buildContext(profile) {
     // reads top-down from the most recent record.
     educations: array(root.educations).map(record).sort((left, right) => text(right.endDate).localeCompare(text(left.endDate))),
     works: explicitWork.length ? explicitWork : fromReference('INTERNSHIP'),
-    projects: explicitProjects.length ? explicitProjects : fromReference('PROJECT'),
+    // 科研记录同时挂在 research 和 projects 下面：表单把「科研经历」单列一块时走 research，
+    // 并进「项目经历」时走 projects（项目记录排在前面，不够了才轮到科研）。
+    research: fromReference('RESEARCH'),
+    projects: (explicitProjects.length ? explicitProjects : fromReference('PROJECT')).concat(fromReference('RESEARCH')),
     campus: named(root.campusExperiences).concat(fromReference('CAMPUS')),
     awards: named(root.awards).concat(fromReference('AWARD')),
     certificates: named(root.certificates).concat(fromReference('CERTIFICATE')),
@@ -885,7 +903,7 @@ function needsManual(field, category, reason, target) {
 /**
  * Builds a report and no-DOM fill plan from safe field metadata.
  *
- * The plan covers nine profile sections so that most of a form is answered from
+ * The plan covers ten profile sections so that most of a form is answered from
  * saved data before the AI fallback is asked for anything.
  *
  * @param {object} profile
@@ -1060,6 +1078,7 @@ const ONGOING_END_DATE = /^(?:至今|现在|目前|直至|至今为止|在职|�
 const BLOCK_ANCHORS = {
   work: /单位名称|公司名称|实习单位|任职单位/,
   project: /项目名称/,
+  research: /论文名称|论文题目|论文标题|科研项目名称|课题名称/,
   education: /学校名称|毕业院校/,
   campus: /社团名称|组织名称/,
   awards: /奖项名称|获奖名称/,
