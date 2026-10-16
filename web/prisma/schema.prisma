@@ -7,10 +7,14 @@ datasource db {
   provider = "postgresql"
 }
 
+// 投递状态机。顺序 = 招聘流程顺序，和 web/shared/application-status.ts 必须一致
+// （那边是界面/校验用的唯一来源，这里是数据库的）。
+// 2026-10-16 重做：删掉 PREPARING（数据已归到 SAVED），新增 ASSESSMENT / AI_INTERVIEW。
 enum ApplicationStatus {
   SAVED
-  PREPARING
   APPLIED
+  ASSESSMENT
+  AI_INTERVIEW
   WRITTEN_TEST
   INTERVIEWING
   OFFERED
@@ -32,6 +36,12 @@ enum JobSource {
   NIUKE
   MANUAL
   OTHER
+}
+
+// 用户对某个岗位的个人判断。岗位本身是同步来的共享数据，个人判断必须按用户存，
+// 所以不和 Job.offlineAt（数据源事实）放在一张表上。
+enum JobDecisionStatus {
+  NOT_SUITABLE
 }
 
 enum ApplicationEventType {
@@ -88,6 +98,8 @@ enum DocumentMutationType {
   INTERVIEW_RECORD_REVIEW_SAVED
   JOB_MANUALLY_OFFLINED
   JOB_LIBRARY_SYNCED
+  JOB_MARKED_NOT_SUITABLE
+  JOB_DECISION_CLEARED
 }
 
 enum FeishuJobSyncSourceType {
@@ -119,6 +131,7 @@ model User {
   updatedAt                DateTime                  @updatedAt
   applications             Application[]
   jobPreference            JobPreference?
+  jobDecisions             JobDecision[]
   agentRuns                AgentRun[]
   materials                ApplicationMaterial[]
   resume                   Resume?
@@ -248,17 +261,36 @@ model Job {
   sourceUpdatedAt  DateTime?
   syncedAt         DateTime?
   offlineAt        DateTime?
+  // 已弃用：以前「下线」写在这里，但它是全局的，A 标了下线 B 也看不见。
+  // 个人判断已迁到 JobDecision，此字段只为回滚保留，新代码不要再读写。
   manualOfflineAt  DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   company          Company       @relation(fields: [companyId], references: [id], onDelete: Restrict)
   applications     Application[]
+  decisions        JobDecision[]
 
   @@index([companyId])
   @@index([source])
   @@index([sourceDocId])
   @@index([offlineAt])
   @@index([manualOfflineAt])
+}
+
+// 岗位库里的「不合适」标记，按用户存。
+// 自投递走的仍然是 Application（它天生带 userId），这张表只承载否定判断。
+model JobDecision {
+  id        String            @id @default(cuid())
+  userId    String
+  jobId     String
+  status    JobDecisionStatus
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  user      User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  job       Job               @relation(fields: [jobId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, jobId])
+  @@index([userId, status])
 }
 
 model Application {

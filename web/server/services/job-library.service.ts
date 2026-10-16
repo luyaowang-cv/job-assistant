@@ -1,9 +1,10 @@
-import { ApplicationChannel, ApplicationEventType, ApplicationStatus, DocumentMutationType, FeishuJobSyncSourceType, JobSource, type Prisma } from '../generated/prisma/client'
+import { ApplicationChannel, ApplicationEventType, ApplicationStatus, DocumentMutationType, FeishuJobSyncSourceType, JobDecisionStatus, JobSource, type Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import { extractCompanyNameAndUpdatedAt, importedJobRowSchema, type FeishuImportInput, type ImportedJobRow, type ListJobsQuery } from '../schemas/job-library'
 
 import { getCurrentUser, getOwnerUser } from './current-user'
 import { getFeishuUserAccessToken } from './feishu-oauth.service'
+import { buildApplicationFromJobSeed } from './job-library-decision'
 import { FEISHU_AUTO_SYNC_TIME, FEISHU_AUTO_SYNC_TIME_ZONE, buildBitableRecordSearchBody, isFeishuAutoSyncEnabled, nextFeishuAutoSyncAt, shouldReconcileOffline, shouldRunMissedFeishuAutoSync, type JobLibrarySyncMode } from './job-library-sync'
 
 const fieldAliases = {
@@ -518,8 +519,11 @@ export async function clearJobs() {
 
 export async function listJobs(query: ListJobsQuery) {
   const user = await getCurrentUser()
+  // 「不合适」是个人判断，过滤条件必须带 userId；offlineAt 是数据源自己下线的事实，
+  // 仍然是全局的。两者合起来才是"当前用户默认看不到的岗位"。
+  const visibleToCurrentUser: Prisma.JobWhereInput = { offlineAt: null, decisions: { none: { userId: user.id } } }
   const where: Prisma.JobWhereInput = {
-    ...(query.includeOffline ? {} : { offlineAt: null, manualOfflineAt: null }),
+    ...(query.includeHidden ? {} : visibleToCurrentUser),
     ...(query.location ? { location: { contains: query.location, mode: 'insensitive' } } : {}),
     ...(query.recruitmentType ? { recruitmentType: { contains: query.recruitmentType, mode: 'insensitive' } } : {}),
     ...(query.hasWrittenTest === undefined ? {} : { hasWrittenTest: query.hasWrittenTest }),
@@ -527,9 +531,30 @@ export async function listJobs(query: ListJobsQuery) {
     ...(query.search ? { OR: [{ title: { contains: query.search, mode: 'insensitive' } }, { company: { name: { contains: query.search, mode: 'insensitive' } } }] } : {}),
   }
   const [items, total, filterRows] = await prisma.$transaction([
-    prisma.job.findMany({ where, include: { company: true, applications: { where: { userId: user.id, deletedAt: null }, select: { id: true } } }, orderBy: [{ sourceUpdatedAt: { sort: query.updatedSort, nulls: 'last' } }, { updatedAt: query.updatedSort }], skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
+    prisma.job.findMany({
+      where,
+      include: {
+        company: true,
+        applications: { where: { userId: user.id, deletedAt: null }, select: { id: true } },
+        decisions: { where: { userId: user.id }, select: { status: true, createdAt: true } },
+      },
+      // 排序必须是「全序」，否则并列行的顺序由 PostgreSQL 自行决定，两次同样的查询能给出不同结果
+      // （表现就是：隐藏一条之后，顶上来的是一条随机岗位）。这里三级递进：
+      // ① 界面上那列「更新时间」，就是飞书表里的日期，精度只到天，同一天会大批并列；
+      // ② 并列时看这条什么时候进的库——比 updatedAt 可靠，updatedAt 每次同步都会被整批重写成同一个值；
+      // ③ createdAt 在同一个 createMany 批次里也是同一个事务时间戳，所以最后用唯一键 id 兜底，
+      //    有它在就永远不存在并列，顺序完全确定。
+      orderBy: [
+        { sourceUpdatedAt: { sort: query.updatedSort, nulls: 'last' } },
+        { createdAt: query.updatedSort },
+        { id: 'asc' },
+      ],
+      skip: (query.page - 1) * query.pageSize,
+      take: query.pageSize,
+    }),
     prisma.job.count({ where }),
-    prisma.job.findMany({ where: { offlineAt: null, manualOfflineAt: null }, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
+    // 筛选下拉框的候选值始终按"对当前用户可见的岗位"统计，隐藏的岗位不该贡献选项。
+    prisma.job.findMany({ where: visibleToCurrentUser, select: { location: true, recruitmentType: true, company: { select: { industry: true, companyType: true } } } }),
   ])
   const values = (items: Array<string | null>) => [...new Set(items.filter((value): value is string => Boolean(value)))].sort()
   const splitTokens = (value: string) => value.split(/[,、，;；/]+/).map(item => item.trim()).filter(Boolean)
@@ -544,47 +569,78 @@ export async function listJobs(query: ListJobsQuery) {
     }
     return [...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))
   }
-  return { items: items.map(({ applications, ...job }) => ({ ...job, applicationId: applications[0]?.id ?? null })), page: query.page, pageSize: query.pageSize, total, filters: { locations: uniqueTokens(filterRows.map(row => row.location)), industries: uniqueTokens(filterRows.map(row => row.company.industry), true), companyTypes: values(filterRows.map(row => row.company.companyType)).filter(value => value !== '-'), recruitmentTypes: uniqueTokens(filterRows.map(row => row.recruitmentType)) } }
+  return { items: items.map(({ applications, decisions, ...job }) => ({ ...job, applicationId: applications[0]?.id ?? null, decision: decisions[0] ?? null })), page: query.page, pageSize: query.pageSize, total, filters: { locations: uniqueTokens(filterRows.map(row => row.location)), industries: uniqueTokens(filterRows.map(row => row.company.industry), true), companyTypes: values(filterRows.map(row => row.company.companyType)).filter(value => value !== '-'), recruitmentTypes: uniqueTokens(filterRows.map(row => row.recruitmentType)) } }
 }
 
-export async function manuallyOfflineJob(jobId: string) {
+// 标记「不合适」。写的是 JobDecision（按用户），不是 Job 上的字段——
+// 岗位是同步来的共享数据，个人判断不能影响别人登录看到的内容。
+export async function markJobNotSuitable(jobId: string) {
   const user = await getCurrentUser()
-  const current = await prisma.job.findUnique({ where: { id: jobId }, select: { id: true, offlineAt: true, manualOfflineAt: true } })
+  const current = await prisma.job.findUnique({ where: { id: jobId }, select: { id: true } })
   if (!current) return null
-  if (current.manualOfflineAt) return current
 
   return prisma.$transaction(async (transaction) => {
-    const manualOfflineAt = new Date()
-    const job = await transaction.job.update({
-      where: { id: jobId },
-      data: { manualOfflineAt },
-      select: { id: true, offlineAt: true, manualOfflineAt: true },
+    const decision = await transaction.jobDecision.upsert({
+      where: { userId_jobId: { userId: user.id, jobId } },
+      create: { userId: user.id, jobId, status: JobDecisionStatus.NOT_SUITABLE },
+      update: { status: JobDecisionStatus.NOT_SUITABLE },
+      select: { id: true, jobId: true, status: true, createdAt: true },
     })
     await transaction.documentMutationEvent.create({
       data: {
         userId: user.id,
-        type: DocumentMutationType.JOB_MANUALLY_OFFLINED,
+        type: DocumentMutationType.JOB_MARKED_NOT_SUITABLE,
         entityType: 'Job',
-        entityId: job.id,
+        entityId: jobId,
         source: 'USER',
-        payload: { manualOfflineAt: manualOfflineAt.toISOString() },
+        payload: { status: JobDecisionStatus.NOT_SUITABLE },
       },
     })
-    return job
+    return decision
   })
 }
 
-export async function createApplicationFromJob(jobId: string) {
+// 撤销「不合适」，岗位重新回到默认列表里。没标记过时是幂等的，直接返回 null。
+export async function clearJobDecision(jobId: string) {
+  const user = await getCurrentUser()
+  const existing = await prisma.jobDecision.findUnique({ where: { userId_jobId: { userId: user.id, jobId } }, select: { id: true } })
+  if (!existing) return null
+
+  return prisma.$transaction(async (transaction) => {
+    await transaction.jobDecision.delete({ where: { id: existing.id } })
+    await transaction.documentMutationEvent.create({
+      data: {
+        userId: user.id,
+        type: DocumentMutationType.JOB_DECISION_CLEARED,
+        entityType: 'Job',
+        entityId: jobId,
+        source: 'USER',
+        payload: { previousDecisionId: existing.id },
+      },
+    })
+    return { jobId }
+  })
+}
+
+export async function createApplicationFromJob(jobId: string, status: 'SAVED' | 'APPLIED' = 'APPLIED') {
   const user = await getCurrentUser()
   const job = await prisma.job.findUnique({ where: { id: jobId } })
   if (!job) return null
   const existing = await prisma.application.findUnique({ where: { userId_jobId: { userId: user.id, jobId } }, include: { job: { include: { company: true } } } })
   if (existing) return { application: existing, created: false }
 
+  const applicationStatus = status === 'APPLIED' ? ApplicationStatus.APPLIED : ApplicationStatus.SAVED
+  // 已投递意味着"这不是不合适的岗位"，顺手清掉可能存在的标记，避免两个状态互相打架。
+  const seed = buildApplicationFromJobSeed(status)
+
   try {
     const application = await prisma.$transaction(async (transaction) => {
-      const created = await transaction.application.create({ data: { userId: user.id, jobId, status: ApplicationStatus.SAVED, channel: ApplicationChannel.OTHER }, include: { job: { include: { company: true } } } })
-      await transaction.applicationEvent.create({ data: { applicationId: created.id, type: ApplicationEventType.CREATE, payload: { source: 'JOB_LIBRARY', status: ApplicationStatus.SAVED, channel: ApplicationChannel.OTHER } } })
+      const created = await transaction.application.create({
+        data: { userId: user.id, jobId, status: applicationStatus, channel: ApplicationChannel.OTHER, appliedAt: seed.appliedAt },
+        include: { job: { include: { company: true } } },
+      })
+      await transaction.applicationEvent.create({ data: { applicationId: created.id, type: ApplicationEventType.CREATE, payload: { source: 'JOB_LIBRARY', status: applicationStatus, channel: ApplicationChannel.OTHER } } })
+      await transaction.jobDecision.deleteMany({ where: { userId: user.id, jobId } })
       return created
     })
     return { application, created: true }

@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-type ApplicationStatus = 'SAVED' | 'PREPARING' | 'APPLIED' | 'WRITTEN_TEST' | 'INTERVIEWING' | 'OFFERED' | 'REJECTED' | 'WITHDRAWN'
+// 状态清单 / 文案 / 配色统一来自 #shared/application-status.ts（客户端和服务端共用一份，
+// 别在这里再抄一遍）。起本地别名只是为了让下面模板里的调用点保持原样。
+import {
+  APPLICATION_STATUS_OPTIONS as statusOptions,
+  applicationStatusLabel as statusLabel,
+  applicationStatusTone as statusTone,
+  type ApplicationStatus,
+} from '#shared/application-status'
+
 type ApplicationChannel = 'OFFICIAL_SITE' | 'BOSS' | 'NIUKE' | 'REFERRAL' | 'OTHER'
 
-interface Company { name: string, description: string | null }
+interface Company { name: string, industry: string | null, companyType: string | null, description: string | null }
 interface Job {
   title: string
   department: string | null
@@ -32,12 +40,6 @@ interface ApplicationEvent { id: string, type: 'CREATE' | 'UPDATE' | 'STATUS_CHA
 interface ApplicationDetail extends ApplicationItem { events: ApplicationEvent[] }
 interface ApplicationListData { items: ApplicationItem[], page: number, pageSize: number, total: number }
 
-const statusOptions: Array<{ value: ApplicationStatus, label: string }> = [
-  { value: 'SAVED', label: '收藏' }, { value: 'PREPARING', label: '准备中' },
-  { value: 'APPLIED', label: '已投递' }, { value: 'WRITTEN_TEST', label: '笔试中' },
-  { value: 'INTERVIEWING', label: '面试中' }, { value: 'OFFERED', label: 'Offer' },
-  { value: 'REJECTED', label: '挂了' }, { value: 'WITHDRAWN', label: '放弃' },
-]
 const channelOptions: Array<{ value: ApplicationChannel, label: string }> = [
   { value: 'BOSS', label: 'BOSS 直聘' }, { value: 'OFFICIAL_SITE', label: '官网' },
   { value: 'NIUKE', label: '牛客' }, { value: 'REFERRAL', label: '内推' }, { value: 'OTHER', label: '其他' },
@@ -72,14 +74,9 @@ const emptyForm = () => ({
 })
 const form = reactive(emptyForm())
 const originalStatus = ref<ApplicationStatus>('SAVED')
+// 列表里正在改阶段的那一行，用来在请求期间禁用它的下拉框
+const updatingStatusId = ref<string | null>(null)
 
-function statusLabel(status: ApplicationStatus) { return statusOptions.find(option => option.value === status)?.label ?? status }
-function statusTone(status: ApplicationStatus) {
-  return ({
-    SAVED: 'neutral', PREPARING: 'amber', APPLIED: 'blue', WRITTEN_TEST: 'violet',
-    INTERVIEWING: 'green', OFFERED: 'success', REJECTED: 'danger', WITHDRAWN: 'neutral',
-  } as Record<ApplicationStatus, string>)[status]
-}
 function eventLabel(type: ApplicationEvent['type']) { return ({ CREATE: '创建投递', UPDATE: '编辑信息', STATUS_CHANGED: '状态变更', DELETE: '删除投递' })[type] }
 function dateText(value: string | null) {
   if (!value) return '—'
@@ -259,6 +256,29 @@ function dropOnStatus(status: ApplicationStatus) {
   if (application) void moveApplication(application, status)
 }
 
+// 列表里直接改「当前阶段」。刻意不用 v-model 绑 row.status —— 那样在请求发出前数据就被改掉了，
+// 回滚还得自己记旧值；这里用 :model-value 单向绑定，改不改都由这个函数说了算。
+// 药丸先乐观变化，失败再退回原状态。
+//
+// 改完不重新拉列表、也不本地重排：排序键是 updatedAt，这条其实应该往上走，
+// 但她这会儿正在这一行上操作，让它原地不动比让它跳走更顺手；下次翻页/筛选时顺序会自然对齐。
+async function changeStatusInline(row: ApplicationItem, next: ApplicationStatus) {
+  const previous = row.status
+  if (previous === next) return
+  row.status = next
+  updatingStatusId.value = row.id
+  try {
+    const response = await $fetch<{ data: ApplicationItem }>(`/api/v1/applications/${row.id}/status`, { method: 'PATCH', body: { status: next, source: 'LIST' } })
+    Object.assign(row, response.data)
+    ElMessage.success(`已改为「${statusLabel(next)}」`)
+  }
+  catch {
+    row.status = previous
+    ElMessage.error('状态更新失败，请稍后重试。')
+  }
+  finally { updatingStatusId.value = null }
+}
+
 onMounted(() => { void loadResumeVersions(); void fetchApplications() })
 </script>
 
@@ -282,16 +302,16 @@ onMounted(() => { void loadResumeVersions(); void fetchApplications() })
         <el-button :class="{ 'is-active': viewMode === 'kanban' }" @click="setViewMode('kanban')">看板</el-button></el-button-group>
     </div>
 
-    <div v-if="viewMode === 'list'" class="workbench-table-shell workbench-table-shell--transparent"><el-table v-loading="loading" :data="applications" empty-text="还没有投递记录，先创建第一条吧。" class="w-full" :default-sort="{ prop: 'updatedAt', order: 'descending' }" @row-click="openDetail" @sort-change="sortByUpdatedAt">
+    <div v-if="viewMode === 'list'" class="workbench-table-shell workbench-table-shell--transparent"><el-table v-loading="loading" :data="applications" row-key="id" empty-text="还没有投递记录，先创建第一条吧。" class="w-full" :default-sort="{ prop: 'updatedAt', order: 'descending' }" @row-click="openDetail" @sort-change="sortByUpdatedAt">
       <el-table-column label="更新时间" prop="updatedAt" sortable="custom" :sort-orders="['descending', 'ascending']" width="132"><template #default="{ row }">{{ dateText(row.updatedAt) }}</template></el-table-column>
       <el-table-column label="公司 / 岗位" min-width="250"><template #default="{ row }"><div class="application-cell-role"><strong>{{ row.job.company.name }}</strong><span>{{ row.job.title }}</span></div></template></el-table-column>
-      <el-table-column label="当前阶段" width="140"><template #default="{ row }"><span :class="['application-status', `application-status--${statusTone(row.status)}`]">{{ statusLabel(row.status) }}</span></template></el-table-column>
-      <el-table-column label="下一步" min-width="190"><template #default="{ row }"><span class="application-cell-next">{{ row.nextAction || '待安排' }}</span></template></el-table-column>
-      <el-table-column label="内推码" min-width="120"><template #default="{ row }"><span class="application-cell-referral">{{ row.job.referralCode || '—' }}</span></template></el-table-column>
+      <el-table-column label="当前阶段" width="148"><template #default="{ row }"><el-select :model-value="row.status" class="application-stage-select" placeholder="设置阶段" :disabled="updatingStatusId === row.id" @click.stop @change="changeStatusInline(row, $event)"><template #label><span :class="['application-status', `application-status--${statusTone(row.status)}`]">{{ statusLabel(row.status) }}</span></template><el-option v-for="option in statusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></template></el-table-column>
+      <el-table-column label="工作地点" min-width="110"><template #default="{ row }">{{ row.job.location || '—' }}</template></el-table-column>
+      <el-table-column label="行业 / 性质" min-width="150"><template #default="{ row }"><span>{{ row.job.company.industry || '未分类' }}</span><small class="workbench-cell-secondary">{{ row.job.company.companyType || '—' }}</small></template></el-table-column>
       <el-table-column label="操作" fixed="right" width="132"><template #default="{ row }"><div class="application-cell-actions"><el-button class="application-cell-action-button" size="small" type="danger" plain :loading="deletingId === row.id" @click.stop="removeApplicationItem(row)">删除</el-button><el-button v-if="row.job.url" class="application-cell-action-button" size="small" type="success" plain tag="a" :href="row.job.url" target="_blank" rel="noopener noreferrer" @click.stop>投递</el-button><el-button v-else class="application-cell-action-button" size="small" type="success" plain disabled>投递</el-button></div></template></el-table-column>
     </el-table></div>
 
-    <div v-else v-loading="loading" class="grid gap-3 overflow-x-auto pb-2" style="grid-template-columns: repeat(8, minmax(200px, 1fr))">
+    <div v-else v-loading="loading" class="grid gap-3 overflow-x-auto pb-2" :style="{ gridTemplateColumns: `repeat(${statusOptions.length}, minmax(200px, 1fr))` }">
       <section v-for="status in statusOptions" :key="status.value" class="min-h-96 rounded-[20px] border border-white/70 bg-white/48 p-3 shadow-[0_10px_24px_rgba(100,114,148,.06)] backdrop-blur-xl" @dragover.prevent @drop="dropOnStatus(status.value)">
         <div class="mb-3 flex items-center justify-between"><span :class="['application-status', `application-status--${statusTone(status.value)}`]">{{ status.label }}</span><el-tag size="small" effect="plain">{{ kanbanApplications.filter(item => item.status === status.value).length }}</el-tag></div>
         <div class="space-y-2"><article v-for="item in kanbanApplications.filter(application => application.status === status.value)" :key="item.id" draggable="true" class="application-kanban-card cursor-grab rounded-[14px] border border-white/80 bg-white/78 p-3 shadow-[0_7px_16px_rgba(100,114,148,.08)]" @click="openDetail(item)" @dragstart="draggedApplicationId = item.id" @dragend="draggedApplicationId = null"><strong class="block text-sm text-slate-800">{{ item.job.company.name }}</strong><p class="my-1 text-sm text-slate-600">{{ item.job.title }}</p><p class="m-0 text-xs text-slate-400">{{ item.job.location || '地点待定' }} · {{ salaryText(item) }}</p><p v-if="item.nextAction" class="mb-0 mt-2 border-t border-slate-100 pt-2 text-xs text-[#6385be]">下一步：{{ item.nextAction }}</p></article></div>

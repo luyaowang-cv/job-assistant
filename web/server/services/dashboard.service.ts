@@ -1,13 +1,14 @@
-import type { ApplicationStatus } from '../generated/prisma/client'
+import { APPLICATION_STATUS_LABELS, type ApplicationStatus } from '#shared/application-status'
 
 import { prisma } from '../lib/prisma'
 
 import { getCurrentUser } from './current-user'
 
 // "正在跟进"= 还没有走到终态。SAVED 不算：收藏还没投出去，不属于跟进中。
-const ACTIVE_STATUSES: ApplicationStatus[] = ['PREPARING', 'APPLIED', 'WRITTEN_TEST', 'INTERVIEWING']
-// 走到这一步就算"已经投出去了"。
-const APPLIED_OR_LATER: ApplicationStatus[] = ['APPLIED', 'WRITTEN_TEST', 'INTERVIEWING', 'OFFERED']
+const ACTIVE_STATUSES: ApplicationStatus[] = ['APPLIED', 'ASSESSMENT', 'AI_INTERVIEW', 'WRITTEN_TEST', 'INTERVIEWING']
+// 走到这一步就算"已经投出去了"。测评中/AI面试 都排在已投递之后，所以要算进来 ——
+// 直接在某个后期状态建单（没有 STATUS_CHANGED 事件）时，靠这个列表才不会漏算。
+const APPLIED_OR_LATER: ApplicationStatus[] = ['APPLIED', 'ASSESSMENT', 'AI_INTERVIEW', 'WRITTEN_TEST', 'INTERVIEWING', 'OFFERED']
 
 const DAY = 24 * 60 * 60 * 1000
 // 每日投递柱状图的天数。改成 7 会得到一张几乎全平的图——最近一周大概率没投递，
@@ -64,21 +65,18 @@ type SummaryOptions = {
   weekStart: Date
 }
 
-const STATUS_LABELS: Record<ApplicationStatus, string> = {
-  SAVED: '收藏', PREPARING: '准备中', APPLIED: '已投递', WRITTEN_TEST: '笔试中',
-  INTERVIEWING: '面试中', OFFERED: 'Offer', REJECTED: '已拒绝', WITHDRAWN: '已放弃',
-}
-
 // 今日重点的分档，顺序即优先级：先看有外部时间压力的，再看躺太久的。
 // 每一档都不依赖用户手填字段，全部由状态和事件时间推导。
-type FocusTier = 'interviewing' | 'writtenTest' | 'preparing' | 'stalledApplied' | 'staleSaved'
+// 顺序 = 招聘流程的倒序（越接近结果越靠前）。
+type FocusTier = 'interviewing' | 'writtenTest' | 'aiInterview' | 'assessment' | 'stalledApplied' | 'staleSaved'
 
-const TIER_ORDER: FocusTier[] = ['interviewing', 'writtenTest', 'preparing', 'stalledApplied', 'staleSaved']
+const TIER_ORDER: FocusTier[] = ['interviewing', 'writtenTest', 'aiInterview', 'assessment', 'stalledApplied', 'staleSaved']
 
 function focusTier(status: ApplicationStatus, daysIdle: number): FocusTier | null {
   if (status === 'INTERVIEWING') return 'interviewing'
   if (status === 'WRITTEN_TEST') return 'writtenTest'
-  if (status === 'PREPARING') return 'preparing'
+  if (status === 'AI_INTERVIEW') return 'aiInterview'
+  if (status === 'ASSESSMENT') return 'assessment'
   if (status === 'APPLIED' && daysIdle >= 14) return 'stalledApplied'
   if (status === 'SAVED' && daysIdle >= 30) return 'staleSaved'
   return null
@@ -90,7 +88,8 @@ function focusReason(tier: FocusTier, daysIdle: number): string {
   switch (tier) {
     case 'interviewing': return `已 ${daysIdle} 天没有更新面试进展`
     case 'writtenTest': return `已 ${daysIdle} 天没有更新笔试进展`
-    case 'preparing': return `准备了 ${daysIdle} 天还没投出去`
+    case 'aiInterview': return `已 ${daysIdle} 天没有更新 AI 面试进展`
+    case 'assessment': return `测评挂了 ${daysIdle} 天还没推进`
     case 'stalledApplied': return `已投递 ${daysIdle} 天没有动静`
     case 'staleSaved': return `收藏 ${daysIdle} 天还没投`
   }
@@ -149,7 +148,9 @@ export async function getDashboardSummary(options: SummaryOptions): Promise<Dash
   const [total, active, applied, writtenTest, interviewing, offered, appliedToday, appliedThisWeek, latestEvent, dailyEvents] = await Promise.all([
     prisma.application.count({ where: base }),
     prisma.application.count({ where: { ...base, status: { in: ACTIVE_STATUSES } } }),
-    reachedAtLeast(['APPLIED', 'WRITTEN_TEST', 'INTERVIEWING', 'OFFERED']),
+    reachedAtLeast(APPLIED_OR_LATER),
+    // 漏斗的后三级刻意保持原样：新增的「测评中」「AI面试」不单独占漏斗档，
+    // 它们算在「已投递」这一档里；AI面试排在她定义的流程里笔试之前，所以不算"到过笔试"。
     reachedAtLeast(['WRITTEN_TEST', 'INTERVIEWING', 'OFFERED']),
     reachedAtLeast(['INTERVIEWING', 'OFFERED']),
     reachedAtLeast(['OFFERED']),
@@ -225,7 +226,7 @@ export async function getDashboardSummary(options: SummaryOptions): Promise<Dash
         company: entry.item.job.company.name,
         title: entry.item.job.title,
         status: entry.item.status,
-        statusLabel: STATUS_LABELS[entry.item.status],
+        statusLabel: APPLICATION_STATUS_LABELS[entry.item.status],
         tier: entry.tier,
         reason: focusReason(entry.tier, entry.daysIdle),
         daysIdle: entry.daysIdle,

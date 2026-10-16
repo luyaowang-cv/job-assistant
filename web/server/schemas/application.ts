@@ -1,15 +1,10 @@
 import { z } from 'zod'
 
-export const applicationStatusSchema = z.enum([
-  'SAVED',
-  'PREPARING',
-  'APPLIED',
-  'WRITTEN_TEST',
-  'INTERVIEWING',
-  'OFFERED',
-  'REJECTED',
-  'WITHDRAWN',
-])
+import { APPLICATION_STATUSES } from '#shared/application-status'
+
+// 状态清单来自 #shared/application-status.ts，不在这里再抄一遍 ——
+// 文案、顺序、配色都在那边，这里只做校验。
+export const applicationStatusSchema = z.enum(APPLICATION_STATUSES)
 
 export const applicationChannelSchema = z.enum([
   'OFFICIAL_SITE',
@@ -68,7 +63,9 @@ export const createApplicationSchema = z.object({
 
 export const updateApplicationStatusSchema = z.object({
   status: applicationStatusSchema,
-  source: z.enum(['KANBAN', 'DETAIL', 'AGENT']).default('DETAIL'),
+  // LIST = 投递看板列表里直接改「当前阶段」那一列。
+  // 注意这个枚举不是穷举：面试记录那边（interview-record.service）绕过 schema 直接写 'INTERVIEW_RECORD'。
+  source: z.enum(['KANBAN', 'LIST', 'DETAIL', 'AGENT']).default('DETAIL'),
 })
 
 export const updateApplicationSchema = z.object({

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
 
-type ApplicationStatus ='SAVED' | 'PREPARING' | 'APPLIED' | 'WRITTEN_TEST' | 'INTERVIEWING' | 'OFFERED' | 'REJECTED' | 'WITHDRAWN'
+// 状态清单 / 文案 / 配色统一来自 #shared/application-status.ts（客户端和服务端共用一份）。
+import { APPLICATION_STATUS_OPTIONS as statusOptions, type ApplicationStatus } from '#shared/application-status'
+
 type ApplicationChannel = 'OFFICIAL_SITE' | 'BOSS' | 'NIUKE' | 'REFERRAL' | 'OTHER'
 
 // 详情接口（GET /api/v1/applications/:id）会带上完整的 job 与 company，
@@ -34,12 +36,6 @@ const selectedApplication = ref<ApplicationDetail | null>(null)
 const detailStatus = ref<ApplicationStatus>('SAVED')
 const savingStatus = ref(false)
 
-const statusOptions: Array<{ value: ApplicationStatus, label: string }> = [
-  { value: 'SAVED', label: '收藏' }, { value: 'PREPARING', label: '准备中' },
-  { value: 'APPLIED', label: '已投递' }, { value: 'WRITTEN_TEST', label: '笔试中' },
-  { value: 'INTERVIEWING', label: '面试中' }, { value: 'OFFERED', label: 'Offer' },
-  { value: 'REJECTED', label: '挂了' }, { value: 'WITHDRAWN', label: '放弃' },
-]
 const channelLabels: Record<ApplicationChannel, string> = {
   OFFICIAL_SITE: '官网', BOSS: 'BOSS 直聘', NIUKE: '牛客', REFERRAL: '内推', OTHER: '其他',
 }

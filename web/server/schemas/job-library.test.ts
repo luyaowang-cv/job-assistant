@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { cleanCompanyClassification, extractCompanyNameAndUpdatedAt, feishuImportSchema, importedJobRowSchema, listJobsQuerySchema, referralFeishuShareUrl } from './job-library'
+import { applicationFromJobBodySchema, cleanCompanyClassification, extractCompanyNameAndUpdatedAt, feishuImportSchema, importedJobRowSchema, listJobsQuerySchema, referralFeishuShareUrl } from './job-library'
 import { feishuOAuthCallbackSchema } from './feishu-oauth'
 
 test('accepts the configured public Feishu Bitable link and rejects other hosts', () => {
@@ -35,12 +35,18 @@ test('requires source company and job title while preserving job guidance fields
   assert.equal(importedJobRowSchema.safeParse({ ...valid, title: ' ' }).success, false)
 })
 
-test('defaults hidden offline jobs and valid pagination', () => {
+test('defaults hidden jobs (source-offlined or dismissed) and valid pagination', () => {
   const parsed = listJobsQuerySchema.parse({})
   assert.equal(parsed.page, 1)
   assert.equal(parsed.pageSize, 20)
-  assert.equal(parsed.includeOffline, false)
+  assert.equal(parsed.includeHidden, false)
   assert.equal(parsed.updatedSort, 'desc')
+})
+
+test('defaults the job-library conversion to a submitted application', () => {
+  assert.equal(applicationFromJobBodySchema.parse({}).status, 'APPLIED')
+  assert.equal(applicationFromJobBodySchema.parse({ status: 'SAVED' }).status, 'SAVED')
+  assert.equal(applicationFromJobBodySchema.safeParse({ status: 'REJECTED' }).success, false)
 })
 
 test('requires a bounded OAuth callback code and signed-state parameter', () => {

@@ -15,8 +15,14 @@ export const listJobsQuerySchema = z.object({
   companyType: text(80),
   recruitmentType: text(80),
   hasWrittenTest: z.enum(['true', 'false', 'null']).transform(value => value === 'null' ? null : value === 'true').optional(),
-  includeOffline: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  // 默认视图里不出现两类岗位：数据源里已下线的，以及当前用户标了「不合适」的。
+  includeHidden: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   updatedSort: z.enum(['asc', 'desc']).default('desc'),
+})
+
+// 岗位库点击「已投递」时直接建投递记录：状态就是已投递，投递日期默认取当天。
+export const applicationFromJobBodySchema = z.object({
+  status: z.enum(['SAVED', 'APPLIED']).default('APPLIED'),
 })
 
 export const feishuImportSchema = z.object({

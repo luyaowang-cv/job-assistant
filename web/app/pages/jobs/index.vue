@@ -2,6 +2,8 @@
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 
 interface Company { name: string, industry: string | null, companyType: string | null, description: string | null }
+// 当前用户对这个岗位的个人判断；岗位是共享数据，判断按用户存。
+interface JobDecision { status: 'NOT_SUITABLE', createdAt: string }
 interface JobItem {
   id: string
   title: string
@@ -16,9 +18,9 @@ interface JobItem {
   hasWrittenTest: boolean | null
   deadlineAt: string | null
   offlineAt: string | null
-  manualOfflineAt: string | null
   company: Company
   applicationId: string | null
+  decision: JobDecision | null
 }
 interface JobFilters { locations: string[], industries: string[], companyTypes: string[], recruitmentTypes: string[] }
 interface JobListData { items: JobItem[], page: number, pageSize: number, total: number, filters: JobFilters }
@@ -35,7 +37,7 @@ interface FeishuAutoSyncSource {
 interface FeishuAutoSync { enabled: boolean, timeZone: string, scheduledTime: string, nextScheduledAt: string, sources: FeishuAutoSyncSource[] }
 interface FeishuConnection { connected: boolean, expiresAt: string | null, scopes: string[], autoSync: FeishuAutoSync }
 
-const filters = reactive({ search: '', location: '', companyType: '', includeOffline: false })
+const filters = reactive({ search: '', location: '', companyType: '', includeHidden: false })
 const jobs = ref<JobItem[]>([])
 const options = ref<JobFilters>({ locations: [], industries: [], companyTypes: [], recruitmentTypes: [] })
 const total = ref(0)
@@ -45,8 +47,7 @@ const loading = ref(false)
 const syncing = ref(false)
 const uploading = ref(false)
 const clearing = ref(false)
-const convertingId = ref<string | null>(null)
-const offliningId = ref<string | null>(null)
+const busyJobId = ref<string | null>(null)
 const databaseError = ref(false)
 const isAdmin = ref(false)
 const syncDialogVisible = ref(false)
@@ -78,7 +79,14 @@ function dateTimeText(value: string | null) {
   const date = new Date(value)
   return `${date.getFullYear()}.${date.getMonth() + 1}.${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
-function jobOfflineAt(job: JobItem) { return job.manualOfflineAt || job.offlineAt }
+// 「标记为…」下拉框选完就执行、然后回到占位文案，所以每行存一个临时值，请求结束就清掉。
+const rowActions = reactive<Record<string, string | undefined>>({})
+// 岗位默认看不见有两种原因：数据源自己下线了（全局事实），或我标了「不合适」（只对我生效）。
+function rowHiddenLabel(job: JobItem) {
+  if (job.decision) return `不合适 · ${dateText(job.decision.createdAt)}`
+  if (job.offlineAt) return `已下线 · ${dateText(job.offlineAt)}`
+  return ''
+}
 const autoSyncSummary = computed(() => {
   const autoSync = feishuConnection.value.autoSync
   const source = autoSync.sources.find(item => item.enabled)
@@ -91,7 +99,7 @@ const autoSyncSummary = computed(() => {
 })
 
 function resetFilters() {
-  Object.assign(filters, { search: '', location: '', companyType: '', includeOffline: false })
+  Object.assign(filters, { search: '', location: '', companyType: '', includeHidden: false })
   page.value = 1
   void fetchJobs()
 }
@@ -135,7 +143,7 @@ async function fetchJobs() {
   databaseError.value = false
   try {
     const response = await $fetch<{ data: JobListData }>('/api/v1/jobs', {
-      query: { page: page.value, pageSize: 20, search: filters.search || undefined, location: filters.location || undefined, companyType: filters.companyType || undefined, includeOffline: String(filters.includeOffline), updatedSort: updatedSort.value },
+      query: { page: page.value, pageSize: 20, search: filters.search || undefined, location: filters.location || undefined, companyType: filters.companyType || undefined, includeHidden: String(filters.includeHidden), updatedSort: updatedSort.value },
     })
     jobs.value = response.data.items
     total.value = response.data.total
@@ -208,34 +216,73 @@ async function clearAllJobs() {
   finally { clearing.value = false }
 }
 
-async function convertJob(job: JobItem) {
-  if (job.applicationId) { await navigateTo('/applications'); return }
-  convertingId.value = job.id
-  try {
-    const response = await $fetch<{ data: { application: { id: string }, created: boolean } }>(`/api/v1/jobs/${job.id}/application`, { method: 'POST' })
-    job.applicationId = response.data.application.id
-    ElMessage.success(response.data.created ? '已加入投递看板。' : '该岗位已在投递看板中。')
-  }
-  catch { ElMessage.error('转换投递失败，请稍后重试。') }
-  finally { convertingId.value = null }
+// 操作列只留一个动作下拉框，两个选项各自对应一条链路：
+// 「不合适」写 JobDecision（只对当前用户隐藏），「已投递」直接进看板且状态=已投递。
+async function openBoard() { await navigateTo('/applications') }
+
+// 详情弹窗里的 selectedJob 是列表行的引用，而 fetchJobs 会整批换掉 jobs，
+// 所以刷新之后要把详情重新指到新对象上；岗位被隐藏了就直接关掉弹窗。
+function syncSelectedJob() {
+  const current = selectedJob.value
+  if (!current) return
+  const fresh = jobs.value.find(item => item.id === current.id)
+  if (fresh) selectedJob.value = fresh
+  else detailDialogVisible.value = false
 }
 
-async function offlineJob(job: JobItem) {
-  if (jobOfflineAt(job)) return
-  try { await ElMessageBox.confirm('下线后该岗位默认不再显示；勾选“显示已下线”仍可查看。确定下线吗？', '下线岗位', { type: 'warning', confirmButtonText: '下线', cancelButtonText: '取消' }) }
-  catch { return }
-  offliningId.value = job.id
+// 「已投递」和「收藏」走的是同一条链路——都是往投递看板里加一条记录，只是初始状态不同：
+// 已投递会补上投递日期（默认当天），收藏不补。这个区别在服务端的 buildApplicationFromJobSeed 里。
+async function markJobToBoard(job: JobItem, status: 'SAVED' | 'APPLIED') {
+  busyJobId.value = job.id
+  const label = status === 'APPLIED' ? '已投递' : '收藏'
   try {
-    await $fetch(`/api/v1/jobs/${job.id}/offline`, { method: 'POST' })
-    ElMessage.success('岗位已移至下线区域。')
-    if (!filters.includeOffline) {
+    const response = await $fetch<{ data: { application: { id: string }, created: boolean } }>(`/api/v1/jobs/${job.id}/application`, { method: 'POST', body: { status } })
+    ElMessage.success(response.data.created ? `已加入投递看板，状态为「${label}」。` : '该岗位已在投递看板中。')
+    await fetchJobs()
+    syncSelectedJob()
+  }
+  catch { ElMessage.error('加入投递看板失败，请稍后重试。') }
+  finally { busyJobId.value = null }
+}
+
+// 标记可逆（下拉框里能选「恢复」），而且只影响自己的账号，所以不做二次确认。
+async function markJobNotSuitable(job: JobItem) {
+  busyJobId.value = job.id
+  try {
+    await $fetch(`/api/v1/jobs/${job.id}/decision`, { method: 'POST' })
+    ElMessage.success('已标记为不合适，可用「显示已隐藏」找回。')
+    // 标记后这条会从默认视图消失，往回补一页，免得停在空页上。
+    if (!filters.includeHidden) {
       const remainingTotal = Math.max(0, total.value - 1)
       page.value = Math.min(page.value, Math.max(1, Math.ceil(remainingTotal / 20)))
     }
     await fetchJobs()
+    syncSelectedJob()
   }
-  catch { ElMessage.error('岗位下线失败，请稍后重试。') }
-  finally { offliningId.value = null }
+  catch { ElMessage.error('标记失败，请稍后重试。') }
+  finally { busyJobId.value = null }
+}
+
+async function restoreJob(job: JobItem) {
+  busyJobId.value = job.id
+  try {
+    await $fetch(`/api/v1/jobs/${job.id}/decision`, { method: 'DELETE' })
+    ElMessage.success('已恢复，岗位回到列表里。')
+    await fetchJobs()
+    syncSelectedJob()
+  }
+  catch { ElMessage.error('恢复失败，请稍后重试。') }
+  finally { busyJobId.value = null }
+}
+
+async function runRowAction(job: JobItem, action: string) {
+  try {
+    if (action === 'APPLIED') await markJobToBoard(job, 'APPLIED')
+    else if (action === 'SAVED') await markJobToBoard(job, 'SAVED')
+    else if (action === 'NOT_SUITABLE') await markJobNotSuitable(job)
+    else if (action === 'RESTORE') await restoreJob(job)
+  }
+  finally { rowActions[job.id] = undefined }
 }
 
 function openJobDetail(job: JobItem) {
@@ -249,7 +296,7 @@ function sortByUpdatedAt({ order }: { order: 'ascending' | 'descending' | null }
   void fetchJobs()
 }
 
-watch(() => [filters.location, filters.companyType, filters.includeOffline], () => { page.value = 1; void fetchJobs() })
+watch(() => [filters.location, filters.companyType, filters.includeHidden], () => { page.value = 1; void fetchJobs() })
 onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection(), loadMe()]); oauthMessage() })
 </script>
 
@@ -274,7 +321,7 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection(), 
         <el-input v-model="filters.search" class="job-library__search" clearable placeholder="搜索公司或岗位" aria-label="搜索公司或岗位" @input="page = 1; fetchJobs()" @clear="page = 1; fetchJobs()" />
         <el-select v-model="filters.location" clearable filterable placeholder="工作地点" aria-label="按工作地点筛选"><el-option v-for="value in options.locations" :key="value" :label="value" :value="value" /></el-select>
         <el-select v-model="filters.companyType" clearable filterable placeholder="企业性质" aria-label="按企业性质筛选"><el-option v-for="value in options.companyTypes" :key="value" :label="value" :value="value" /></el-select>
-        <el-checkbox v-model="filters.includeOffline" class="job-library__offline-toggle">显示已下线</el-checkbox>
+        <el-checkbox v-model="filters.includeHidden" class="job-library__offline-toggle">显示已隐藏</el-checkbox>
         <el-button plain class="application-records__reset" @click="resetFilters">重置</el-button>
         <el-upload v-if="isAdmin" :auto-upload="false" :show-file-list="false" accept=".xlsx" :on-change="onExcelChange" class="job-library__upload">
           <el-button plain :loading="uploading">上传 Excel</el-button>
@@ -288,15 +335,15 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection(), 
       </div>
 
       <div class="workbench-table-shell job-library__table">
-        <el-table v-loading="loading" :data="jobs" empty-text="还没有岗位。上传一份 Excel 或同步飞书公开表格开始整理。" class="w-full" :default-sort="{ prop: 'sourceUpdatedAt', order: 'descending' }" @row-click="openJobDetail" @sort-change="sortByUpdatedAt">
+        <el-table v-loading="loading" :data="jobs" row-key="id" empty-text="还没有岗位。上传一份 Excel 或同步飞书公开表格开始整理。" class="w-full" :default-sort="{ prop: 'sourceUpdatedAt', order: 'descending' }" @row-click="openJobDetail" @sort-change="sortByUpdatedAt">
           <el-table-column label="更新时间" prop="sourceUpdatedAt" sortable="custom" :sort-orders="['descending', 'ascending']" width="132"><template #default="{ row }">{{ dateText(row.sourceUpdatedAt) }}</template></el-table-column>
           <el-table-column label="公司 / 招聘岗位" min-width="230">
-            <template #default="{ row }"><div class="job-library__role"><strong>{{ row.company.name }}</strong><span>{{ row.title }}</span><small v-if="jobOfflineAt(row)">已下线 · {{ dateText(jobOfflineAt(row)) }}</small></div></template>
+            <template #default="{ row }"><div class="job-library__role"><strong>{{ row.company.name }}</strong><span>{{ row.title }}</span><small v-if="rowHiddenLabel(row)">{{ rowHiddenLabel(row) }}</small></div></template>
           </el-table-column>
           <el-table-column label="工作地点" prop="location" min-width="110"><template #default="{ row }">{{ row.location || '—' }}</template></el-table-column>
           <el-table-column label="行业 / 性质" min-width="150"><template #default="{ row }"><span>{{ row.company.industry || '未分类' }}</span><small class="job-library__secondary">{{ row.company.companyType || '—' }}</small></template></el-table-column>
           <el-table-column label="公告 / 投递" width="126"><template #default="{ row }"><div class="job-library__links"><a v-if="row.announcementUrl" :href="row.announcementUrl" target="_blank" rel="noopener noreferrer" @click.stop>公告</a><span v-else>—</span><a v-if="row.url" :href="row.url" target="_blank" rel="noopener noreferrer" @click.stop>投递</a><span v-else>—</span></div></template></el-table-column>
-          <el-table-column label="操作" fixed="right" width="160"><template #default="{ row }"><div class="job-library__actions"><el-button v-if="isAdmin" class="job-library__compact-action" size="small" type="warning" plain :disabled="Boolean(jobOfflineAt(row))" :loading="offliningId === row.id" @click.stop="offlineJob(row)">{{ jobOfflineAt(row) ? '已下线' : '下线' }}</el-button><el-button class="job-library__compact-action" size="small" :type="row.applicationId ? 'success' : 'primary'" plain :loading="convertingId === row.id" @click.stop="convertJob(row)">{{ row.applicationId ? '查看面板' : '加入面板' }}</el-button></div></template></el-table-column>
+          <el-table-column label="操作" fixed="right" width="150"><template #default="{ row }"><div class="job-library__actions"><el-button v-if="row.applicationId" class="job-library__compact-action" size="small" type="success" plain @click.stop="openBoard">查看面板</el-button><el-select v-else v-model="rowActions[row.id]" class="job-library__mark" size="small" placeholder="标记为…" :disabled="busyJobId === row.id" @click.stop @change="runRowAction(row, $event)"><el-option v-if="row.decision" label="恢复" value="RESTORE" /><el-option v-else label="不合适" value="NOT_SUITABLE" /><el-option label="收藏" value="SAVED" /><el-option label="已投递" value="APPLIED" /></el-select></div></template></el-table-column>
         </el-table>
       </div>
       <el-pagination v-if="total > 20" class="job-library__pagination" layout="prev, pager, next" :current-page="page" :page-size="20" :total="total" @current-change="page = $event; fetchJobs()" />
@@ -317,7 +364,7 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection(), 
 
     <el-dialog v-model="detailDialogVisible" title="岗位详情" width="min(760px, calc(100vw - 32px))" destroy-on-close>
       <div v-if="selectedJob" class="job-detail">
-        <header class="job-detail__header"><div><span>{{ selectedJob.company.name }}</span><h2>{{ selectedJob.title }}</h2></div><span v-if="jobOfflineAt(selectedJob)" class="job-detail__offline">已下线</span></header>
+        <header class="job-detail__header"><div><span>{{ selectedJob.company.name }}</span><h2>{{ selectedJob.title }}</h2></div><span v-if="rowHiddenLabel(selectedJob)" class="job-detail__offline">{{ selectedJob.decision ? '不合适' : '已下线' }}</span></header>
         <dl class="job-detail__facts">
           <div><dt>更新时间</dt><dd>{{ dateText(selectedJob.sourceUpdatedAt) }}</dd></div>
           <div><dt>工作地点</dt><dd>{{ selectedJob.location || '—' }}</dd></div>
@@ -330,7 +377,7 @@ onMounted(async () => { await Promise.all([fetchJobs(), loadFeishuConnection(), 
         <section class="job-detail__section"><h3>投递注意事项</h3><p>{{ selectedJob.applicationNotes || '暂无投递注意事项。' }}</p></section>
         <section class="job-detail__section"><h3>公司介绍</h3><p>{{ selectedJob.company.description || '暂无公司介绍。' }}</p></section>
       </div>
-      <template #footer><el-button @click="detailDialogVisible = false">关闭</el-button><el-button :type="selectedJob?.applicationId ? 'success' : 'primary'" :loading="selectedJob ? convertingId === selectedJob.id : false" @click="selectedJob && convertJob(selectedJob)">{{ selectedJob?.applicationId ? '查看面板' : '加入面板' }}</el-button></template>
+      <template #footer><el-button @click="detailDialogVisible = false">关闭</el-button><el-button v-if="selectedJob?.applicationId" type="success" plain @click="openBoard">查看面板</el-button><template v-else><el-button plain :loading="Boolean(selectedJob) && busyJobId === selectedJob?.id" @click="selectedJob && markJobToBoard(selectedJob, 'SAVED')">收藏</el-button><el-button type="primary" :loading="Boolean(selectedJob) && busyJobId === selectedJob?.id" @click="selectedJob && markJobToBoard(selectedJob, 'APPLIED')">标记为已投递</el-button></template><el-button v-if="selectedJob && !selectedJob.applicationId && selectedJob.decision" plain @click="selectedJob && restoreJob(selectedJob)">恢复</el-button></template>
     </el-dialog>
   </section>
 </template>
