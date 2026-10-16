@@ -20,6 +20,7 @@
 | User | 数据隔离与身份 | id, email, displayName, emailVerified, passwordHash |
 | Company | 公司主数据 | id, name, website, industry, companyType, tags |
 | Job | 外部岗位事实 | id, companyId, title, department, location, salaryMin, salaryMax, source, url, description, deadlineAt |
+| JobDecision | 用户对单个岗位的个人判断（当前只有「不合适」） | id, userId, jobId, status, createdAt |
 | Application | 用户对岗位的求职过程 | id, userId, jobId, status, channel, appliedAt, nextAction, nextActionAt, notes, deletedAt |
 | ApplicationEvent | 不可变过程时间线 | id, applicationId, type, occurredAt, payload |
 | JobPreference | 用户的岗位评估偏好 | id, userId, targetRoles, targetCities, companyTypes, technicalFocus, updatedAt |
@@ -35,7 +36,7 @@
 
 ## MVP 用户边界
 
-F-001 采用单用户本地模式（固定 local user）。F-042 起改为真实账号登录：用户身份由服务端会话取得，客户端仍不得指定 `userId`。F-043 起开放公开注册（仍无邮箱验证），允许多账号自助注册；User 与 userId 关系保持不变，业务数据无需重构。Job/Company 为全局共享事实（无 userId），Application 等按 userId 隔离；岗位库写操作仅管理员可用，"管理员"由环境变量 `ADMIN_EMAILS`（逗号分隔邮箱）判定，User 表无需新增角色字段。
+F-001 采用单用户本地模式（固定 local user）。F-042 起改为真实账号登录：用户身份由服务端会话取得，客户端仍不得指定 `userId`。F-043 起开放公开注册（仍无邮箱验证），允许多账号自助注册；User 与 userId 关系保持不变，业务数据无需重构。Job/Company 为全局共享事实（无 userId），Application 与 JobDecision 等按 userId 隔离。岗位库的**来源写操作**（导入、清空、飞书同步）仅管理员可用，"管理员"由环境变量 `ADMIN_EMAILS`（逗号分隔邮箱）判定，User 表无需新增角色字段；**用户对岗位的个人判断（「不合适」）不是共享数据，任何登录用户都可以写，不受管理员限制**。
 
 ## 删除与审计
 
@@ -43,9 +44,15 @@ Application 使用 deletedAt 软删除。默认业务查询必须排除 deletedA
 
 ## ApplicationStatus
 
-SAVED | PREPARING | APPLIED | WRITTEN_TEST | INTERVIEWING | OFFERED | REJECTED | WITHDRAWN
+收藏 → 已投递 → 测评中 → AI面试 → 笔试中 → 面试中 → Offer → 挂了 → 放弃
 
-Application 是用户的状态与决策记录；Job 是岗位事实。不得把两者合并为单一状态表。
+枚举名依次为 `SAVED`、`APPLIED`、`ASSESSMENT`、`AI_INTERVIEW`、`WRITTEN_TEST`、`INTERVIEWING`、`OFFERED`、`REJECTED`、`WITHDRAWN`。**顺序即招聘流程顺序**，也是投递看板从左到右的列顺序；Prisma 枚举在数据库里的定义顺序与之一致。
+
+界面的文案、顺序与配色定义在 `web/shared/application-status.ts`（Nuxt 的 `shared/` 目录，别名 `#shared`），客户端与服务端共用；服务端 Zod 校验直接由这份清单生成，**不得在别处另抄一份**。新增或改动状态只需同时动这个文件和 Prisma 枚举。
+
+**删枚举值必须先搬数据**：PostgreSQL 不支持 `ALTER TYPE ... DROP VALUE`，只能整体重建类型（建新类型 → 换列类型 → 改名 → 删旧类型），而 `ALTER COLUMN ... TYPE ... USING` 遇到新类型里已不存在的值会直接报错。`PREPARING`（准备中）于 2026-10-16 移除，迁移里先把存量置为 `SAVED` 再重建。
+
+Application 是用户的状态与决策记录；Job 是岗位事实。不得把两者合并为单一状态表。用户对岗位的否定判断（「不合适」）存在 JobDecision，按 userId 隔离，不得写回 Job。
 
 ## F-001 持久化约束
 
@@ -61,7 +68,11 @@ Application 是用户的状态与决策记录；Job 是岗位事实。不得把�
 - `Job` 独立保存外部岗位事实，不与 `Application` 合并。除已有字段外，新增 `recruitmentType?`、`announcementUrl?`、`hasWrittenTest?`、`sourceDocId?`、`sourceUpdatedAt?`、`syncedAt?` 与 `offlineAt?`。
 - `Company.industry?` 与 `Company.companyType?` 保存来源分类。导入器不映射或持久化来源文档中的薪资列。
 - 同步使用 `sourceDocId + 公司名称 + 岗位名称` 识别同一来源岗位。后续来源行更新记录并清空 `offlineAt`；同一来源一次完整同步中缺失的记录保留并写入 `offlineAt`。
-- 从岗位库创建投递沿用 `Application(userId, jobId)` 唯一约束。首次转换创建 `SAVED` 状态的 `Application` 与不可变 `CREATE` ApplicationEvent；重复转换返回既有 Application，不额外创建事件。
+- 从岗位库创建投递沿用 `Application(userId, jobId)` 唯一约束。首次转换创建 `Application` 与不可变 `CREATE` ApplicationEvent，**初始状态由请求指定**：`APPLIED`（默认；同时把 `appliedAt` 记为当天）或 `SAVED`（收藏；不写投递日期）；重复转换返回既有 Application，不额外创建事件。
+- 用户对单个岗位的个人判断（当前只有「不合适」）存于 `JobDecision`，唯一键 `(userId, jobId)`。它**不得**写在 `Job` 上：Job 是飞书同步来的共享事实，而判断按用户隔离，一个用户标了不能让其他用户也看不见这条岗位。
+- 默认岗位列表排除两类：「来源已下线」（`Job.offlineAt`，全局事实）与「当前用户标了不合适」（`JobDecision`，个人判断）。两者共用同一个开关一并放开显示。
+- 个人判断与投递记录互斥：转换投递（收藏/已投递）时清除同一 `(userId, jobId)` 上的 JobDecision；已有 Application 的岗位不提供「不合适」操作。
+- `Job.manualOfflineAt` 自 2026-10-16 起弃用，字段与索引仅为回滚保留，新代码不得读写；存量值已迁成所有者账号的 JobDecision。
 - `FeishuConnection` 一对一归属 `User`，仅保存经服务端加密的 OAuth access/refresh token、其到期时间和已授权 scope；绝不向客户端返回 token、App Secret 或加密密钥。用户可显式断开连接以删除该本地授权记录。
 
 ## F-002 持久化约束
@@ -199,7 +210,7 @@ Application 是用户的状态与决策记录；Job 是岗位事实。不得把�
 
 - `FeishuJobSyncSource` 一对多归属 User，以 `(userId, sourceDocId)` 唯一识别一份已配置的岗位来源。它只保存经过 Zod 校验的分享链接、来源类型、自动同步状态、同步时间、同步占用与安全错误摘要；不得保存 OAuth token、App Secret 或任何加密密钥。
 - Bitable 来源首次同步为完整基线；后续增量同步以飞书记录自动字段 `last_modified_time` 的上次成功时间减一分钟为下界。增量只创建或更新被飞书返回的岗位，绝不以未返回记录推断岗位下线。
-- 只有完整对账可以维护来源 `offlineAt`；任何同步都不得清空或修改 `manualOfflineAt`。手动下线优先于来源状态，默认查询继续同时排除两者。
+- 只有完整对账可以维护来源 `offlineAt`（数据源里消失的事实，全局生效）。同步**不得**触碰 `JobDecision`：用户标的「不合适」是个人判断，既不能被同步清空，也不因该岗位在来源里重新出现而复活。默认查询同时排除来源下线与当前用户的 JobDecision。
 - 成功同步为用户可见的岗位库变更，必须写入 `DocumentMutationEvent(type=JOB_LIBRARY_SYNCED, entityType=FeishuJobSyncSource)`，payload 只记录来源 ID、触发来源、同步模式和统计，不得包含分享链接或凭据。
 - 自动同步固定在 `Asia/Shanghai` 每日 08:00 执行；执行失败只更新来源的最近尝试时间与安全错误摘要，不覆盖最近成功同步时间。来源级同步占用防止并发执行，过期占用可安全恢复。
 

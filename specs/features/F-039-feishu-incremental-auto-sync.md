@@ -30,7 +30,7 @@
 
 ## Acceptance criteria
 
-- 已存在 `manualOfflineAt` 的 Job 在任意完整或增量同步后仍保持非空，默认岗位列表继续隐藏它。
+- ~~已存在 `manualOfflineAt` 的 Job 在任意完整或增量同步后仍保持非空，默认岗位列表继续隐藏它。~~（**2026-10-16 改写**：手动判断改存 `JobDecision`，规则不变但对象换了——任何同步都不得触碰 `JobDecision`，既不清空它，也不因该岗位在来源里重新出现而复活；`manualOfflineAt` 已弃用。见 `contracts/domain-model.md` 的 F-039。）
 - 第一次同步一个 Bitable 数据源时执行完整导入并保存数据源配置；该数据源之后的同步请求使用 `records/search`、`automatic_fields=true` 和 `last_modified_time >= cutoff` 筛选。
 - 增量同步只写入其返回岗位，`offlined` 始终为 0，且不读取整张飞书表。
 - 每个已配置且可增量读取的数据源在北京时间每天 08:00 自动执行一次；服务器在当天 08:00 后启动且尚未运行当天任务时会补跑一次。

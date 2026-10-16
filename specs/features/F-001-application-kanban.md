@@ -18,7 +18,7 @@
 - 单用户本地模式：服务端固定解析为 local user，不提供注册、登录或多用户切换。
 - Company、Job、Application、ApplicationEvent 的 Prisma 数据模型与初始迁移。
 - 投递记录 CRUD API。
-- 看板与列表视图；状态：SAVED、PREPARING、APPLIED、WRITTEN_TEST、INTERVIEWING、OFFERED、REJECTED、WITHDRAWN。
+- 看板与列表视图；~~状态：SAVED、PREPARING、APPLIED、WRITTEN_TEST、INTERVIEWING、OFFERED、REJECTED、WITHDRAWN~~（**2026-10-16 更新**：`PREPARING` 已移除，新增 `ASSESSMENT`（测评中）与 `AI_INTERVIEW`（AI面试）；完整的 9 个状态及其顺序见 `contracts/domain-model.md` 的 `ApplicationStatus` 一节）。
 - 拖拽或等价交互更新状态。
 - 详情抽屉/弹窗编辑岗位与投递字段。
 - 创建、状态变更、编辑、删除均写入 ApplicationEvent。

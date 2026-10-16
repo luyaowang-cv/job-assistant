@@ -53,7 +53,7 @@
 - `POST /api/auth/sign-up/email` 为公开注册接口，输入 `email` / `password` / 可选 `name`（映射 displayName）。是否开放由服务端环境变量 `ALLOW_PUBLIC_SIGNUP` 控制，关闭时注册接口拒绝；本次不验证邮箱。
 - `GET /api/signup-config` 为公开只读接口，返回 `{ enabled: boolean }`，供登录页决定是否显示注册入口。
 - `GET /api/v1/me` 返回当前登录用户 `{ id, email, displayName, isAdmin }`；`isAdmin` 由环境变量 `ADMIN_EMAILS`（逗号分隔邮箱）判定。
-- 岗位库写接口（`POST /api/v1/jobs/imports/feishu`、`POST /api/v1/jobs/imports/excel`、`POST /api/v1/jobs/:id/offline`、`DELETE /api/v1/jobs`）仅管理员可调用，非管理员返回 `403 FORBIDDEN`；`POST /api/v1/jobs/:id/application` 仍对任意登录用户开放（按用户创建投递）。
+- 岗位库的**来源写接口**（`POST /api/v1/jobs/imports/feishu`、`POST /api/v1/jobs/imports/excel`、`DELETE /api/v1/jobs`）仅管理员可调用，非管理员返回 `403 FORBIDDEN`。这两类**不要求**管理员，因为它们写的都是当前用户自己的数据：`POST /api/v1/jobs/:id/application`（按用户创建投递）与 `POST` / `DELETE /api/v1/jobs/:id/decision`（按用户记录个人判断）。
 
 ## F-002 Job Evaluation API
 
@@ -161,18 +161,20 @@
 
 | Method | Path | Input | Success data |
 |---|---|---|---|
-| GET | `/api/v1/jobs` | `page`, `pageSize`, `search`, `location`, `industry`, `companyType`, `recruitmentType`, `hasWrittenTest`, `includeOffline` | `{ items, page, pageSize, total, filters }` |
+| GET | `/api/v1/jobs` | `page`, `pageSize`, `search`, `location`, `industry`, `companyType`, `recruitmentType`, `hasWrittenTest`, `includeHidden` | `{ items, page, pageSize, total, filters }` |
 | POST | `/api/v1/jobs/imports/feishu` | `{ shareUrl }` | `{ created, updated, offlined, skipped, total, mode, cutoffAt? }` |
-| POST | `/api/v1/jobs/:id/application` | path `id` | `{ application, created }` |
-| POST | `/api/v1/jobs/:id/offline` | path `id` | `{ id, offlineAt, manualOfflineAt }` |
+| POST | `/api/v1/jobs/:id/application` | path `id`，body `{ status? }` | `{ application, created }` |
+| POST | `/api/v1/jobs/:id/decision` | path `id` | `{ id, jobId, status, createdAt }` |
+| DELETE | `/api/v1/jobs/:id/decision` | path `id` | `{ jobId }` |
 
 - 所有输入均由 Zod 校验。浏览器仅提供飞书公开分享链接，不得传入来源行、userId、飞书凭据、时间戳或投递状态。
 - 飞书凭据只存在于服务端环境变量。凭据缺失、来源无法读取或任一行校验失败时导入返回明确错误且不写入数据库。导入在一个最长三分钟的数据库事务内执行，保证失败时不留下半同步数据。
-- 搜索匹配公司名称与岗位名称；location / industry / companyType / recruitmentType 筛选为包含匹配（不区分大小写）；hasWrittenTest 支持 true / false / null（null 表示未标注）；`includeOffline` 默认 false；每次查询都返回分页元数据。
-- 默认岗位列表同时排除来源下线 `offlineAt` 与用户手动下线 `manualOfflineAt`；`includeOffline=true` 返回两类下线记录。手动下线在事务中写入 Job 与 `JOB_MANUALLY_OFFLINED` 审计事件，飞书同步不得清空该字段。
+- 搜索匹配公司名称与岗位名称；location / industry / companyType / recruitmentType 筛选为包含匹配（不区分大小写）；hasWrittenTest 支持 true / false / null（null 表示未标注）；`includeHidden` 默认 false；每次查询都返回分页元数据。筛选下拉框的候选值按**当前用户可见**的岗位统计，隐藏的岗位不贡献选项。
+- 默认岗位列表排除两类：「来源已下线」`Job.offlineAt`（全局事实）与「当前用户标了不合适」`JobDecision`（个人判断）；`includeHidden=true` 同时返回这两类。响应里用 `offlineAt` 与 `decision` 两个字段区分是哪一类。
+- `POST /:id/decision` 写当前用户的 `JobDecision`（状态 `NOT_SUITABLE`）并记 `JOB_MARKED_NOT_SUITABLE` 审计事件，幂等（已标记则更新状态）；`DELETE /:id/decision` 清除标记并记 `JOB_DECISION_CLEARED` 事件，未标记时返回 404。两者**都不要求管理员**：个人判断按 userId 隔离，不影响其他用户的列表。
+- 转投递检查当前登录用户并事务性创建投递/事件，初始状态取 body 的 `status`（默认 `APPLIED`）。`APPLIED` 同时把 `appliedAt` 记为当天，`SAVED` 留空。已存在投递的重复请求幂等，返回 `created: false`。创建成功时一并清除同一 `(userId, jobId)` 上的 JobDecision。
+- 首次同步来源为 FULL；已配置 Bitable 来源的后续同步为 INCREMENTAL，通过飞书记录自动字段 `last_modified_time` 仅查询上次成功同步前一分钟以来的记录。INCREMENTAL 响应的 `offlined` 固定为 0，且**任何同步都不得触碰 `JobDecision`**。
 - 导入仅返回统计，不返回凭据或分享链接；只映射 F-020 明确字段，绝不持久化薪资列。
-- 转投递检查当前 local user 并事务性创建投递/事件。已存在投递的重复请求幂等，返回 `created: false`。
-- 首次同步来源为 FULL；已配置 Bitable 来源的后续同步为 INCREMENTAL，通过飞书记录自动字段 `last_modified_time` 仅查询上次成功同步前一分钟以来的记录。INCREMENTAL 响应的 `offlined` 固定为 0，且不得修改 `manualOfflineAt`。
 
 ## F-020 飞书 OAuth API
 
@@ -198,10 +200,10 @@
 | PATCH | `/api/v1/applications/:id/status` | `status` 与交互来源 | 更新后的 Application |
 | DELETE | `/api/v1/applications/:id` | 路径 `id` | `{ id, deletedAt }` |
 
-- 默认列表、详情、更新、状态变更与删除均只作用于 local user 且 `deletedAt` 为 null 的 Application。
+- 默认列表、详情、更新、状态变更与删除均只作用于当前登录用户且 `deletedAt` 为 null 的 Application。
 - 分页默认 `page=1`、`pageSize=20`，最大 `pageSize=100`。
 - 查询关键词匹配公司名称和岗位名称；状态、渠道筛选使用单个枚举值。
-- `PATCH /:id/status` 允许用户主动在任意非删除状态之间迁移；写入 `STATUS_CHANGED` 事件，其中 payload 包含 fromStatus、toStatus、source。
+- `PATCH /:id/status` 允许用户主动在任意非删除状态之间迁移；写入 `STATUS_CHANGED` 事件，其中 payload 包含 fromStatus、toStatus、source。`source` 取 `KANBAN`（看板拖拽）、`LIST`（列表里直接改「当前阶段」）、`DETAIL`（详情抽屉，默认值）、`AGENT`；面试记录侧绕过该 schema 直接写 `INTERVIEW_RECORD`，因此这个枚举不是穷举。
 - 普通 PATCH 写入 `UPDATE` 事件；DELETE 设置 `deletedAt` 并写入 `DELETE` 事件。
 
 ## F-023 Material and composed-document API
