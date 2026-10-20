@@ -94,6 +94,9 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 个人博客的静态产物。发布脚本把每次构建放进 releases/<时间戳>，
+      # 再把 current 软链接指过去；caddy 只读 current，不参与发布。
+      - /root/blog:/srv/blog:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

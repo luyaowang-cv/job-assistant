@@ -13,3 +13,18 @@ offerscoming.cn {
 
 	reverse_proxy web:3000
 }
+
+# 个人技术博客：纯静态，由 Caddy 直接托管，不经过 Nitro。
+# 发布方式见 blog 仓库的 DEPLOY.md：/root/blog/current 指向某个 release，
+# 切换只改软链接，不需要重启容器。
+blog.offerscoming.cn {
+	root * /srv/blog/current
+	encode gzip zstd
+	file_server
+
+	# 静态站没有后端路由，未命中的路径返回 404 页面。
+	handle_errors {
+		rewrite * /404.html
+		file_server
+	}
+}
