@@ -520,9 +520,8 @@ select {
 .dashboard-schedule { display: flex; min-height: 138px; flex-direction: column; padding: 14px 18px; background: rgba(255, 254, 251, .76); }
 .dashboard-schedule__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .dashboard-schedule__head h2 { display: flex; align-items: center; gap: 6px; margin: 0; color: #414a48; font-size: 15px; letter-spacing: -0.03em; }
-/* 「今天 N」「逾期 N」两个小药丸，没有就整个不渲染 */
+/* 「今天 N」小药丸，没有就不渲染 */
 .dashboard-schedule__pill { padding: 2px 6px; border-radius: 6px; background: rgba(226, 240, 231, .78); color: #4f7560; font-size: 10px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
-.dashboard-schedule__pill--overdue { background: #f8e6e4; color: #a96c67; }
 .dashboard-schedule__more { flex: none; color: #3e725a; font-size: 11px; text-decoration: none; white-space: nowrap; }
 .dashboard-schedule__more:hover { color: #365f48; text-decoration: underline; }
 /* 条目少的时候垂直居中，不让三条内容全挤在卡片上半截 */

@@ -89,8 +89,15 @@ async function loadSummary() {
     dayStart.setHours(0, 0, 0, 0)
     const weekStart = new Date(dayStart)
     weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7))
+    // 日程卡只要今天及以后。「下一步日期」是 date-only、库里存成 UTC 零点，
+    // 所以边界取"本地今天的日历日 → UTC 零点"；直接传 dayStart 会差出一个时区偏移。
+    const scheduleFrom = new Date(Date.UTC(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate()))
     const response = await $fetch<{ data: DashboardSummary }>('/api/v1/dashboard/summary', {
-      query: { dayStart: dayStart.toISOString(), weekStart: weekStart.toISOString() },
+      query: {
+        dayStart: dayStart.toISOString(),
+        weekStart: weekStart.toISOString(),
+        scheduleFrom: scheduleFrom.toISOString(),
+      },
     })
     summary.value = response.data
     animateFunnel()
@@ -105,9 +112,10 @@ async function loadSummary() {
 const focusCount = computed(() => summary.value?.focus.totalActive ?? 0)
 
 // ---- 日程 ----
-// 只露 3 条：服务端已按时间升序（逾期在最前），这一屏就是"现在最该动的事"。
+// 只露 3 条：服务端已按时间升序，并且只给今天及以后的日期（过期的历史不在这里露脸），
+// 所以这一屏就是"接下来几件要做的事"。
 const SCHEDULE_VISIBLE = 3
-// "今天/逾期几天"必须跟浏览器本地的今天比，所以标签在客户端算、不在服务端算。
+// "今天/明天"必须跟浏览器本地的今天比，所以标签在客户端算、不在服务端算。
 // 注意这里是 computed 而不是模板里直接调用：summary 一变就算一次，同一行的日期文案不会各算各的。
 const scheduleAll = computed(() => (summary.value?.schedule.items ?? []).map(item => ({
   ...item,
@@ -115,7 +123,6 @@ const scheduleAll = computed(() => (summary.value?.schedule.items ?? []).map(ite
 })))
 const scheduleShown = computed(() => scheduleAll.value.slice(0, SCHEDULE_VISIBLE))
 const scheduleTodayCount = computed(() => scheduleAll.value.filter(item => item.label.dayDiff === 0).length)
-const scheduleOverdueCount = computed(() => scheduleAll.value.filter(item => item.label.dayDiff < 0).length)
 
 // 设计规范只允许"辅助理解"的动效，且不能缩放放大——条形生长和数字滚动都属于这一类。
 // index.scss 里的全局 prefers-reduced-motion 规则只能压 CSS 过渡，压不住这里用 rAF 写的动画，所以要自己判断。
@@ -230,14 +237,13 @@ onMounted(() => { void loadSummary() })
       </article>
       <article class="dashboard-card dashboard-stat"><b>{{ summary?.rhythm.appliedToday ?? 0 }}</b><span>今日投递</span><i /></article>
       <article class="dashboard-card dashboard-stat dashboard-stat--amber"><b>{{ summary?.rhythm.appliedThisWeek ?? 0 }}</b><span>本周投递</span><i /></article>
-      <!-- 日程：只按「下一步日期」排，逾期的最前面。这张卡是给"记不住"用的，
-           所以只写公司 + 具体日期 + 下一步，不再重复今日重点里的状态和停滞天数。 -->
+      <!-- 日程：只按「下一步日期」排，只列今天及以后。这张卡回答的是"接下来哪天要做什么"，
+           所以不掺"多久没推进"这类回溯信息（那是下面今日重点的活），也不列已经过去的日期。 -->
       <article class="dashboard-card dashboard-schedule" aria-label="接下来的日程">
         <header class="dashboard-schedule__head">
           <h2>
             接下来
             <span v-if="scheduleTodayCount" class="dashboard-schedule__pill">今天 {{ scheduleTodayCount }}</span>
-            <span v-if="scheduleOverdueCount" class="dashboard-schedule__pill dashboard-schedule__pill--overdue">逾期 {{ scheduleOverdueCount }}</span>
           </h2>
           <NuxtLink to="/applications" class="dashboard-schedule__more">{{ summary?.schedule.total ? `${summary.schedule.total} 条 →` : '投递看板 →' }}</NuxtLink>
         </header>
@@ -253,7 +259,7 @@ onMounted(() => { void loadSummary() })
             </button>
           </li>
         </ul>
-        <p v-else-if="summary" class="dashboard-empty">还没有安排下一步 —— 在投递详情里填上「下一步日期」，这里就会按时间排出来。</p>
+        <p v-else-if="summary" class="dashboard-empty">接下来没有安排。只列今天及以后的「下一步日期」，已经过去的不会出现在这里 —— 去投递详情里填一个就会排上来。</p>
         <p v-else class="dashboard-empty">正在读取投递数据…</p>
       </article>
     </section>

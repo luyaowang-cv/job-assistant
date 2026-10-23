@@ -17,10 +17,9 @@ const DAILY_WINDOW = 30
 
 // 日程卡只看「下一步日期」(Application.nextActionAt)：这是工作台里唯一由用户自己填的、
 // 带具体日期的时间点。面试时间、投递截止都还没被真正用起来，先不铺开。
-// 逾期超过两周的记录不再往首页推：那多半是办完了没回来改字段，
-// 一直挂在第一位只会把真正要做的事挤下去。
-const SCHEDULE_OVERDUE_DAYS = 14
-// 卡片只显示 3 条；多取几条是为了让「今天 N 件 / 逾期 N 条」这两个计数不至于被截断。
+// 只列**今天及以后**：过期没做的日期不进这张卡 —— 首页已经有「今日重点」在讲"多久没推进"，
+// 再把逾期日期摆在这儿，读起来就是同一件事。
+// 卡片只显示 3 条；多取几条是为了让「今天 N 件」这个计数不至于被截断。
 const SCHEDULE_LIMIT = 20
 
 // 漏斗里"到达过某阶段"的判定，不能只看当前状态：
@@ -77,7 +76,7 @@ export type DashboardSummary = {
     idleOver14: number
   }
   schedule: {
-    /** 按时间升序，逾期在前 */
+    /** 按时间升序，只有今天及以后 */
     items: ScheduleItem[]
     total: number
   }
@@ -88,6 +87,12 @@ type SummaryOptions = {
   dayStart: Date
   /** 客户端本地时间的"本周一 0 点" */
   weekStart: Date
+  /**
+   * 本地今天的日历日换算成的 UTC 零点。
+   * 「下一步日期」是 date-only、库里存的就是 UTC 零点，所以日界的边界必须是这个值，
+   * 不能直接拿 dayStart（那是本地零点的时刻，比 UTC 零点晚/早一个时区偏移）。
+   */
+  scheduleFrom: Date
 }
 
 // 今日重点的分档，顺序即优先级：先看有外部时间压力的，再看躺太久的。
@@ -170,11 +175,11 @@ export async function getDashboardSummary(options: SummaryOptions): Promise<Dash
     select: { occurredAt: true },
   })
 
-  // 日程的取数口径：有下一步日期、没走到死胡同（挂了/放弃的不再有"下一步"）、
-  // 逾期没超过两周。排序交给数据库，逾期最早的排最前面 —— 正好也是"最该先处理"的顺序。
+  // 日程的取数口径：有下一步日期、日期在今天及以后、没走到死胡同（挂了/放弃的不再有"下一步"）。
+  // 排序交给数据库，最近的排最前面。
   const scheduleWhere = {
     ...base,
-    nextActionAt: { gte: new Date(options.dayStart.getTime() - SCHEDULE_OVERDUE_DAYS * DAY) },
+    nextActionAt: { gte: options.scheduleFrom },
     status: { notIn: ['REJECTED', 'WITHDRAWN'] as ApplicationStatus[] },
   }
 
