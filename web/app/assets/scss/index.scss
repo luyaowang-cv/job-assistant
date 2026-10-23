@@ -476,10 +476,12 @@ select {
 .dashboard-primary-action:hover { background: #668476; color: #fff; }
 .application-board__eyebrow { margin: 0 0 7px; color: #7e958b; font-size: 10px; font-weight: 700; letter-spacing: .11em; }
 
-/* 三张卡等宽。原来重点卡占 1.75 份、统计卡各 1 份；「最近推进」已删除。 */
+/* 四张卡一行的配比。原来是三张等宽（重点卡占 1.75 份，「最近推进」已删除）；
+   加日程卡后，宽度让给文字最多的重点卡和日程卡，两张统计卡只要放得下数字。 */
 .dashboard-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 四列：重点 / 今日投递 / 本周投递 / 接下来 */
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, .8fr) minmax(0, .8fr) minmax(0, 1.15fr);
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -512,6 +514,35 @@ select {
 .dashboard-stat i { display: block; height: 4px; margin-top: 12px; border-radius: 99px; background: #edf4ef; }
 .dashboard-stat i::after { display: block; width: 65%; height: 100%; border-radius: inherit; background: #79ad93; content: ''; }
 .dashboard-stat--amber i::after { width: 43%; background: #caa367; }.dashboard-stat--blue i::after { width: 72%; background: #88a3be; }
+
+/* 日程卡（第四张）。行高由它决定 —— 它内容最多，其余三张靠 grid 默认的 stretch 跟着长，
+   这样四张卡的底边始终在一条线上。 */
+.dashboard-schedule { display: flex; min-height: 138px; flex-direction: column; padding: 14px 18px; background: rgba(255, 254, 251, .76); }
+.dashboard-schedule__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dashboard-schedule__head h2 { display: flex; align-items: center; gap: 6px; margin: 0; color: #414a48; font-size: 15px; letter-spacing: -0.03em; }
+/* 「今天 N」「逾期 N」两个小药丸，没有就整个不渲染 */
+.dashboard-schedule__pill { padding: 2px 6px; border-radius: 6px; background: rgba(226, 240, 231, .78); color: #4f7560; font-size: 10px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+.dashboard-schedule__pill--overdue { background: #f8e6e4; color: #a96c67; }
+.dashboard-schedule__more { flex: none; color: #3e725a; font-size: 11px; text-decoration: none; white-space: nowrap; }
+.dashboard-schedule__more:hover { color: #365f48; text-decoration: underline; }
+/* 条目少的时候垂直居中，不让三条内容全挤在卡片上半截 */
+.dashboard-schedule__list { display: flex; flex: 1; flex-direction: column; justify-content: center; margin: 2px 0 0; padding: 0; list-style: none; }
+/* 每条左边一条细色条标紧急度：逾期红 / 今天绿 / 两天内琥珀 / 更远灰 */
+.dashboard-schedule__item { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-items: center; padding: 4px 0 4px 9px; border: 0; border-left: 2px solid rgba(116, 132, 124, .22); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.dashboard-schedule__item:hover b { color: #5e7f70; }
+.dashboard-schedule__item:focus-visible { border-radius: 4px; outline: 2px solid var(--workbench-focus); outline-offset: 1px; }
+.dashboard-schedule__item b { grid-column: 1; overflow: hidden; color: #414a48; font-size: 12.5px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-schedule__item small { grid-column: 1; overflow: hidden; margin-top: 2px; color: #7d8b84; font-size: 11px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-schedule__when { display: flex; grid-column: 2; grid-row: 1 / span 2; flex-direction: column; align-items: flex-end; gap: 1px; }
+.dashboard-schedule__when em { color: #6c8177; font-size: 11px; font-style: normal; font-weight: 700; }
+.dashboard-schedule__when span { color: #9aa39f; font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dashboard-schedule__item.is-overdue { border-left-color: #cf9b95; }
+.dashboard-schedule__item.is-overdue em { color: #a96c67; }
+.dashboard-schedule__item.is-today { border-left-color: #79ad93; }
+.dashboard-schedule__item.is-today em { color: #3e725a; }
+.dashboard-schedule__item.is-soon { border-left-color: rgba(202, 163, 103, .8); }
+.dashboard-schedule__item.is-soon em { color: #a8845a; }
+.dashboard-schedule .dashboard-empty { margin: auto 0; line-height: 1.7; }
 
 /* 今日重点 + 投递转化并排。左栏给今日重点（标题长、条目多），右栏漏斗只需要够放条形。 */
 /* 不写 align-items:start，让两栏等高：右栏底边会自动跟左栏的今日重点对齐。
@@ -748,7 +779,17 @@ select {
 /* Dashboard: preserve card rhythm when the fixed sidebar narrows the content rail. */
 /* 原本这里有一条「≤1280px 时重点卡整行」的规则（来自 F-016/F-017 的首页三档布局），
    效果是窗口一窄重点卡就横铺整行、另两张被挤到下一行。已按需求移除：
-   概览区始终是 grid 三列一行，只在 900px 以下才改单列。 */
+   概览区始终是 grid 四列一行（重点 / 今日投递 / 本周投递 / 接下来），
+   只在 1180px 以下折成两行、900px 以下改单列。 */
+
+/* 四列在这个宽度以下会挤到"公司名只剩两三个字"，换成两行：
+   重点卡整行 → 今日 / 本周 → 日程卡整行。 */
+@media (max-width: 1180px) {
+  .dashboard-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-hero,
+  .dashboard-schedule { grid-column: span 2; }
+  .dashboard-schedule { min-height: 0; }
+}
 
 /* 两栏并排放不下时改单列，间距由 grid 的 gap 接管 */
 @media (max-width: 1120px) {
@@ -757,7 +798,8 @@ select {
 
 @media (max-width: 900px) {
   .dashboard-metrics { grid-template-columns: 1fr; }
-  .dashboard-hero { grid-column: auto; }
+  .dashboard-hero,
+  .dashboard-schedule { grid-column: auto; }
   .dashboard-stat { min-height: 124px; }
 }
 

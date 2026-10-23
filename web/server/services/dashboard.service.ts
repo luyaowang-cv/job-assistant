@@ -15,6 +15,14 @@ const DAY = 24 * 60 * 60 * 1000
 // 那不是图坏了，是这个窗口太小。
 const DAILY_WINDOW = 30
 
+// 日程卡只看「下一步日期」(Application.nextActionAt)：这是工作台里唯一由用户自己填的、
+// 带具体日期的时间点。面试时间、投递截止都还没被真正用起来，先不铺开。
+// 逾期超过两周的记录不再往首页推：那多半是办完了没回来改字段，
+// 一直挂在第一位只会把真正要做的事挤下去。
+const SCHEDULE_OVERDUE_DAYS = 14
+// 卡片只显示 3 条；多取几条是为了让「今天 N 件 / 逾期 N 条」这两个计数不至于被截断。
+const SCHEDULE_LIMIT = 20
+
 // 漏斗里"到达过某阶段"的判定，不能只看当前状态：
 // 一条投递可能进过笔试、之后被拒，当前状态已经变成 REJECTED，看快照就会漏掉它。
 // 所以要用 ApplicationEvent 的历史状态变更把"到达过"补回来。
@@ -40,6 +48,18 @@ export type FocusItem = {
   daysIdle: number
 }
 
+export type ScheduleItem = {
+  id: string
+  company: string
+  title: string
+  status: ApplicationStatus
+  statusLabel: string
+  /** 「下一步安排」的自由文本，可能没填 */
+  action: string | null
+  /** 下一步日期。date-only 字段，库里存成 UTC 零点，前端按 UTC 日历日读（见 shared/schedule.ts） */
+  at: string
+}
+
 export type DashboardSummary = {
   total: number
   active: number
@@ -55,6 +75,11 @@ export type DashboardSummary = {
     items: FocusItem[]
     totalActive: number
     idleOver14: number
+  }
+  schedule: {
+    /** 按时间升序，逾期在前 */
+    items: ScheduleItem[]
+    total: number
   }
 }
 
@@ -145,7 +170,15 @@ export async function getDashboardSummary(options: SummaryOptions): Promise<Dash
     select: { occurredAt: true },
   })
 
-  const [total, active, applied, writtenTest, interviewing, offered, appliedToday, appliedThisWeek, latestEvent, dailyEvents] = await Promise.all([
+  // 日程的取数口径：有下一步日期、没走到死胡同（挂了/放弃的不再有"下一步"）、
+  // 逾期没超过两周。排序交给数据库，逾期最早的排最前面 —— 正好也是"最该先处理"的顺序。
+  const scheduleWhere = {
+    ...base,
+    nextActionAt: { gte: new Date(options.dayStart.getTime() - SCHEDULE_OVERDUE_DAYS * DAY) },
+    status: { notIn: ['REJECTED', 'WITHDRAWN'] as ApplicationStatus[] },
+  }
+
+  const [total, active, applied, writtenTest, interviewing, offered, appliedToday, appliedThisWeek, latestEvent, dailyEvents, scheduleTotal, scheduleRows] = await Promise.all([
     prisma.application.count({ where: base }),
     prisma.application.count({ where: { ...base, status: { in: ACTIVE_STATUSES } } }),
     reachedAtLeast(APPLIED_OR_LATER),
@@ -158,6 +191,19 @@ export async function getDashboardSummary(options: SummaryOptions): Promise<Dash
     appliedSince(options.weekStart),
     prisma.applicationEvent.findFirst({ where: { application: base }, orderBy: { occurredAt: 'desc' }, select: { occurredAt: true } }),
     appliedEvents,
+    prisma.application.count({ where: scheduleWhere }),
+    prisma.application.findMany({
+      where: scheduleWhere,
+      orderBy: { nextActionAt: 'asc' },
+      take: SCHEDULE_LIMIT,
+      select: {
+        id: true,
+        status: true,
+        nextAction: true,
+        nextActionAt: true,
+        job: { select: { title: true, company: { select: { name: true } } } },
+      },
+    }),
   ])
 
   const daily = Array.from({ length: DAILY_WINDOW }, (_, index) => ({
@@ -233,6 +279,19 @@ export async function getDashboardSummary(options: SummaryOptions): Promise<Dash
       })),
       totalActive: scored.length,
       idleOver14,
+    },
+    schedule: {
+      items: scheduleRows.map(row => ({
+        id: row.id,
+        company: row.job.company.name,
+        title: row.job.title,
+        status: row.status,
+        statusLabel: APPLICATION_STATUS_LABELS[row.status],
+        action: row.nextAction,
+        // 上面 where 保证了 nextActionAt 不为空
+        at: row.nextActionAt!.toISOString(),
+      })),
+      total: scheduleTotal,
     },
   }
 }

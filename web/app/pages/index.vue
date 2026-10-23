@@ -3,6 +3,8 @@ import { ElMessage } from 'element-plus'
 
 // 状态清单 / 文案 / 配色统一来自 #shared/application-status.ts（客户端和服务端共用一份）。
 import { APPLICATION_STATUS_OPTIONS as statusOptions, type ApplicationStatus } from '#shared/application-status'
+// 日程日期怎么显示（今天/明天/逾期 N 天 + 10/24 周五）由这个纯函数统一决定，带单测。
+import { scheduleLabel } from '#shared/schedule'
 
 type ApplicationChannel = 'OFFICIAL_SITE' | 'BOSS' | 'NIUKE' | 'REFERRAL' | 'OTHER'
 
@@ -44,6 +46,16 @@ const channelLabels: Record<ApplicationChannel, string> = {
 // 用它算总数会少算（实际 110 条），所以聚合口径放在服务端。
 type FunnelStage = { key: string, label: string, hint: string, count: number }
 type FocusItem = { id: string, company: string, title: string, status: ApplicationStatus, statusLabel: string, tier: string, reason: string, daysIdle: number }
+// 日程 = 投递里的「下一步安排 + 下一步日期」。日期是 date-only，标签交给 #shared/schedule 算。
+type ScheduleItem = {
+  id: string
+  company: string
+  title: string
+  status: ApplicationStatus
+  statusLabel: string
+  action: string | null
+  at: string
+}
 type DashboardSummary = {
   total: number
   active: number
@@ -55,6 +67,7 @@ type DashboardSummary = {
     daily: Array<{ date: string, count: number }>
   }
   focus: { items: FocusItem[], totalActive: number, idleOver14: number }
+  schedule: { items: ScheduleItem[], total: number }
 }
 const summary = ref<DashboardSummary | null>(null)
 // 0→1 的动画进度，同时驱动条形宽度和数字滚动。
@@ -90,6 +103,19 @@ async function loadSummary() {
 }
 
 const focusCount = computed(() => summary.value?.focus.totalActive ?? 0)
+
+// ---- 日程 ----
+// 只露 3 条：服务端已按时间升序（逾期在最前），这一屏就是"现在最该动的事"。
+const SCHEDULE_VISIBLE = 3
+// "今天/逾期几天"必须跟浏览器本地的今天比，所以标签在客户端算、不在服务端算。
+// 注意这里是 computed 而不是模板里直接调用：summary 一变就算一次，同一行的日期文案不会各算各的。
+const scheduleAll = computed(() => (summary.value?.schedule.items ?? []).map(item => ({
+  ...item,
+  label: scheduleLabel(item.at, new Date()),
+})))
+const scheduleShown = computed(() => scheduleAll.value.slice(0, SCHEDULE_VISIBLE))
+const scheduleTodayCount = computed(() => scheduleAll.value.filter(item => item.label.dayDiff === 0).length)
+const scheduleOverdueCount = computed(() => scheduleAll.value.filter(item => item.label.dayDiff < 0).length)
 
 // 设计规范只允许"辅助理解"的动效，且不能缩放放大——条形生长和数字滚动都属于这一类。
 // index.scss 里的全局 prefers-reduced-motion 规则只能压 CSS 过渡，压不住这里用 rAF 写的动画，所以要自己判断。
@@ -204,6 +230,32 @@ onMounted(() => { void loadSummary() })
       </article>
       <article class="dashboard-card dashboard-stat"><b>{{ summary?.rhythm.appliedToday ?? 0 }}</b><span>今日投递</span><i /></article>
       <article class="dashboard-card dashboard-stat dashboard-stat--amber"><b>{{ summary?.rhythm.appliedThisWeek ?? 0 }}</b><span>本周投递</span><i /></article>
+      <!-- 日程：只按「下一步日期」排，逾期的最前面。这张卡是给"记不住"用的，
+           所以只写公司 + 具体日期 + 下一步，不再重复今日重点里的状态和停滞天数。 -->
+      <article class="dashboard-card dashboard-schedule" aria-label="接下来的日程">
+        <header class="dashboard-schedule__head">
+          <h2>
+            接下来
+            <span v-if="scheduleTodayCount" class="dashboard-schedule__pill">今天 {{ scheduleTodayCount }}</span>
+            <span v-if="scheduleOverdueCount" class="dashboard-schedule__pill dashboard-schedule__pill--overdue">逾期 {{ scheduleOverdueCount }}</span>
+          </h2>
+          <NuxtLink to="/applications" class="dashboard-schedule__more">{{ summary?.schedule.total ? `${summary.schedule.total} 条 →` : '投递看板 →' }}</NuxtLink>
+        </header>
+        <ul v-if="scheduleShown.length" class="dashboard-schedule__list">
+          <li v-for="item in scheduleShown" :key="item.id">
+            <button type="button" class="dashboard-schedule__item" :class="`is-${item.label.tone}`" @click="openDetail(item.id)">
+              <b>{{ item.company }}</b>
+              <small>{{ item.action || item.title }}</small>
+              <span class="dashboard-schedule__when">
+                <em v-if="item.label.relative">{{ item.label.relative }}</em>
+                <span>{{ item.label.date }}</span>
+              </span>
+            </button>
+          </li>
+        </ul>
+        <p v-else-if="summary" class="dashboard-empty">还没有安排下一步 —— 在投递详情里填上「下一步日期」，这里就会按时间排出来。</p>
+        <p v-else class="dashboard-empty">正在读取投递数据…</p>
+      </article>
     </section>
 
     <div class="dashboard-insight">

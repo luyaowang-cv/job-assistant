@@ -23,6 +23,7 @@
     "prepare": "nuxi prepare",
     "typecheck": "vue-tsc --noEmit",
     "test:applications": "tsx --test server/schemas/application.test.ts",
+    "test:schedule": "tsx --test shared/schedule.test.ts",
     "test:profiles": "tsx --test server/services/application-profile-resolution.test.ts",
     "test:personal-profile": "tsx --test server/schemas/personal-profile.test.ts",
     "test:settings": "tsx --test server/schemas/ai-settings.test.ts",
