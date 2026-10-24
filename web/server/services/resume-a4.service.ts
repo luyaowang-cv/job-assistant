@@ -267,8 +267,13 @@ export async function exportResumePdf(resumeId: string, versionId: string) {
   try {
     const page = await browser.newPage({ viewport: { width: 1120, height: 1580 } })
     await page.setContent(html, { waitUntil: 'load' })
-    await page.waitForFunction(() => Boolean((window as unknown as { __resumeLayout?: { ready: boolean } }).__resumeLayout?.ready))
-    const layout = await page.evaluate(() => (window as unknown as { __resumeLayout: { pageCount: number, overflow: boolean } }).__resumeLayout)
+    // 这两个回调是被 Playwright 序列化到浏览器里执行的，但类型检查发生在 Node 侧，
+    // 而服务端的 tsconfig 没有 DOM lib —— 写 window 会报 ts(2304)。
+    // 用 globalThis：在浏览器里它就是 window，在 Node 的类型体系里也是内置的。
+    // 页面里注入的那段脚本仍然是 window.__resumeLayout（见上面的 HTML 模板），
+    // 全局属性同名，两种写法读到的是同一个值。
+    await page.waitForFunction(() => Boolean((globalThis as unknown as { __resumeLayout?: { ready: boolean } }).__resumeLayout?.ready))
+    const layout = await page.evaluate(() => (globalThis as unknown as { __resumeLayout: { pageCount: number, overflow: boolean } }).__resumeLayout)
     if (layout.overflow) throw new ResumePdfError('简历超过三页或单张卡片过长，请精简后再导出。', 'RESUME_LAYOUT_OVERFLOW', 422)
     const pdf = await page.pdf({ format: 'A4', margin: { top: '0', right: '0', bottom: '0', left: '0' }, printBackground: true, preferCSSPageSize: true })
     return { pdf, pageCount: layout.pageCount }
