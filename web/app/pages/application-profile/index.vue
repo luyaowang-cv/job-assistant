@@ -2,7 +2,11 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 type Strategy = { targetLocations: string[]; expectedSalary: string; availableDate: string; recruitmentSource: string; referralCode: string }
-type Profile = { id: string; name: string; targetTags: string[]; strategy: Strategy; resumeVersionId: string | null; currentVersionId: string | null }
+type Profile = {
+  id: string; name: string; targetTags: string[]; strategy: Strategy; resumeVersionId: string | null; currentVersionId: string | null
+  /** 接口返回的是「主档案 + 本档案覆盖」合并后的结果，和插件 fill-context 拿到的 basics 同源 */
+  basics?: Record<string, unknown>
+}
 type Variant = { id: string; name: string; content: string }
 type Card = { id: string; title: string; type: string; tags: string[]; facts: Record<string, unknown>; variants: Variant[] }
 type Field = { key: string; label: string; text: string; limit: number | null }
@@ -17,6 +21,10 @@ type ResumeOption = { id: string; name: string }
  */
 function templateBlocks(): Block[] {
   return [
+    // 教育排最前：表单里它通常在基本信息之后、经历之前。教育现在只认素材卡，
+    // 所以这个模块的价值就是把教育卡挂进来（references 的 section 取模块 key，
+    // 而服务端转换只看卡片类型，所以放在哪个模块都能被识别）。
+    { key: 'education', title: '教育背景', fields: [] },
     { key: 'self', title: '自我评价', fields: [{ key: 'selfEvaluation', label: '自我评价', text: '', limit: 500 }] },
     { key: 'projects', title: '项目经历', fields: [{ key: 'project1', label: '项目经历 1', text: '', limit: 2000 }] },
     { key: 'internship', title: '实习经历', fields: [{ key: 'internship1', label: '实习经历 1', text: '', limit: 2000 }] },
@@ -63,6 +71,27 @@ const legacyCount = computed(() => {
 })
 const allFields = computed(() => blocks.value.flatMap(block => block.fields))
 const missingCount = computed(() => allFields.value.filter(field => !fieldRefs[field.key]).length)
+
+/**
+ * 这份档案会填进表单的「固定信息」。
+ *
+ * 数据取接口返回的 basics —— 它已经是「个人主档案 + 本档案覆盖」合并后的结果，
+ * 和插件 fill-context 拿到的同源，所以这里显示的就是插件实际会填的值，不是另算一份。
+ * 之前页面上完全看不到这部分：右卡只有经历模块，用户不知道插件到底会填哪个电话、哪个城市。
+ */
+const fixedInfo = computed(() => {
+  const basics = currentProfile.value?.basics ?? {}
+  const text = (key: string) => (typeof basics[key] === 'string' ? (basics[key] as string) : '').trim()
+  return [
+    { label: '姓名', value: text('fullName') },
+    { label: '手机', value: text('phone') },
+    { label: '邮箱', value: text('email') },
+    { label: '现居城市', value: text('city') },
+    { label: '政治面貌', value: text('politicalStatus') },
+    { label: '证件类型', value: text('documentType') },
+    { label: '紧急联系人', value: text('emergencyContactName') },
+  ].filter(item => item.value)
+})
 
 const typeLabels: Record<string, string> = { PROJECT: '项目经历', INTERNSHIP: '实习经历', WORK: '工作经历', CAMPUS: '校园经历', AWARD: '荣誉奖项', RESEARCH: '科研经历', CERTIFICATE: '证书', SKILL: '专业技能', SELF_EVALUATION: '自我评价', CUSTOM_ANSWER: '自定义问答' }
 const displayCardTitle = (card: Pick<Card, 'title' | 'type'>) => card.title.trim() || typeLabels[card.type] || '未命名素材'
@@ -379,6 +408,16 @@ watch([blocks, missingCount, addingBlock, pickingBlock, legacyCount], () => void
 
         <div class="workbench-surface__scroll" :class="{ 'is-top': rightEdge.top, 'is-bottom': rightEdge.bottom }">
           <div ref="rightBody" class="workbench-surface__body" @scroll="measureEdges">
+            <!-- 固定信息：不随岗位变、插件每个表单都会填，但页面上原来完全看不到 -->
+            <section v-if="fixedInfo.length" class="application-editor__fixed">
+              <div class="application-editor__fixed-head">
+                <span>固定信息<small>来自个人主档案，所有档案共用</small></span>
+                <NuxtLink to="/personal-profile">去修改</NuxtLink>
+              </div>
+              <div class="application-editor__fixed-grid">
+                <div v-for="item in fixedInfo" :key="item.label"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
+              </div>
+            </section>
             <div v-if="legacyCount" class="application-editor__banner application-editor__banner--info">
               这份档案还有 {{ legacyCount }} 项历史内容没有变成素材卡。
               <el-button text type="primary" @click="previewMigration">预览迁移</el-button>
@@ -500,6 +539,13 @@ watch([blocks, missingCount, addingBlock, pickingBlock, legacyCount], () => void
 
 .application-editor__banner { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-control); background: rgba(215,169,149,.18); font-size: 13px; }
 .application-editor__banner--info { background: rgba(122,150,137,.14); }
+/* 固定信息：只读，用比经历模块更轻的底色，避免被误认为可编辑 */
+.application-editor__fixed { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-control); background: rgba(122,150,137,.10); }
+.application-editor__fixed-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); font-size: 13px; font-weight: 650; }
+.application-editor__fixed-head small { margin-left: var(--space-2); color: var(--workbench-subtle); font-size: 12px; font-weight: 400; }
+.application-editor__fixed-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px var(--space-4); font-size: 12px; }
+.application-editor__fixed-grid span { color: var(--workbench-subtle); }
+.application-editor__fixed-grid b { margin-left: 6px; font-weight: 500; }
 
 .application-editor__block { margin-top: var(--space-6); }
 .application-editor__block:first-of-type { margin-top: var(--space-4); }

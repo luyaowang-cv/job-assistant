@@ -2,6 +2,8 @@ import { DocumentMutationType, ResumeVersionType } from '../generated/prisma/cli
 import type { Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { CompositionInput, CreateApplicationProfileVersionInput } from '../schemas/document-composition'
+import type { CommonBasics } from '../schemas/personal-profile'
+import { resolveBasics } from './application-profile-resolution'
 import { getCurrentUser } from './current-user'
 import { educationsFromReferences, resolveDocument } from './document-resolver'
 
@@ -154,12 +156,21 @@ export async function resolveApplicationProfileVersion(profileId: string, versio
     include: { composition: { include: compositionInclude } },
   })
   if (!version) return null
-  const profile = await prisma.personalProfile.findUnique({ where: { userId: user.id } })
+  // 主档案打底、这份网申档案的覆盖优先 —— 必须和 application-profile.service 里的
+  // resolveProfile() 是同一套规则。以前这里直接读主档案，档案自己的 basics 覆盖被静默丢掉，
+  // 于是"没保存过版本"和"保存过版本"两条路径给出不同的基础信息。
+  const [profile, applicationProfile] = await Promise.all([
+    prisma.personalProfile.findUnique({ where: { userId: user.id } }),
+    prisma.applicationProfile.findFirst({ where: { id: profileId, userId: user.id }, select: { basics: true } }),
+  ])
   const references = version.composition?.references ?? []
   return {
     version,
     resolved: resolveDocument({
-      basics: (profile?.basics ?? {}) as Record<string, unknown>,
+      basics: resolveBasics(
+        (profile?.basics ?? {}) as CommonBasics,
+        (applicationProfile?.basics ?? {}) as CommonBasics,
+      ) as Record<string, unknown>,
       educations: educationsFromReferences(references) ?? [],
       fieldVisibility: (version.composition?.fieldVisibility ?? {}) as Record<string, boolean>,
       references,
