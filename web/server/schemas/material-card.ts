@@ -1,11 +1,24 @@
 import { z } from 'zod'
 
-export const materialCardTypeSchema = z.enum([
-  'PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE', 'SKILL', 'SELF_EVALUATION', 'CUSTOM_ANSWER',
-])
+import { MATERIAL_CARD_TYPES, MATERIAL_TYPE_SPECS } from '#shared/material-types'
+
+// 类型清单一律从 #shared/material-types.ts 取，不在这里再抄一遍 ——
+// 那边是页面渲染用的唯一来源，这里只做校验。两边一旦各写一份，加类型时必然漏一处。
+// 数据库的 enum（prisma/schema.prisma 的 MaterialCardType）必须与它保持一致，那是另一份，
+// 因为数据库不认识 TypeScript；改这里时记得同步迁移。
+export const materialCardTypeSchema = z.enum(MATERIAL_CARD_TYPES)
+
+/** 标题是否必填也来自注册表（目前只有「自我评价」允许留空）。 */
+const TITLE_REQUIRED_TYPES = new Set<string>(MATERIAL_CARD_TYPES.filter(type => MATERIAL_TYPE_SPECS[type].titleRequired))
 
 const tagsSchema = z.array(z.string().trim().min(1).max(40)).max(20).default([])
 const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/
+/**
+ * 目前 facts 仍是「全类型通用」的校验：只检查已知键的形状，不拒绝不认识的键。
+ *
+ * 为什么不在这里按类型收紧（比如"奖项不该有 endDate"）：既有数据里可能存在当前规格之外的键，
+ * 一旦开始拒绝，用户下次编辑老卡片就会保存失败。收紧放在 P2，前提是先扫一遍存量数据的键。
+ */
 const factsSchema = z.record(z.string().max(80), z.unknown()).superRefine((facts, context) => {
   const startDate = facts.startDate
   const endDate = facts.endDate
@@ -47,7 +60,7 @@ export const createMaterialCardSchema = z.object({
   facts: factsSchema,
   variant: materialVariantInputSchema,
 }).strict().superRefine((value, context) => {
-  if (value.type !== 'SELF_EVALUATION' && !value.title) {
+  if (TITLE_REQUIRED_TYPES.has(value.type) && !value.title) {
     context.addIssue({ code: 'custom', path: ['title'], message: 'Title is required for this material type.' })
   }
 })

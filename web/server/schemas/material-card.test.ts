@@ -1,12 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+
+import { MATERIAL_CARD_TYPES, MATERIAL_TYPE_SPECS } from '#shared/material-types'
+
 import { createMaterialCardSchema, materialCardListQuerySchema, saveMaterialVariantSchema, updateMaterialCardSchema } from './material-card'
 
 test('accepts all material card types', () => {
-  for (const type of ['PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE', 'SKILL', 'SELF_EVALUATION', 'CUSTOM_ANSWER']) {
+  // 遍历注册表而不是手写清单：将来加 EDUCATION 时这条测试自动覆盖，不会因为忘记改清单而漏测。
+  for (const type of MATERIAL_CARD_TYPES) {
     assert.equal(createMaterialCardSchema.safeParse({
       type, title: '示例', tags: [], facts: {}, variant: { name: '标准版', content: '已确认事实' },
     }).success, true)
+  }
+})
+
+test('标题必填规则由注册表决定，不在校验里写死类型名', () => {
+  for (const type of MATERIAL_CARD_TYPES) {
+    const result = createMaterialCardSchema.safeParse({
+      type, title: '', tags: [], facts: {}, variant: { name: '标准版', content: '内容' },
+    })
+    assert.equal(result.success, !MATERIAL_TYPE_SPECS[type].titleRequired, `${type} 的标题必填与注册表不一致`)
   }
 })
 

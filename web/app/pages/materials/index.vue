@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+// 类型的名字、该有哪些字段、列表副标题拼什么都来自这里。页面不再自己判断「这个类型有没有时间」，
+// 只问注册表。见 web/shared/material-types.ts 的头注释。
+import { MATERIAL_TYPE_LABELS, materialListMeta, materialTypeLabel, materialTypeSpec, type MaterialFieldSpec } from '#shared/material-types'
+
 type Variant = { id: string; name: string; content: string; createdAt: string }
 type Card = { id: string; type: string; title: string; tags: string[]; facts: Record<string, unknown>; archivedAt: string | null; variants: Variant[] }
 type ListResponse = { items: Card[]; total: number; page: number; pageSize: number }
-const typeLabels: Record<string, string> = { PROJECT: '项目经历', INTERNSHIP: '实习经历', WORK: '工作经历', CAMPUS: '校园经历', AWARD: '荣誉奖项', RESEARCH: '科研经历', CERTIFICATE: '证书', SKILL: '专业技能', SELF_EVALUATION: '自我评价', CUSTOM_ANSWER: '自定义问答' }
 const cards = ref<Card[]>([])
 const selected = ref<Card | null>(null)
 const loading = ref(false)
@@ -17,24 +20,62 @@ const editingId = ref<string | null>(null)
 const form = reactive({ type: 'PROJECT', title: '', organization: '', role: '', techStackText: '', tags: [] as string[], startDate: '', endDate: '', current: false, projectUrl: '', variantName: '简短版', content: '' })
 const variant = reactive({ name: '网申版', content: '' })
 const variantNameOptions = ['简短版', '网申版', '完整版']
-const timedTypes = new Set(['PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE'])
-const detailedTypes = new Set(['PROJECT', 'INTERNSHIP', 'WORK', 'CAMPUS', 'AWARD', 'RESEARCH', 'CERTIFICATE'])
-const technicalTypes = new Set(['PROJECT', 'INTERNSHIP', 'WORK'])
-const supportsTime = (cardType: string) => timedTypes.has(cardType)
-const supportsDetails = (cardType: string) => detailedTypes.has(cardType)
-const supportsTechStack = (cardType: string) => technicalTypes.has(cardType)
-const supportsProjectUrl = (cardType: string) => cardType === 'PROJECT'
-const titleLabels: Record<string, string> = { PROJECT: '项目名称', INTERNSHIP: '公司名称', WORK: '公司名称', CAMPUS: '组织或活动名称', AWARD: '奖项名称', RESEARCH: '论文 / 科研项目名称', CERTIFICATE: '证书名称', SELF_EVALUATION: '标题（可选）' }
-const titlePlaceholders: Record<string, string> = { PROJECT: '例如：多 Agent 前端迁移系统', INTERNSHIP: '例如：搜狐', WORK: '例如：某科技公司', CAMPUS: '例如：校学生会', AWARD: '例如：全国大学生竞赛一等奖', RESEARCH: '例如：DA-PhysDiff', CERTIFICATE: '例如：软考数据库系统工程师', SELF_EVALUATION: '可留空；素材库中显示为“自我评价”' }
-const roleLabels: Record<string, string> = { PROJECT: '项目职责 / 角色', INTERNSHIP: '实习职位', WORK: '工作职位', CAMPUS: '担任角色', AWARD: '奖项等级', RESEARCH: '作者顺位 / 研究角色', CERTIFICATE: '级别 / 成绩（可选）' }
-const organizationLabels: Record<string, string> = { PROJECT: '所属组织 / 公司', INTERNSHIP: '部门 / 团队（可选）', WORK: '部门 / 团队（可选）', CAMPUS: '学校 / 社团（可选）', AWARD: '关联学校 / 颁发机构（可选）', RESEARCH: '关联学校 / 实验室（可选）', CERTIFICATE: '关联学校 / 颁发机构（可选）' }
-const displayCardTitle = (card: Pick<Card, 'title' | 'type'>) => card.title.trim() || typeLabels[card.type] || '未命名素材'
-function cardPeriod(card: Card) {
-  return [card.facts.startDate, card.facts.endDate].filter(value => typeof value === 'string' && value).join(' — ')
+
+/**
+ * 当前类型该长什么样。整页只有这一个判断入口——下面所有「有没有这个字段」都问它，
+ * 不再按类型名写 if。
+ */
+const spec = computed(() => materialTypeSpec(form.type))
+
+/**
+ * 注册表的字段 key → 表单字段。两者形状本来就不一样：表单要能装下没填完的半成品
+ * （技术栈先是一串带逗号的文字），facts 要的是干净的 string[]。这层翻译只在提交时做。
+ */
+const FORM_KEY: Record<string, 'role' | 'organization' | 'projectUrl' | 'techStackText' | 'startDate' | 'endDate'> = {
+  role: 'role',
+  organization: 'organization',
+  projectUrl: 'projectUrl',
+  techStack: 'techStackText',
+  startDate: 'startDate',
+  endDate: 'endDate',
 }
-function cardMeta(card: Card) {
-  return [card.facts.role, card.facts.organization, cardPeriod(card)].filter(value => typeof value === 'string' && value).join(' · ')
+
+function fieldValue(field: MaterialFieldSpec): string {
+  // 必须先把 key 取成局部变量再索引：TS 不会把 `FORM_KEY[field.key]` 第一次查表的结果
+  // 带进第二次查表，那边仍然可能是 undefined。
+  const key = FORM_KEY[field.key]
+  if (!key) return ''
+  const value = form[key]
+  return typeof value === 'string' ? value : ''
 }
+function setFieldValue(field: MaterialFieldSpec, value: string) {
+  const key = FORM_KEY[field.key]
+  if (key) (form as Record<string, unknown>)[key] = value
+}
+
+/**
+ * 把字段排成行：相邻的两个 text 字段并排（沿用原来的两列布局），其余各占一行。
+ * 顺序完全由注册表的 fields 决定，这里不做任何按类型的判断。
+ */
+const fieldRows = computed(() => {
+  const rows: MaterialFieldSpec[][] = []
+  for (const field of spec.value?.fields ?? []) {
+    const previous = rows[rows.length - 1]
+    if (field.kind === 'text' && previous && previous.length === 1 && previous[0]?.kind === 'text') previous.push(field)
+    else rows.push([field])
+  }
+  return rows
+})
+
+/** 技术栈是整行输入框；其余单字段行沿用原来的 dialog-grid 列宽。 */
+function rowClass(row: MaterialFieldSpec[]) {
+  if (row[0]?.kind === 'techList') return 'wide-grid'
+  if (row[0]?.kind === 'monthRange') return 'dialog-grid time-grid'
+  return 'dialog-grid'
+}
+
+const displayCardTitle = (card: Pick<Card, 'title' | 'type'>) => card.title.trim() || materialTypeLabel(card.type) || '未命名素材'
+const cardMeta = (card: Card) => materialListMeta(card.type, card.facts)
 
 async function load() {
   loading.value = true
@@ -67,21 +108,37 @@ function beginEdit(card: Card) {
   })
   editorOpen.value = true
 }
+/**
+ * 表单状态 → facts。写哪些键、写成什么形状，全由注册表的字段列表决定，这里不出现任何类型名。
+ * 空值一律不写，库里不留一堆空字符串。
+ */
+function buildFacts(): Record<string, unknown> {
+  const facts: Record<string, unknown> = {}
+  for (const field of spec.value?.fields ?? []) {
+    if (field.kind === 'monthRange') {
+      if (form.startDate) facts[field.key] = form.startDate
+      const endDate = form.current ? '至今' : form.endDate
+      if (endDate) facts.endDate = endDate
+      continue
+    }
+    if (field.kind === 'techList') {
+      const list = form.techStackText.split(/[,，/]/).map(value => value.trim()).filter(Boolean)
+      if (list.length) facts[field.key] = list
+      continue
+    }
+    const value = fieldValue(field).trim()
+    if (value) facts[field.key] = value
+  }
+  return facts
+}
 async function createCard() {
   const title = form.title.trim()
-  if (form.type !== 'SELF_EVALUATION' && !title) {
+  // 标题是否必填也来自注册表；拿不到规格时按必填处理，宁可多问一句。
+  if (!title && spec.value?.titleRequired !== false) {
     ElMessage.warning('请填写素材标题。')
     return
   }
-  const techStack = form.techStackText.split(/[,，/]/).map(value => value.trim()).filter(Boolean)
-  const facts = Object.fromEntries([
-    ['organization', supportsDetails(form.type) ? form.organization.trim() : ''],
-    ['role', supportsDetails(form.type) ? form.role.trim() : ''],
-    ['projectUrl', supportsProjectUrl(form.type) ? form.projectUrl.trim() : ''],
-    ['techStack', supportsTechStack(form.type) && techStack.length ? techStack : undefined],
-    ['startDate', supportsTime(form.type) ? form.startDate : ''],
-    ['endDate', supportsTime(form.type) ? (form.current ? '至今' : form.endDate) : ''],
-  ].filter(([, value]) => value !== '' && value !== undefined))
+  const facts = buildFacts()
   saving.value = true
   try {
     const wasEditing = Boolean(editingId.value)
@@ -145,20 +202,20 @@ onMounted(() => void load())
       <!-- 一行：搜索 + 类型 + 新建素材。标题和说明文案按需求去掉，页面靠侧边栏告知在哪里 -->
       <header class="material-surface__header material-toolbar">
         <el-input v-model="search" clearable placeholder="搜索标题或文案" />
-        <el-select v-model="type" clearable placeholder="全部类型"><el-option v-for="(label, key) in typeLabels" :key="key" :label="label" :value="key" /></el-select>
+        <el-select v-model="type" clearable placeholder="全部类型"><el-option v-for="(label, key) in MATERIAL_TYPE_LABELS" :key="key" :label="label" :value="key" /></el-select>
         <el-button type="primary" class="material-library__create" @click="beginCreate">＋ 新建素材</el-button>
       </header>
       <div v-loading="loading" class="material-layout">
         <div class="card-list" role="list" aria-label="素材卡片">
           <button v-for="card in cards" :key="card.id" class="material-card-row" :class="{ active: selected?.id === card.id }" type="button" @click="selected = card">
-            <span class="material-card-row__type">{{ typeLabels[card.type] }}</span><strong>{{ displayCardTitle(card) }}</strong>
+            <span class="material-card-row__type">{{ materialTypeLabel(card.type) }}</span><strong>{{ displayCardTitle(card) }}</strong>
             <span class="material-card-row__meta">{{ [cardMeta(card), card.tags.join(' · ')].filter(Boolean).join(' · ') || '未填写补充信息' }}</span>
           </button>
           <el-empty v-if="!loading && !cards.length" description="没有符合条件的素材" />
         </div>
         <aside class="card-detail" aria-live="polite">
           <template v-if="selected">
-            <div class="card-detail__heading"><div class="card-detail__title"><span>{{ typeLabels[selected.type] }}</span><h2>{{ displayCardTitle(selected) }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><div class="card-detail__actions"><el-button plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div></div>
+            <div class="card-detail__heading"><div class="card-detail__title"><span>{{ materialTypeLabel(selected.type) }}</span><h2>{{ displayCardTitle(selected) }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><div class="card-detail__actions"><el-button plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div></div>
             <div class="variant-history"><article v-for="item in selected.variants" :key="item.id"><b>{{ item.name }}</b><small>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small><p>{{ item.content }}</p></article></div>
             <el-form label-position="top">
               <el-form-item label="新增或覆盖文案版本"><el-select v-model="variant.name" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
@@ -173,31 +230,31 @@ onMounted(() => void load())
     <el-dialog v-model="editorOpen" :title="editingId ? '编辑素材卡片' : '新建素材卡片'" width="min(720px, 92vw)">
       <el-form label-position="top">
         <div class="dialog-grid">
-          <el-form-item label="经历类型"><el-select v-model="form.type" :disabled="!!editingId"><el-option v-for="(label, key) in typeLabels" :key="key" :label="label" :value="key" /></el-select></el-form-item>
-          <el-form-item :label="titleLabels[form.type] || '标题'"><el-input v-model="form.title" :placeholder="titlePlaceholders[form.type] || '输入素材标题'" /></el-form-item>
+          <el-form-item label="经历类型"><el-select v-model="form.type" :disabled="!!editingId"><el-option v-for="(label, key) in MATERIAL_TYPE_LABELS" :key="key" :label="label" :value="key" /></el-select></el-form-item>
+          <el-form-item :label="spec?.titleLabel ?? '标题'"><el-input v-model="form.title" :placeholder="spec?.titlePlaceholder ?? '输入素材标题'" /></el-form-item>
         </div>
-        <div v-if="supportsDetails(form.type)" class="dialog-grid detail-grid">
-          <el-form-item :label="roleLabels[form.type]"><el-input v-model="form.role" placeholder="显示在卡片标题右侧" /></el-form-item>
-          <el-form-item :label="organizationLabels[form.type]"><el-input v-model="form.organization" /></el-form-item>
+        <!-- 字段全部来自注册表：有几行、每行放什么控件，由 spec.fields 的顺序和 kind 决定。
+             这里不再出现任何按类型名的判断。 -->
+        <div v-for="(row, rowIndex) in fieldRows" :key="rowIndex" :class="rowClass(row)">
+          <template v-if="row[0]?.kind === 'monthRange'">
+            <el-form-item label="开始时间"><el-date-picker v-model="form.startDate" type="month" value-format="YYYY-MM" format="YYYY-MM" placeholder="选择月份" /></el-form-item>
+            <el-form-item label="结束时间">
+              <div class="end-date-control"><el-date-picker v-model="form.endDate" type="month" value-format="YYYY-MM" format="YYYY-MM" placeholder="选择月份" :disabled="form.current" /><el-checkbox v-model="form.current">至今</el-checkbox></div>
+            </el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item v-for="field in row" :key="field.key" :label="field.label">
+              <el-input :model-value="fieldValue(field)" :placeholder="field.placeholder" @update:model-value="value => setFieldValue(field, value)" />
+              <p v-if="field.help" class="form-help">{{ field.help }}</p>
+            </el-form-item>
+          </template>
         </div>
-        <div v-if="supportsProjectUrl(form.type)" class="dialog-grid detail-grid"><el-form-item label="项目链接"><el-input v-model="form.projectUrl" placeholder="https://github.com/... 或项目主页（可选）" /></el-form-item></div>
-          <div v-if="supportsTime(form.type)" class="dialog-grid time-grid">
-          <el-form-item label="开始时间"><el-date-picker v-model="form.startDate" type="month" value-format="YYYY-MM" format="YYYY-MM" placeholder="选择月份" /></el-form-item>
-          <el-form-item label="结束时间">
-            <div class="end-date-control"><el-date-picker v-model="form.endDate" type="month" value-format="YYYY-MM" format="YYYY-MM" placeholder="选择月份" :disabled="form.current" /><el-checkbox v-model="form.current">至今</el-checkbox></div>
-          </el-form-item>
-        </div>
-        <el-form-item v-if="supportsTechStack(form.type)" label="技术栈">
-          <el-input v-model="form.techStackText" placeholder="例如：Claude API / TypeScript / Vue 3 / LangChain" />
-          <p class="form-help">使用斜杠、中文逗号或英文逗号分隔；技术栈会直接显示在简历卡片中。</p>
-        </el-form-item>
         <el-form-item label="标签（可选）">
           <el-select v-model="form.tags" multiple filterable allow-create default-first-option placeholder="输入后按回车，例如：前端、Vue、数据分析" />
           <p class="form-help">标签只用于搜索素材、匹配岗位和查找受影响的简历，不会显示在简历正文中。</p>
         </el-form-item>
         <div class="dialog-grid">
           <el-form-item v-if="!editingId" label="版本名称"><el-select v-model="form.variantName" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
-          <div v-if="!editingId" class="facts-note"><b>结构化信息由系统保存</b><span>角色、组织、时间和技术栈会跟随卡片进入简历或网申版本，不需要填写 JSON。</span></div>
         </div>
         <el-form-item v-if="!editingId" label="成果要点"><el-input v-model="form.content" type="textarea" :rows="7" placeholder="每行写一个重点；可用“架构设计：……”这样的格式，冒号前会自动加粗。" /></el-form-item>
       </el-form>
@@ -236,7 +293,9 @@ onMounted(() => void load())
 .card-list::-webkit-scrollbar-thumb,.card-detail::-webkit-scrollbar-thumb{border-radius:4px;background:rgba(116,132,124,.28)}
 /* 用 grid + align-content:start，而不是 flex 列：flex 项默认会收缩，
    卡片会被压扁去适应框高，而不是让框滚起来。 */
-.card-list{display:grid;align-content:start;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}.time-grid{grid-template-columns:1fr 1fr}.time-grid :deep(.el-date-editor){width:100%}.end-date-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;width:100%}.form-help{width:100%;margin:7px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5}.facts-note{align-self:start;display:grid;gap:4px;margin-top:30px;padding:10px 12px;border-left:3px solid var(--el-color-primary);background:var(--el-color-primary-light-9);color:var(--el-text-color-regular);font-size:12px}.facts-note b{font-size:13px;color:var(--el-text-color-primary)}
+.card-list{display:grid;align-content:start;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}
+/* 单字段整行的行（技术栈这类）：原来它不在 grid 里、天然满宽，这里显式写成单列保持一致 */
+.wide-grid{display:grid;grid-template-columns:1fr;gap:12px}.time-grid{grid-template-columns:1fr 1fr}.time-grid :deep(.el-date-editor){width:100%}.end-date-control{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;width:100%}.form-help{width:100%;margin:7px 0 0;color:var(--el-text-color-secondary);font-size:12px;line-height:1.5}.facts-note{align-self:start;display:grid;gap:4px;margin-top:30px;padding:10px 12px;border-left:3px solid var(--el-color-primary);background:var(--el-color-primary-light-9);color:var(--el-text-color-regular);font-size:12px}.facts-note b{font-size:13px;color:var(--el-text-color-primary)}
 /* 单列之后就没有"和侧边栏并排"这回事了，解除锁高：回到普通文档流，页面整体滚。
    这里的高度/内边距覆盖要压过全局的 .page-rail.workbench-window——scoped 会给选择器
    加上 [data-v-x]，所以下面这个选择器比全局那条更具体，不受样式注入顺序影响。 */

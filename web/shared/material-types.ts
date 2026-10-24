@@ -1,0 +1,215 @@
+// 素材卡片的类型定义：唯一出处。
+//
+// 同一份「类型知识」原来散在七处：materials/index.vue 里的 timedTypes、detailedTypes、
+// technicalTypes、titleLabels、titlePlaceholders、roleLabels、organizationLabels，
+// 外加服务端一份不分类型的 facts 校验。加一个类型要改七到九遍，漏一处就是
+// 「界面上有输入框但存不进去」或者「存进去了但列表不显示」。
+//
+// 这个文件只回答三个问题：这个类型叫什么、编辑时该出现哪些字段、列表行副标题拼什么。
+// 它**不校验**（那是 server/schemas/material-card.ts 的事），也**不渲染**（那是页面的事）。
+// 两边都从这里取，所以判断标准很简单：模板里一旦出现 `if (type === 'AWARD')`，说明知识放错层了。
+//
+// 纯 TS，不能 import Vue 也不能 import prisma —— 客户端（Vite）、服务端（Nitro）、裸 tsx
+// 三种加载器都要能解析它。写法与 shared/application-status.ts 一致。
+
+/** 类型的展示顺序，也是下拉框里的顺序。新增类型在这里加，服务端的 zod 枚举从它推。 */
+export const MATERIAL_CARD_TYPES = [
+  'PROJECT',
+  'INTERNSHIP',
+  'WORK',
+  'CAMPUS',
+  'AWARD',
+  'RESEARCH',
+  'CERTIFICATE',
+  'SKILL',
+  'SELF_EVALUATION',
+  'CUSTOM_ANSWER',
+] as const
+
+export type MaterialCardType = (typeof MATERIAL_CARD_TYPES)[number]
+
+/**
+ * 字段的控件种类。它是「渲染指令」，不是「数据类型」——
+ * 同一个 kind 在页面上可能落到不同的 Element Plus 组件。
+ */
+export type MaterialFieldKind =
+  /** 单行文本。相邻的 text 字段会在弹窗里两两并排。 */
+  | 'text'
+  /** 起止月份 + 「至今」勾选框。主键是 startDate，结束时间写 endDate，进行中写 '至今'。 */
+  | 'monthRange'
+  /** 一串标签，页面里是逗号/斜杠分隔的字符串，facts 里是 string[]。 */
+  | 'techList'
+  /** 链接。 */
+  | 'url'
+
+export type MaterialFieldSpec = {
+  /** 写进 facts 的键名。改这个键名等于改插件，见 docs 里的映射说明。 */
+  key: string
+  label: string
+  kind: MaterialFieldKind
+  placeholder?: string
+  /** 字段下方的说明文字。 */
+  help?: string
+}
+
+export type MaterialTypeSpec = {
+  /** 下拉框与卡片类型角标上的名字。 */
+  label: string
+  /** 标题输入框的标签。不同类型叫法不同：项目名、公司名、论文名…… */
+  titleLabel: string
+  titlePlaceholder: string
+  /** 只有自我评价允许不写标题。服务端 createMaterialCardSchema 有一致的规则。 */
+  titleRequired: boolean
+  /** 编辑弹窗里的字段，数组顺序就是渲染顺序。 */
+  fields: MaterialFieldSpec[]
+  /**
+   * 列表行副标题取哪几个键拼。
+   * 特殊值 `period` 是派生出来的「起 — 止」，不是 facts 里的键。
+   */
+  listMeta: string[]
+}
+
+// 所有经历类共用的三个字段。抽出来是为了「奖项只有单月时间」这类差异在 P2 更容易改——
+// 到时候只改某一个类型的那一段，不动其他类型。
+const role = (label: string): MaterialFieldSpec => ({ key: 'role', label, kind: 'text', placeholder: '显示在卡片标题右侧' })
+const organization = (label: string): MaterialFieldSpec => ({ key: 'organization', label, kind: 'text' })
+const period = (): MaterialFieldSpec => ({ key: 'startDate', label: '起止时间', kind: 'monthRange' })
+const techStack = (): MaterialFieldSpec => ({
+  key: 'techStack',
+  label: '技术栈',
+  kind: 'techList',
+  placeholder: '例如：Claude API / TypeScript / Vue 3 / LangChain',
+  help: '使用斜杠、中文逗号或英文逗号分隔；技术栈会直接显示在简历卡片中。',
+})
+
+/** 经历类类型共用的列表副标题：角色 · 组织 · 时间。 */
+const EXPERIENCE_META = ['role', 'organization', 'period']
+
+export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
+  PROJECT: {
+    label: '项目经历',
+    titleLabel: '项目名称',
+    titlePlaceholder: '例如：多 Agent 前端迁移系统',
+    titleRequired: true,
+    fields: [
+      role('项目职责 / 角色'),
+      organization('所属组织 / 公司'),
+      { key: 'projectUrl', label: '项目链接', kind: 'url', placeholder: 'https://github.com/... 或项目主页（可选）' },
+      period(),
+      techStack(),
+    ],
+    listMeta: EXPERIENCE_META,
+  },
+  INTERNSHIP: {
+    label: '实习经历',
+    titleLabel: '公司名称',
+    titlePlaceholder: '例如：搜狐',
+    titleRequired: true,
+    fields: [role('实习职位'), organization('部门 / 团队（可选）'), period(), techStack()],
+    listMeta: EXPERIENCE_META,
+  },
+  WORK: {
+    label: '工作经历',
+    titleLabel: '公司名称',
+    titlePlaceholder: '例如：某科技公司',
+    titleRequired: true,
+    fields: [role('工作职位'), organization('部门 / 团队（可选）'), period(), techStack()],
+    listMeta: EXPERIENCE_META,
+  },
+  CAMPUS: {
+    label: '校园经历',
+    titleLabel: '组织或活动名称',
+    titlePlaceholder: '例如：校学生会',
+    titleRequired: true,
+    fields: [role('担任角色'), organization('学校 / 社团（可选）'), period()],
+    listMeta: EXPERIENCE_META,
+  },
+  AWARD: {
+    label: '荣誉奖项',
+    titleLabel: '奖项名称',
+    titlePlaceholder: '例如：全国大学生竞赛一等奖',
+    titleRequired: true,
+    // 注意：奖项本来只有一个获奖月份，现在和经历类共用 monthRange（两个日期）。
+    // 这是已知的错，P2 才改；P1 是纯重构，行为必须保持原样。
+    fields: [role('奖项等级'), organization('关联学校 / 颁发机构（可选）'), period()],
+    listMeta: EXPERIENCE_META,
+  },
+  RESEARCH: {
+    label: '科研经历',
+    titleLabel: '论文 / 科研项目名称',
+    titlePlaceholder: '例如：DA-PhysDiff',
+    titleRequired: true,
+    fields: [role('作者顺位 / 研究角色'), organization('关联学校 / 实验室（可选）'), period()],
+    listMeta: EXPERIENCE_META,
+  },
+  CERTIFICATE: {
+    label: '证书',
+    titleLabel: '证书名称',
+    titlePlaceholder: '例如：软考数据库系统工程师',
+    titleRequired: true,
+    fields: [role('级别 / 成绩（可选）'), organization('关联学校 / 颁发机构（可选）'), period()],
+    listMeta: EXPERIENCE_META,
+  },
+  SKILL: {
+    label: '专业技能',
+    titleLabel: '标题',
+    titlePlaceholder: '输入素材标题',
+    titleRequired: true,
+    // 现在技能卡除了标题没有别的字段，所以列表行只会显示标题。
+    // P2 会补「熟练程度」，这里留空是照抄现状。
+    fields: [],
+    listMeta: ['role', 'organization', 'period'],
+  },
+  SELF_EVALUATION: {
+    label: '自我评价',
+    titleLabel: '标题（可选）',
+    titlePlaceholder: '可留空；素材库中显示为“自我评价”',
+    titleRequired: false,
+    fields: [],
+    listMeta: ['role', 'organization', 'period'],
+  },
+  CUSTOM_ANSWER: {
+    label: '自定义问答',
+    titleLabel: '标题',
+    titlePlaceholder: '输入素材标题',
+    titleRequired: true,
+    fields: [],
+    listMeta: ['role', 'organization', 'period'],
+  },
+}
+
+/** 推导出来的类型 → 中文名。只在这里生成，别再手写第二份。 */
+export const MATERIAL_TYPE_LABELS = Object.fromEntries(
+  MATERIAL_CARD_TYPES.map(type => [type, MATERIAL_TYPE_SPECS[type].label]),
+) as Record<MaterialCardType, string>
+
+/** 拿不到就返回 undefined，由调用方决定兜底文案——不在这一层假装知道。 */
+export function materialTypeSpec(type: string): MaterialTypeSpec | undefined {
+  return MATERIAL_TYPE_SPECS[type as MaterialCardType]
+}
+
+export function materialTypeLabel(type: string): string {
+  return materialTypeSpec(type)?.label ?? type
+}
+
+/**
+ * 起止时间那一行：`2024-09 — 2025-03`，只有起始时就是 `2024-09`。
+ * 空值一律跳过，不留下孤零零的分隔符。
+ */
+export function materialPeriod(facts: Record<string, unknown>): string {
+  return [facts.startDate, facts.endDate]
+    .filter((value): value is string => typeof value === 'string' && value !== '')
+    .join(' — ')
+}
+
+/**
+ * 列表行副标题：按类型的 listMeta 取键，跳过空值。
+ * `period` 是派生键，其余当 facts 的普通键读。
+ */
+export function materialListMeta(type: string, facts: Record<string, unknown>): string {
+  const keys = materialTypeSpec(type)?.listMeta ?? []
+  return keys
+    .map(key => (key === 'period' ? materialPeriod(facts) : facts[key]))
+    .filter((value): value is string => typeof value === 'string' && value !== '')
+    .join(' · ')
+}
