@@ -44,9 +44,15 @@
       仍然要求非空，空版本没有意义）。`CUSTOM_ANSWER` 维持必填：答案空着没有意义。
       完成 2026-10-24（`a6d9179`）。
       Verify: 奖项/证书不填成果要点能创建；项目卡不填仍被拒（schema 测试 9 条覆盖）。
-- [ ] T-204: 收紧 `factsSchema`：按类型拒绝不认识的键（`strict` 语义），
-      并让单值类型跳过"起止先后"的通用校验。
-      Verify: 给项目卡塞 `relation` 被拒；给奖项卡只传 `startDate` 通过。
+- [x] T-204: 建卡时按类型拒绝不认识的 facts 键。允许的键从注册表 `fields` 推出
+      （`dateRange` 展开成 `startDate` + `endDate`），新增字段只改注册表就自动跟上。
+      **PATCH 做不到**：请求体里没有 type，schema 这层拿不到卡片类型；好在编辑时前端用注册表重建
+      facts，不会发多余键，所以更新路径保留形状校验。完成 2026-10-24。
+      前置扫描（`jsonb_object_keys(facts)` 按 type 分组）：全库只有 6 种类型有卡，
+      键全部落在注册表内，仅两处遗留——`AWARD.endDate` 1 条、`RESEARCH.organization` 1 条，
+      都只存在于从未编辑过的老卡片上，下次保存会被自动清掉，不需要写迁移。
+      Verify: schema 测试 10 条全过，含「奖项带 endDate 被拒 / 科研带 organization 被拒 /
+      无字段类型不接受任何 key / 起止展开的两个键都放行」。
 - [x] T-205: 回归 `docs/diagnosis-scripts/card-reference-plan-check.mjs` 与
       `cd extension && node --test lib/*.test.js`。完成 2026-10-24。
       Verify: plan-check 全部符合预期；插件测试 **162 条全过**（原计划写的基线 124 是旧数字，

@@ -121,6 +121,8 @@ function describeIssue(issue: unknown): { key: string, text: string } {
   if (path === 'variant.name') return { key: 'variantName', text: '版本名称不能为空' }
   if (path.startsWith('facts.')) {
     const key = path.slice('facts.'.length)
+    // 服务端按类型白名单拒绝的键（正常流程不会出现，前端只发注册表里的字段）
+    if (/unknown fact key/i.test(rawMessage)) return { key: '', text: `这个类型不支持字段「${key}」` }
     if (key === 'endDate' && /earlier/i.test(rawMessage)) return { key, text: '结束时间不能早于开始时间' }
     if (key === 'startDate' || key === 'endDate') return { key, text: `${key === 'startDate' ? '开始时间' : '结束时间'}格式不对，应为 2025-06-15 这样的年月日` }
     const label = spec.value?.fields.find(field => field.key === key)?.label ?? key

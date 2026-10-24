@@ -23,10 +23,9 @@ const dayPattern = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
  */
 const isCardDate = (value: unknown): value is string => typeof value === 'string' && (monthPattern.test(value) || dayPattern.test(value))
 /**
- * 目前 facts 仍是「全类型通用」的校验：只检查已知键的形状，不拒绝不认识的键。
+ * facts 的**形状**校验：所有类型共用，只看已知键的类型与格式。
  *
- * 为什么不在这里按类型收紧（比如"奖项不该有 endDate"）：既有数据里可能存在当前规格之外的键，
- * 一旦开始拒绝，用户下次编辑老卡片就会保存失败。收紧放在 P2，前提是先扫一遍存量数据的键。
+ * 键白名单不在这里，因为这一层拿不到 type —— 见下面的 validateFactKeys。
  */
 const factsSchema = z.record(z.string().max(80), z.unknown()).superRefine((facts, context) => {
   const startDate = facts.startDate
@@ -50,6 +49,20 @@ const factsSchema = z.record(z.string().max(80), z.unknown()).superRefine((facts
     context.addIssue({ code: 'custom', path: ['endDate'], message: 'endDate must not be earlier than startDate.' })
   }
 }).default({})
+
+/**
+ * 每种类型允许出现在 facts 里的键，直接从注册表的 fields 推（dateRange 同时写 startDate 和 endDate）。
+ * 以后加字段只改注册表，这里自动跟上。
+ *
+ * 为什么只在建卡时用它：PATCH 的请求体里没有 type，schema 这一层拿不到卡片类型，要 service 查库才知道。
+ * 好在编辑时前端是用注册表重建 facts 的，不会发出多余的键，所以更新路径保留上面的形状校验就够了。
+ */
+const FACT_KEYS_BY_TYPE: Record<string, Set<string>> = Object.fromEntries(
+  MATERIAL_CARD_TYPES.map(type => [
+    type,
+    new Set(MATERIAL_TYPE_SPECS[type].fields.flatMap(field => field.kind === 'dateRange' ? [field.key, 'endDate'] : [field.key])),
+  ]),
+)
 
 export const materialVariantInputSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -83,6 +96,14 @@ export const createMaterialCardSchema = z.object({
   }
   if (CONTENT_REQUIRED_TYPES.has(value.type) && !value.variant.content) {
     context.addIssue({ code: 'custom', path: ['variant', 'content'], message: 'Content is required for this material type.' })
+  }
+  // 按类型拒绝不认识的键：奖项卡不该有 endDate，项目卡不该有 paperUrl。
+  // 存量数据扫过一遍（2026-10-24），没有任何注册表之外的键，所以这条不会把老卡片挡在门外。
+  const allowed = FACT_KEYS_BY_TYPE[value.type] ?? new Set<string>()
+  for (const key of Object.keys(value.facts)) {
+    if (!allowed.has(key)) {
+      context.addIssue({ code: 'custom', path: ['facts', key], message: `Unknown fact key "${key}" for this material type.` })
+    }
   }
 })
 

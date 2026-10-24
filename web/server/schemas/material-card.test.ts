@@ -74,6 +74,20 @@ test('奖项与证书的成果要点可空，其余类型仍必填', () => {
   assert.equal(saveMaterialVariantSchema.safeParse({ name: '网申版', content: '' }).success, false)
 })
 
+test('建卡时按类型拒绝 facts 里不认识的键', () => {
+  const card = (type: string, facts: Record<string, unknown>) => ({ type, title: '示例', tags: [], facts, variant: { name: '标准版', content: '内容' } })
+  // 奖项卡只有时间点，不该带结束时间（存量里那 1 条 endDate 是单值化之前的遗留，编辑保存时会被清掉）
+  assert.equal(createMaterialCardSchema.safeParse(card('AWARD', { role: '国家一等奖', startDate: '2024-09', endDate: '2024-09' })).success, false)
+  assert.equal(createMaterialCardSchema.safeParse(card('AWARD', { role: '国家一等奖', startDate: '2024-09' })).success, true)
+  // 项目卡不该有论文链接；科研卡不该再有关联机构（该字段已从注册表移除）
+  assert.equal(createMaterialCardSchema.safeParse(card('PROJECT', { paperUrl: 'https://example.com' })).success, false)
+  assert.equal(createMaterialCardSchema.safeParse(card('RESEARCH', { organization: '某实验室' })).success, false)
+  // 起止区间展开成两个键，两个都要放过
+  assert.equal(createMaterialCardSchema.safeParse(card('PROJECT', { role: '负责人', startDate: '2025-01-01', endDate: '至今', techStack: ['Vue'], projectUrl: 'https://example.com' })).success, true)
+  // 无字段的类型不接受任何 key
+  assert.equal(createMaterialCardSchema.safeParse(card('SELF_EVALUATION', { role: '不该有' })).success, false)
+})
+
 test('normalizes list query and enforces page limits', () => {
   const parsed = materialCardListQuerySchema.parse({ page: '2', pageSize: '50', tags: '前端,校招', includeArchived: 'true' })
   assert.deepEqual(parsed.tags, ['前端', '校招'])
