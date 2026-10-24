@@ -40,39 +40,35 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 
 ### 现在：推送即部署（2026-10-24 起）
 
-`git push origin main` 之后不用再做任何事。`.github/workflows/deploy.yml` 有两个 job：
+`git push origin main` 之后不用再做任何事，两端各做一半：
 
-1. `build`：和以前一样构建镜像推到 ghcr（实测约 2 分钟）；
-2. `deploy`：构建成功后用受限 SSH key 进服务器跑 `/root/deploy.sh`，也就是 `git pull --ff-only` + `compose pull web` + `up -d`，最后从 GitHub 的 runner 对 `https://offerscoming.cn/` 做一次健康检查（200/204/302，最多重试 60 秒）。
+1. GitHub Actions 只干一件事：构建镜像推到 ghcr（实测约 2 分钟，只有 `build` 这一个 job）；
+2. 服务器上的 `/root/watch-deploy.sh` 每 2 分钟跑一次（crontab），拿 `ghcr.io/luyaowang-cv/job-assistant-web:latest` 的镜像 ID 和本地比，**变了才** `git pull --ff-only` + `compose up -d`。
 
-**一次性配置**（已经配过就跳过）。**密钥在服务器上生成、私钥用 base64 传**——多行 PEM 在终端和剪贴板里复制太容易丢换行（第一次配就是这么失败的），一行 base64 不会。
+所以从 push 到上线大约 1~3 分钟。看日志：
 
 ```bash
-# ① 在服务器上跑：生成专用 key、把自己装进 authorized_keys 并限制成只能跑部署脚本
-rm -f /root/gha_deploy /root/gha_deploy.pub
-ssh-keygen -t ed25519 -f /root/gha_deploy -N '' -C gha-deploy -q
-sed -i '/gha-deploy/d' /root/.ssh/authorized_keys
-printf 'restrict,command=/root/deploy.sh %s\n' "$(cat /root/gha_deploy.pub)" >> /root/.ssh/authorized_keys
-chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
-echo "=== 下面这一整行（只有一行）复制走，粘进 DEPLOY_SSH_KEY ==="
-base64 -w0 /root/gha_deploy; echo
-
-# ② 部署脚本
-scp scripts/deploy-remote.sh root@43.108.107.79:/root/deploy.sh   # 本机执行
-ssh root@43.108.107.79 'chmod +x /root/deploy.sh'
+tail -f /var/log/job-assistant-deploy.log
 ```
 
-② 里的 `scripts/deploy-remote.sh` 是仓库里的副本，服务器上跑的是 `/root/deploy.sh`，改了要重新拷一次。
+镜像没变的轮次什么都不打印，这是正常的。
 
-然后在 GitHub 仓库 → Settings → Secrets and variables → Actions 加三个 secret：`DEPLOY_SSH_KEY`（① 打出来的那行 base64）、`DEPLOY_HOST`（`43.108.107.79`）、`DEPLOY_USER`（`root`）。secret 保存后不可回读，改就是删掉重加。
+**一次性安装**（已经装过就跳过）：
 
-workflow 同时兼容两种格式：内容是 base64 就解码，是完整 PEM 就直接用；解出来不是私钥会在那一步直接报错，不会拖到 ssh 变成一句看不懂的 `Permission denied`。
+```bash
+# 本机，仓库根目录
+scp scripts/watch-deploy.sh root@43.108.107.79:/root/watch-deploy.sh
+ssh root@43.108.107.79 'chmod +x /root/watch-deploy.sh'
 
-**secret 没配齐之前**，`deploy` job 会打一条 `::warning::` 然后跳过，这次运行仍然是绿的——也就是说代码推上去了、镜像也构建了，但不会自动上线，得手动部署。配齐之后那条 warning 就不该再出现，所以哪天它突然冒出来，多半是 secret 被删了。
+# 装 cron：每 2 分钟一次，flock 防止上一轮没跑完又起一轮
+ssh root@43.108.107.79 "(crontab -l 2>/dev/null; echo '*/2 * * * * flock -n /tmp/job-deploy.lock /root/watch-deploy.sh >> /var/log/job-assistant-deploy.log 2>&1') | crontab -"
+```
 
-**带数据库迁移的发布会自动停住**：`deploy` job 会先看这次推送有没有动 `web/prisma/migrations/`，动了就直接报错停下（镜像已经构建好，但没有上线）。流程是：本机按下面「数据库迁移」一节跑完迁移 → Actions 页 → 选 `build-and-push-web` → Run workflow → 勾上 `force` → 再部署一次。这是刻意做的：生产镜像里没有 Prisma CLI，新代码先上线就会撞上旧表结构。
+`scripts/watch-deploy.sh` 是仓库里的副本，服务器上跑的是 `/root/watch-deploy.sh`，改了要重新拷一次。
 
-**要不要更严一点**：现在 `ssh-keyscan` 自动接受主机指纹。想钉死的话，把服务器指纹存成 secret（`DEPLOY_KNOWN_HOSTS`）并改成写 `~/.ssh/known_hosts`，可以避免中间人。一个人的项目暂时没做。
+**为什么不用 GitHub 直接 SSH 部署**：试过一版（受限私钥 + `DEPLOY_SSH_KEY` / `DEPLOY_HOST` / `DEPLOY_USER` 三个 secret + 健康检查）。CI 出示的 key 一直被服务器拒，而日志里 host 和 user 被 GitHub 自动打码成 `***`——恰好把两个最关键的变量藏起来了，排查成本远高于收益。轮询方案不需要任何凭据，也天然解决了"镜像还没构建完就去拉"的时序问题。那三个 secret 现在可以删掉了。
+
+**带数据库迁移的发布会被自动跳过**：`watch-deploy.sh` 先 `git fetch`，发现 `HEAD..origin/main` 里有 `web/prisma/migrations/` 就暂停并写日志（镜像可以提前构建好，但不上线）。正确顺序是：本机按下面「数据库迁移」跑完迁移 → push → 下一轮自动上线。生产镜像里没有 Prisma CLI 也没有 schema，新代码先上会撞旧表结构，这条不能省。
 
 ### 手动部署（自动部署失败、或者要回滚时）
 
