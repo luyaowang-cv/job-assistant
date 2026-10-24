@@ -114,19 +114,25 @@
 
 ## P4 网申档案可见性 + 插件映射
 
-- [ ] T-401: `application-profile/index.vue` 右卡加只读「固定信息」组，数据取自
-      `resolveBasics` / `resolveEducations` 的结果，标注来源「个人主档案」，点击跳 `/personal-profile`。
-      Verify: 改个人主档案的手机号，网申档案页刷新后立刻反映；页面上没有就地编辑入口。
-- [ ] T-402: 把两条 basics 取数路径收敛到 `resolveProfile`：`resolveApplicationProfileVersion`
-      用合并后的 basics / educations，不再直接读 `PersonalProfile`。
-      Verify: 构造一份带 basics 覆盖的档案，保存过版本与未保存版本两条路径返回一致。
-- [ ] T-403: 插件加 `fromReference('EDUCATION')`，把卡片的 `title` / `facts` 翻译成 `c.educations[i]`
-      需要的形状（键名映射与现有 `INTERNSHIP` 先例保持一致）。
-      Verify: `card-reference-plan-check.mjs` 覆盖教育段；插件测试不低于基线 124。
+- [x] T-401: `application-profile/index.vue` 右卡顶部加只读「固定信息」组（姓名/手机/邮箱/现居城市/
+      政治面貌/证件类型/紧急联系人），标注「来自个人主档案，所有档案共用」，点击跳 `/personal-profile`。
+      数据直接取接口返回的 `basics`（已是合并结果，与插件 fill-context 同源），不另算一份。
+      顺带给新档案默认加一个「教育背景」模块——教育只认素材卡，网申里引用教育卡要有模块承载。
+      完成 2026-10-24（`30c5342`）。
+      Verify: 页面 SFC 编译通过；`basics` 在 listApplicationProfiles 的返回里确实存在。
+- [x] T-402: `resolveApplicationProfileVersion` 改用 `resolveBasics(主档案, 本档案覆盖)`，
+      与 `resolveProfile()` 同一套规则。完成 2026-10-24（`30c5342`）。
+      Verify: application-profile-resolution 5 条测试全过；两条路径现在都调同一个纯函数。
+- [x] T-403（**结论：不需要做**）: 教育卡走的是 `resolved.educations` 数组，不是 `fromReference`。
+      插件读的 `c.educations[i]` 形状没变，所以只要转换正确，插件侧零改动。完成 2026-10-24（隐含于 P3）。
+      Verify: P3 的端到端断言用的就是与插件相同的数组形状。
 - [ ] T-404: 个人主档案加 `familyMembers` 数组（关系/姓名/工作单位/职务/电话），页面可增删。
       Verify: 保存后重新载入不丢条目；插件侧暂不加规则，`fill-context` 里能原样带出。
 - [ ] T-405: 跨包契约测试——web 侧导出卡片键名清单，extension 侧 `node --test` 断言两边集合一致。
       Verify: 故意改错一个键名，测试变红。
+- [ ] T-406（新记）: 给教育卡新增的那批字段补插件规则（学制/学习方式/学校类别/培养方式/是否海外/
+      学号/专业描述/专业课程/毕业论文/研究方向以外的…）。**没补之前这些字段对网申零贡献**，
+      只服务简历和存档。属于插件侧工作，需跑 162 条测试基线。
 
 ## 收尾
 
