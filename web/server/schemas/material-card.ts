@@ -10,6 +10,8 @@ export const materialCardTypeSchema = z.enum(MATERIAL_CARD_TYPES)
 
 /** 标题是否必填也来自注册表（目前只有「自我评价」允许留空）。 */
 const TITLE_REQUIRED_TYPES = new Set<string>(MATERIAL_CARD_TYPES.filter(type => MATERIAL_TYPE_SPECS[type].titleRequired))
+/** 成果要点是否必填同样来自注册表（奖项、证书允许留空）。 */
+const CONTENT_REQUIRED_TYPES = new Set<string>(MATERIAL_CARD_TYPES.filter(type => MATERIAL_TYPE_SPECS[type].contentRequired !== false))
 
 const tagsSchema = z.array(z.string().trim().min(1).max(40)).max(20).default([])
 const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -54,6 +56,15 @@ export const materialVariantInputSchema = z.object({
   content: z.string().trim().min(1).max(20_000),
 }).strict()
 
+/**
+ * 建卡时的文案校验：内容可以留空，是否必填由注册表的 contentRequired 决定。
+ * 而"新增或覆盖文案版本"（saveMaterialVariantSchema）仍然要求非空——一个版本存空内容没有意义。
+ */
+const createVariantSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  content: z.string().trim().max(20_000),
+}).strict()
+
 export const saveMaterialVariantSchema = materialVariantInputSchema.extend({
   overwrite: z.boolean().default(false),
 }).strict()
@@ -65,10 +76,13 @@ export const createMaterialCardSchema = z.object({
   title: materialTitleSchema,
   tags: tagsSchema,
   facts: factsSchema,
-  variant: materialVariantInputSchema,
+  variant: createVariantSchema,
 }).strict().superRefine((value, context) => {
   if (TITLE_REQUIRED_TYPES.has(value.type) && !value.title) {
     context.addIssue({ code: 'custom', path: ['title'], message: 'Title is required for this material type.' })
+  }
+  if (CONTENT_REQUIRED_TYPES.has(value.type) && !value.variant.content) {
+    context.addIssue({ code: 'custom', path: ['variant', 'content'], message: 'Content is required for this material type.' })
   }
 })
 

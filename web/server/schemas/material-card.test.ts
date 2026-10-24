@@ -61,6 +61,19 @@ test('日期接受日精度，同时继续接受月精度的存量值', () => {
   assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025' } }).success, false)
 })
 
+test('奖项与证书的成果要点可空，其余类型仍必填', () => {
+  const base = (type: string, content: string) => ({ type, title: '示例', tags: [], facts: {}, variant: { name: '标准版', content } })
+  // 奖项/证书没有"经历描述"这回事，留空不影响简历
+  assert.equal(createMaterialCardSchema.safeParse(base('AWARD', '')).success, true)
+  assert.equal(createMaterialCardSchema.safeParse(base('CERTIFICATE', '')).success, true)
+  // 其余类型（含标题可空的自我评价）仍然要求写点什么
+  assert.equal(createMaterialCardSchema.safeParse(base('PROJECT', '')).success, false)
+  assert.equal(createMaterialCardSchema.safeParse(base('INTERNSHIP', '')).success, false)
+  assert.equal(createMaterialCardSchema.safeParse(base('SELF_EVALUATION', '')).success, false)
+  // 覆盖/新增文案版本的接口仍然要求非空——一个空版本没有意义
+  assert.equal(saveMaterialVariantSchema.safeParse({ name: '网申版', content: '' }).success, false)
+})
+
 test('normalizes list query and enforces page limits', () => {
   const parsed = materialCardListQuerySchema.parse({ page: '2', pageSize: '50', tags: '前端,校招', includeArchived: 'true' })
   assert.deepEqual(parsed.tags, ['前端', '校招'])

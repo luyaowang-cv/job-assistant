@@ -65,6 +65,11 @@ export type MaterialTypeSpec = {
   titlePlaceholder: string
   /** 只有自我评价允许不写标题。服务端 createMaterialCardSchema 有一致的规则。 */
   titleRequired: boolean
+  /**
+   * 成果要点（variant.content）是否必填。不填视为必填。
+   * 奖项、证书这类只有「名称 + 时间 + 机构」的卡，写不写说明都不影响简历，所以允许留空。
+   */
+  contentRequired?: boolean
   /** 编辑弹窗里的字段，数组顺序就是渲染顺序。 */
   fields: MaterialFieldSpec[]
   /**
@@ -135,6 +140,8 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleLabel: '奖项名称',
     titlePlaceholder: '例如：全国大学生竞赛一等奖',
     titleRequired: true,
+    // 奖项/证书没有"经历描述"这回事，写不写说明都不影响简历，所以成果要点可空。
+    contentRequired: false,
     // 奖项只有一个获奖时间点。P1 时它和经历类共用起止区间（被迫填两个日期，
     // 列表上显示成「2024-09 — 2024-09」），P2 换成单值。键名仍是 startDate，
     // 不新造 awardedAt —— 否则存量卡片里的日期立刻读不到。
@@ -144,9 +151,17 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
   RESEARCH: {
     label: '科研经历',
     titleLabel: '论文 / 科研项目名称',
-    titlePlaceholder: '例如：DA-PhysDiff',
+    titlePlaceholder: '例如：基于..的方法技术研究',
     titleRequired: true,
-    fields: [role('作者顺位 / 研究角色'), organization('关联学校 / 实验室（可选）'), period()],
+    // 科研卡按「一个课题 / 一篇论文」记：作者顺位 + 发表链接 + 起止时间。
+    // 去掉了「关联学校 / 实验室」——网申表单里几乎没有这个框，而论文链接是常问的。
+    // 时间保留起止区间：在做的课题没有发表时间，用结束时间表达发表时间也够用，
+    // 所以不单独加「发表日期」——两个时间字段并存就得额外约定简历显示哪个。
+    fields: [
+      role('作者顺位 / 研究角色'),
+      { key: 'paperUrl', label: '发表链接', kind: 'url', placeholder: 'https://doi.org/... 或论文主页（可选）' },
+      period(),
+    ],
     listMeta: EXPERIENCE_META,
   },
   CERTIFICATE: {
@@ -154,18 +169,18 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleLabel: '证书名称',
     titlePlaceholder: '例如：软考数据库系统工程师',
     titleRequired: true,
+    contentRequired: false,
     fields: [role('级别 / 成绩（可选）'), organization('关联学校 / 颁发机构（可选）'), date('取得时间')],
     listMeta: EXPERIENCE_META,
   },
   SKILL: {
     label: '专业技能',
-    titleLabel: '标题',
-    titlePlaceholder: '输入素材标题',
+    titleLabel: '技能名称',
+    titlePlaceholder: '例如：前端开发',
     titleRequired: true,
-    // 现在技能卡除了标题没有别的字段，所以列表行只会显示标题。
-    // P2 会补「熟练程度」，这里留空是照抄现状。
-    fields: [],
-    listMeta: ['role', 'organization', 'period'],
+    // 技能卡的事实只有熟练程度；具体会什么写在文案里（技能描述）。
+    fields: [role('熟练程度')],
+    listMeta: ['role'],
   },
   SELF_EVALUATION: {
     label: '自我评价',
@@ -226,6 +241,28 @@ function monthOf(value: string): string {
 export function materialDateInput(value: unknown): string {
   if (typeof value !== 'string') return ''
   return /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : value
+}
+
+/**
+ * 技术栈的「写」和「读」必须共用一份定义。
+ *
+ * 原来页面回填时用 '、' 拼接、保存时按 `, ， /` 拆分，两边分隔符不一致，于是每编辑保存一次
+ * 就把数组又合并一层：["Vue","React"] → ["Vue、React"] → ["Vue、React、Vite"]。
+ * 界面上看着只是多了一行文字，简历里却全挤在一个条目里。
+ *
+ * 现在解析接受所有常见分隔符，格式化统一用顿号——中文简历里就是这么写的。
+ */
+export const TECH_STACK_SEPARATOR = '、'
+const TECH_STACK_SPLIT = /[,，/、]/
+
+export function parseTechStack(value: string): string[] {
+  return value.split(TECH_STACK_SPLIT).map(item => item.trim()).filter(Boolean)
+}
+
+export function formatTechStack(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item !== '').join(TECH_STACK_SEPARATOR)
+    : ''
 }
 
 /**
