@@ -96,10 +96,34 @@ jobs:
           # Windows 上粘贴的私钥可能带 CRLF，sshd 会因为格式不对直接拒掉
           printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
+
+          # 诊断：把 secret 里那把 key 的公钥指纹打出来。
+          # 它必须和本机 `ssh-keygen -lf ~/.ssh/gha-deploy` 以及服务器
+          # `ssh-keygen -lf /root/.ssh/authorized_keys` 里 gha-deploy 那行完全一致。
+          # 指纹只是哈希，公开在日志里没关系。
+          echo "== secret 里那把私钥的指纹 =="
+          if ssh-keygen -lf ~/.ssh/id_ed25519 2>/dev/null; then
+            echo "私钥解析正常"
+          else
+            echo "::error::secret 里的内容不是一把能解析的私钥（多半粘成了 .pub 公钥，或者少了 BEGIN/END 行）"
+            echo "文件开头 30 个字符是：$(head -c 30 ~/.ssh/id_ed25519)"
+            exit 1
+          fi
+          echo "== 服务器地址 / 用户名（方括号里能看出有没有多余空格）=="
+          printf 'host=[%s] user=[%s]\n' "$DEPLOY_HOST" "$DEPLOY_USER"
+
           # 首次连接需要指纹；要更严可以把它钉成 secret，见 docs/deploy.md
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST"
+          # -v 会把"我们提供了哪个 key、服务器接受了没有"写进去；失败时只把这几行挑出来，
+          # 成功时日志就是正常的部署输出（不做预先的探测连接，免得部署脚本跑两遍）。
+          set -o pipefail
+          if ! ssh -v -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 2>&1 | tee /tmp/deploy.log; then
+            echo "::group::SSH 诊断（关键几行）"
+            grep -Ei 'Offering public key|Server accepts key|Authentications that can continue|Permission denied|no mutual signature' /tmp/deploy.log || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: 健康检查
         run: |
