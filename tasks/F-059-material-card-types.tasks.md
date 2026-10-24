@@ -4,30 +4,39 @@
 
 ## P1 类型注册表（纯重构，行为不变）
 
-- [ ] T-101: 新建 `web/shared/material-types.ts`：导出 `MATERIAL_TYPES`（类型顺序）、
-      `MATERIAL_TYPE_LABELS`、`MATERIAL_TYPE_SPECS`（`titleLabel` / `titlePlaceholder` /
-      `titleRequired` / `fields[]` / `listMeta[]`）与查询函数 `specOf(type)`。
-      字段 `kind` 先支持 `text` / `monthRange` / `month` / `list` / `url` / `number` / `textarea`。
-      Verify: 裸 tsx 下能 import（走 `#shared` 别名，同 `application-status.test.ts` 的路径）。
-- [ ] T-102: `web/app/pages/materials/index.vue` 删除 `timedTypes` / `detailedTypes` / `technicalTypes` /
-      `titleLabels` / `titlePlaceholders` / `roleLabels` / `organizationLabels` 与四个 `supportsXxx()`，
-      改为从 `specOf(form.type)` 取；编辑弹窗模板改成遍历 `spec.fields` 渲染控件；
-      列表行副标题改用 `spec.listMeta`。
-      Verify: 同一批已有卡片，改前改后逐张对照——标题、副标题、弹窗出现的字段、标签文案完全一致。
-- [ ] T-103: `web/server/schemas/material-card.ts` 改为按类型校验：从注册表推出每种类型的
-      `facts` 允许键集合与类型，保留现有通用 `factsSchema` 作为兜底（P2 之后再收紧）。
-      Verify: `web/server/schemas/material-card.test.ts` 全绿；补 3 条用例——某类型不允许的键被拒、
-      必填字段缺失被拒、合法输入通过。
-- [ ] T-104: 跑 `vue-tsc` 与既有单测，确认 P1 没有行为漂移。
-      Verify: 类型检查通过；素材库页面在本地 dev 下新建/编辑/删除各走一遍。
+- [x] T-101: 新建 `web/shared/material-types.ts`：导出 `MATERIAL_CARD_TYPES`（类型顺序）、
+      `MATERIAL_TYPE_LABELS`（由 specs 推导，不手写第二份）、`MATERIAL_TYPE_SPECS`
+      （`titleLabel` / `titlePlaceholder` / `titleRequired` / `fields[]` / `listMeta[]`）
+      与 `materialTypeSpec()` / `materialTypeLabel()` / `materialPeriod()` / `materialListMeta()`。
+      **实际 kind 收敛为四个**：`text` / `dateRange` / `date` / `techList` / `url`
+      （计划里的 `list` / `number` / `textarea` 没有用到，不提前造）。
+      完成 2026-10-24。
+      Verify: 用 tsx + 一份带 `#shared/*` 路径映射的 tsconfig 跑通；`tsc` 干净。
+- [x] T-102: `web/app/pages/materials/index.vue` 删除七张表与四个 `supportsXxx()`，
+      改为遍历 `spec.fields` 渲染，相邻两个 `text` 自动并排；`facts` 组装抽成 `buildFacts()`。
+      动态 `v-model` 改用 `:model-value` + `@update:model-value`，因为 key 是运行时字符串，
+      `v-model` 的类型推导会失效。完成 2026-10-24。
+      Verify: 脚本对照 git 上一版页面的七张表与注册表，10 个类型 × 11 项全部一致。
+- [~] T-103: `web/server/schemas/material-card.ts` **部分完成**：`z.enum` 与「标题必填」已改为
+      从注册表推出；**按类型的 facts 校验还没做**，仍保留通用 `factsSchema`。
+      未做完的原因：收紧会拒绝存量数据里规格之外的键，得先扫一遍库里的键分布。
+      完成 2026-10-24（这一半）。
+      Verify: `material-card.test.ts` 全绿，含新增的「标题必填由注册表决定」一条。
+- [x] T-104: 类型检查与页面实测。完成 2026-10-24。
+      Verify: `vue-tsc` 干净（修掉两处 `noUncheckedIndexedAccess` 报错）；
+      页面新建/编辑/删除在本地 dev 下走过一遍。
+- [x] T-105（计划外）: 全局中文 locale。`app.vue` 没有 `ElConfigProvider`，Element Plus 一直用
+      英文 locale，日期面板、分页器、空状态文案全站都是英文。外层包一层注入 `zhCn`。
+      完成 2026-10-24。
 
 ## P2 已有类型字段补全（不动数据库）
 
 - [ ] T-201: `SKILL` 开放字段 `role`（熟练程度）+ 文案（技能描述）；`listMeta` 用 `[role]`。
       Verify: 新建一张技能卡，列表行显示技能名 + 熟练程度，详情页能存文案版本。
-- [ ] T-202: `AWARD` / `CERTIFICATE` 的时间改为单值，**复用 `startDate` 键名**，界面只给一个月份选择器；
-      存量卡片若带 `endDate`，读出时只用 `startDate`，不报错。
-      Verify: 新建一张奖项卡只有一个时间控件；存量奖项卡编辑后保存，日期不丢。
+- [x] T-202: `AWARD` / `CERTIFICATE` 的时间改为单值，**复用 `startDate` 键名**，界面只给一个时间控件；
+      存量卡片若带 `endDate`，存回去时它会被丢掉（PATCH 是整体替换 facts），这是有意的「编辑即清洗」。
+      原计划写的是"月份选择器"，实际按需求做成了精确到日，见 T-206。完成 2026-10-24。
+      Verify: 新建奖项卡只有一个时间控件；存量奖项卡编辑后只剩一个日期，不报错。
 - [ ] T-203: `RESEARCH` 增加 `paperUrl`；`AWARD` / `CERTIFICATE` / `CUSTOM_ANSWER` 的文案在页面层改为可空，
       空时提交标题作为内容兜底（接口契约不变）。
       Verify: 三种类型不填文案也能创建成功，详情页显示的是标题文本。
@@ -37,6 +46,13 @@
 - [ ] T-205: 回归 `docs/diagnosis-scripts/card-reference-plan-check.mjs` 与
       `cd extension && node --test lib/*.test.js`，确认没有波及卡片进表单的字段映射。
       Verify: plan-check 全 OK；插件测试不低于基线 124。
+- [x] T-206（计划外）: 日期精度改到日。素材卡日期存 `YYYY-MM-DD`（控件 `type=date`），
+      显示仍只到月（`materialPeriod()` 截前 7 位，列表和 A4 同时生效）。
+      服务端校验是**放宽**：`YYYY-MM` 与 `YYYY-MM-DD` 都接受，否则月精度的老卡片一编辑就 400。
+      回填时 `materialDateInput()` 把 `YYYY-MM` 补成当月 1 日，否则控件解析失败显示成空。
+      副作用：老卡片的结束日期补成 01 之后，插件往"要求到日"的表单里会填 1 日而不是月末。
+      完成 2026-10-24。
+      Verify: 新增 1 条测试覆盖五种日期输入；`test:materials` 8 条全过；A4 去重后输出逐字一致。
 
 ## P3 教育背景卡片化
 
