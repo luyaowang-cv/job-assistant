@@ -31,21 +31,26 @@
 
 ## P2 已有类型字段补全（不动数据库）
 
-- [ ] T-201: `SKILL` 开放字段 `role`（熟练程度）+ 文案（技能描述）；`listMeta` 用 `[role]`。
-      Verify: 新建一张技能卡，列表行显示技能名 + 熟练程度，详情页能存文案版本。
+- [x] T-201: `SKILL` 开放字段 `role`（熟练程度）+ 文案（技能描述）；`listMeta` 收成 `[role]`；
+      标题标签从兜底的「标题」改成「技能名称」。完成 2026-10-24（`a6d9179`）。
+      Verify: 新建技能卡有熟练程度输入框，列表行显示「技能名 · 熟练程度」。
 - [x] T-202: `AWARD` / `CERTIFICATE` 的时间改为单值，**复用 `startDate` 键名**，界面只给一个时间控件；
       存量卡片若带 `endDate`，存回去时它会被丢掉（PATCH 是整体替换 facts），这是有意的「编辑即清洗」。
       原计划写的是"月份选择器"，实际按需求做成了精确到日，见 T-206。完成 2026-10-24。
       Verify: 新建奖项卡只有一个时间控件；存量奖项卡编辑后只剩一个日期，不报错。
-- [ ] T-203: `RESEARCH` 增加 `paperUrl`；`AWARD` / `CERTIFICATE` / `CUSTOM_ANSWER` 的文案在页面层改为可空，
-      空时提交标题作为内容兜底（接口契约不变）。
-      Verify: 三种类型不填文案也能创建成功，详情页显示的是标题文本。
+- [x] T-203（做法与原计划不同）: `RESEARCH` 增加 `paperUrl`、去掉「关联学校 / 实验室」、时间保留起止。
+      `AWARD` / `CERTIFICATE` 的文案改为可空——**没有**按原计划"空时用标题兜底"，
+      而是在注册表加 `contentRequired: false`，服务端建卡时允许空文案（`saveMaterialVariantSchema`
+      仍然要求非空，空版本没有意义）。`CUSTOM_ANSWER` 维持必填：答案空着没有意义。
+      完成 2026-10-24（`a6d9179`）。
+      Verify: 奖项/证书不填成果要点能创建；项目卡不填仍被拒（schema 测试 9 条覆盖）。
 - [ ] T-204: 收紧 `factsSchema`：按类型拒绝不认识的键（`strict` 语义），
       并让单值类型跳过"起止先后"的通用校验。
       Verify: 给项目卡塞 `relation` 被拒；给奖项卡只传 `startDate` 通过。
-- [ ] T-205: 回归 `docs/diagnosis-scripts/card-reference-plan-check.mjs` 与
-      `cd extension && node --test lib/*.test.js`，确认没有波及卡片进表单的字段映射。
-      Verify: plan-check 全 OK；插件测试不低于基线 124。
+- [x] T-205: 回归 `docs/diagnosis-scripts/card-reference-plan-check.mjs` 与
+      `cd extension && node --test lib/*.test.js`。完成 2026-10-24。
+      Verify: plan-check 全部符合预期；插件测试 **162 条全过**（原计划写的基线 124 是旧数字，
+      当前实际基线是 162）。
 - [x] T-206（计划外）: 日期精度改到日。素材卡日期存 `YYYY-MM-DD`（控件 `type=date`），
       显示仍只到月（`materialPeriod()` 截前 7 位，列表和 A4 同时生效）。
       服务端校验是**放宽**：`YYYY-MM` 与 `YYYY-MM-DD` 都接受，否则月精度的老卡片一编辑就 400。
@@ -53,6 +58,22 @@
       副作用：老卡片的结束日期补成 01 之后，插件往"要求到日"的表单里会填 1 日而不是月末。
       完成 2026-10-24。
       Verify: 新增 1 条测试覆盖五种日期输入；`test:materials` 8 条全过；A4 去重后输出逐字一致。
+- [x] T-207（计划外）: 表单校验与字段级错误提示。页面接入 el-form 的 rules（必填来自注册表）、
+      提交时 `scroll-to-error`；catch 不再写死「保存失败，请检查标题和文案」，而是解析服务端
+      `details` 里的 zod issue，按 `path` 翻成中文字段名并标在对应控件下方。
+      完成 2026-10-24（`a6d9179`）。
+      Verify: 用真 schema 生成的 6 组真实错误验证翻译结果；SFC 编译通过。
+- [x] T-208（计划外）: 编辑弹窗从 720px 单列改成两栏（左字段／右成果要点），宽度按视口比例
+      `min(1120px, 88vw)`，编辑时收回 760px；单字段行（链接、技术栈、熟练程度）整行铺满。
+      完成 2026-10-24（`a6d9179`）。
+      Verify: 抽出源码里的 `rowClass` 跑十种类型的行布局，链接框确认落在 wide-grid。
+- [x] T-209（计划外，数据 bug）: 技术栈回填用「、」、保存按 `,，/` 拆，两边不一致，
+      导致每次编辑保存都把数组合并一层。现改为共用 shared 的 `parseTechStack` / `formatTechStack`。
+      完成 2026-10-24（`a6d9179`）。
+      Verify: 回归测试做「连续往返两次」，正是该 bug 的准确形态。
+- [x] T-210（计划外）: 简历技能段一行一条（`名称：成果要点`），熟练程度不进简历；
+      行距用 `unit--skill` 压到 0.8mm，不再沿用模块间距。完成 2026-10-24（`47c235e`）。
+      Verify: 隔离目录跑真实渲染函数，5 条断言通过；补一条反向用例锁住「项目经历仍是块状」。
 
 ## P3 教育背景卡片化
 
