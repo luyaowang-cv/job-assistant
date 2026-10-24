@@ -68,7 +68,7 @@ ssh root@43.108.107.79 "(crontab -l 2>/dev/null; echo '*/2 * * * * flock -n /tmp
 
 `scripts/watch-deploy.sh` 是仓库里的副本，服务器上跑的是 `/root/watch-deploy.sh`，改了要重新拷一次。
 
-**为什么不用 GitHub 直接 SSH 部署**：试过一版（受限私钥 + `DEPLOY_SSH_KEY` / `DEPLOY_HOST` / `DEPLOY_USER` 三个 secret + 健康检查）。CI 出示的 key 一直被服务器拒，而日志里 host 和 user 被 GitHub 自动打码成 `***`——恰好把两个最关键的变量藏起来了，排查成本远高于收益。轮询方案不需要任何凭据，也天然解决了"镜像还没构建完就去拉"的时序问题。那三个 secret 现在可以删掉了。
+**为什么不用 GitHub 直接 SSH 部署**：试过两次。第二版把密钥换成"服务器上生成 + base64 传"，客户端 `-v` 日志确认 `Offering public key: ... L06J1DKo...` 正确送达，服务器仍回 `Authentications that can continue: publickey,password`；而服务器侧 `authorized_keys` 里行结构、指纹、`/root` 权限、`sshd -T`（pubkeyauth/authorizedkeysfile/strictmodes/无 Match 块）全部正常，8.9 也认识 `restrict`。同时 GitHub 会把 secret 的值在日志里打码成 `***`，host 和 user 正好被藏起来。排查到这一步就停了：轮询方案不需要任何凭据，也没有这类不可见状态。那三个 secret 可以删掉。
 
 **带数据库迁移的发布会被自动跳过**：`watch-deploy.sh` 先 `git fetch`，发现 `HEAD..origin/main` 里有 `web/prisma/migrations/` 就暂停并写日志（镜像可以提前构建好，但不上线）。正确顺序是：本机按下面「数据库迁移」跑完迁移 → push → 下一轮自动上线。生产镜像里没有 Prisma CLI 也没有 schema，新代码先上会撞旧表结构，这条不能省。
 

@@ -4,22 +4,25 @@ on:
   push:
     branches:
       - main
-  # 手动触发：带数据库迁移的发布被拦下后，本机跑完迁移，来这里补一次部署。
+  # 手动重建一次镜像。部署不在这里做。
   workflow_dispatch:
-    inputs:
-      force:
-        description: '迁移已经在本机跑过了，跳过迁移检查直接部署'
-        type: boolean
-        default: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-web
 
 concurrency:
-  group: deploy-web
+  group: build-web
   cancel-in-progress: false
 
+# 这个工作流只负责"构建镜像并推到 ghcr"。
+#
+# 上线由服务器自己完成：/root/watch-deploy.sh 每 2 分钟检查一次 ghcr 上 :latest 的镜像 ID，
+# 变了就 git pull + force-recreate web（crontab 装的，见 docs/deploy.md「推送即部署」）。
+#
+# 2026-10-24 试过让这里 SSH 进服务器部署，配了受限私钥 + 三个 secret，但服务器始终拒绝
+# CI 出示的那把 key（客户端侧 -v 日志确认 key 正确送达），而 host/user 又被 GitHub
+# 在日志里打码，排查成本远高于收益。服务器轮询不需要任何凭据，就不再启用了。
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -48,88 +51,3 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # 镜像推上去之后进服务器：git pull + compose pull + force-recreate web。
-  # 服务器上那把 key 是受限的（authorized_keys 里写死 command=/root/deploy.sh），
-  # 这里只是一条不带命令的 ssh，能做什么由服务器端脚本决定。
-  #
-  # 另有兜底：服务器上还有个 /root/watch-deploy.sh 每 2 分钟检查一次镜像，
-  # 所以即使这一步挂了，新镜像最迟 2 分钟后也会自动上线；反过来如果这一步正常，
-  # 兜底那轮会看到容器已经在跑最新镜像而什么都不做。
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # 需要 push 的 before 提交，才能算出"这次一共改了哪些文件"
-
-      # 生产镜像里没有 Prisma CLI 也没有 schema（Dockerfile 只 COPY .output），迁移只能在本机
-      # 通过 SSH 隧道跑。带迁移的推送绝不能自动上线——新代码会撞上旧表结构。
-      - name: 带数据库迁移的发布先停住
-        if: ${{ inputs.force != true }}
-        run: |
-          base='${{ github.event.before }}'
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            base='HEAD^'
-          fi
-          echo "比较范围：$base..HEAD"
-          if git diff --name-only "$base" HEAD | grep -q '^web/prisma/migrations/'; then
-            echo "::error::这次提交带了新的数据库迁移，镜像已构建但没有上线。"
-            echo "先按 docs/deploy.md 的「数据库迁移」在本机跑完迁移，再 Actions → Run workflow → 勾上 force 部署。"
-            exit 1
-          fi
-          echo "没有新的迁移，继续部署。"
-
-      - name: Deploy over SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          # secret 没配齐时不把这次运行弄红：兜底的 cron 会把镜像部署上去。
-          if [ -z "${DEPLOY_SSH_KEY:-}" ] || [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ]; then
-            echo "::warning::DEPLOY_SSH_KEY / DEPLOY_HOST / DEPLOY_USER 没配齐，跳过这步（服务器上的轮询会在 2 分钟内兜底）"
-            exit 0
-          fi
-          install -m 700 -d ~/.ssh
-          # DEPLOY_SSH_KEY 存私钥的 base64（本机用 Convert.ToBase64String 生成的一整行）。
-          # 多行 PEM 经过终端/剪贴板复制很容易丢换行或多吃空格，base64 不存在这个问题。
-          # 也兼容直接粘 PEM。
-          if printf '%s' "$DEPLOY_SSH_KEY" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
-            printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
-          else
-            printf '%s' "$DEPLOY_SSH_KEY" | tr -d '\r\n ' | base64 -d > ~/.ssh/id_ed25519
-          fi
-          chmod 600 ~/.ssh/id_ed25519
-          if ! ssh-keygen -lf ~/.ssh/id_ed25519; then
-            echo "::error::DEPLOY_SSH_KEY 解出来不是一把能用的私钥（既不是 base64，也不是完整 PEM）"
-            exit 1
-          fi
-
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          # 调试信息走 stderr 另存：失败时只挑关键几行，成功时日志就是部署输出
-          if ! ssh -v -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" 2>/tmp/ssh.err; then
-            echo "::group::SSH 诊断（关键几行）"
-            grep -Ei 'Offering public key|Server accepts key|Authentications that can continue|Permission denied' /tmp/ssh.err || true
-            echo "::endgroup::"
-            exit 1
-          fi
-
-      - name: 健康检查
-        run: |
-          for i in $(seq 1 12); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 https://offerscoming.cn/ || true)
-            case "$code" in
-              200 | 204 | 302)
-                echo "站点已恢复：HTTP $code"
-                exit 0
-                ;;
-            esac
-            echo "第 $i 次探测：HTTP $code，5 秒后重试"
-            sleep 5
-          done
-          echo "::error::部署后 60 秒内站点没有正常响应，去服务器看 docker compose logs web"
-          exit 1
