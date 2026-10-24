@@ -646,7 +646,6 @@ select {
 .workbench-surface__scroll.is-bottom::after { --hint-bottom: inset 0 -14px 14px -14px rgba(61,70,75,.3); }
 .workbench-table-shell--transparent { background: rgba(255,255,255,.34); }
 .workbench-table-shell--transparent .el-table { --el-table-tr-bg-color: rgba(255,255,255,.24); --el-table-row-hover-bg-color: rgba(255,255,255,.4); }
-.personal-education-item { padding: var(--space-4); border: 1px solid rgba(112,132,120,.16); border-radius: var(--radius-control); background: rgba(255,255,255,.46); }
 .material-surface__header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid rgba(190,204,195,.7); }
 .material-surface__header p { margin: 5px 0 0; color: var(--workbench-slate); font-size: 13px; line-height: 1.55; }
 .material-section-label { margin-bottom: var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid rgba(190,204,195,.7); color: var(--workbench-subtle); font-size: 14px; font-weight: 650; }
@@ -705,12 +704,8 @@ select {
 .profile-form-row .el-select__wrapper,
 .profile-form-row .el-input-number { height: 40px !important; min-height: 40px !important; box-sizing: border-box; }
 .profile-form-note { margin: 0 0 0 124px; color: var(--workbench-slate); font-size: 12px; line-height: 1.55; }
-.personal-profile__education { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid rgba(190,204,195,.7); }
-.personal-education-item__actions { display: flex; justify-content: flex-end; margin-top: var(--space-2); }
-.personal-profile__education-actions { display: flex; justify-content: flex-end; margin-top: var(--space-3); }
 .personal-profile__save { position: sticky; bottom: 16px; z-index: 2; display: flex; justify-content: flex-end; margin-top: var(--space-4); pointer-events: none; }
 .personal-profile__save .el-button { pointer-events: auto; }
-.personal-education-item .el-button--danger.is-plain { border-color: rgba(190,100,92,.32); background: transparent; color: #a55851; }
 .application-records__reset {
   --el-button-hover-text-color: #365b48;
   --el-button-hover-border-color: #6f9a80;

@@ -4,7 +4,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 
 // 类型的名字、该有哪些字段、列表副标题拼什么都来自这里。页面不再自己判断「这个类型有没有时间」，
 // 只问注册表。见 web/shared/material-types.ts 的头注释。
-import { MATERIAL_TYPE_LABELS, formatTechStack, materialDateInput, materialListMeta, materialTypeLabel, materialTypeSpec, parseTechStack, type MaterialFieldSpec } from '#shared/material-types'
+import { MATERIAL_TYPE_LABELS, formatTechStack, groupFieldRows, materialDateInput, materialHasVersion, materialListMeta, materialPeriod, materialTypeLabel, materialTypeSpec, parseTechStack, type MaterialFieldSpec } from '#shared/material-types'
 
 type Variant = { id: string; name: string; content: string; createdAt: string }
 type Card = { id: string; type: string; title: string; tags: string[]; facts: Record<string, unknown>; archivedAt: string | null; variants: Variant[] }
@@ -18,7 +18,46 @@ const search = ref('')
 const type = ref('')
 const editorOpen = ref(false)
 const editingId = ref<string | null>(null)
-const form = reactive({ type: 'PROJECT', title: '', organization: '', role: '', techStackText: '', tags: [] as string[], startDate: '', endDate: '', current: false, projectUrl: '', variantName: '简短版', content: '' })
+/** 表单初值。所有可能出现的字段键都先声明，Vue 的响应式对象才稳定。 */
+const emptyForm = () => ({
+  type: 'PROJECT',
+  title: '',
+  tags: [] as string[],
+  organization: '',
+  role: '',
+  projectUrl: '',
+  techStackText: '',
+  college: '',
+  major: '',
+  educationLevel: '',
+  academicDegree: '',
+  studyMode: '',
+  duration: '',
+  schoolCategory: '',
+  trainingMode: '',
+  overseas: '',
+  ranking: '',
+  studentId: '',
+  campusRole: '',
+  lab: '',
+  advisor: '',
+  researchDirection: '',
+  thesis: '',
+  majorDescription: '',
+  courses: '',
+  // 数字字段在表单里也存字符串：受控输入框如果存 number，打「3.」时会被解析成 3，
+  // 小数点当场消失，永远打不出 3.94。转换只在保存时做（见 buildFacts）。
+  gpa: '',
+  gpaScale: '',
+  startDate: '',
+  endDate: '',
+  current: false,
+  variantName: '简短版',
+  content: '',
+})
+const form = reactive(emptyForm())
+/** 泛型写入用：字段 key 是运行时字符串，TS 的键类型推导不到。 */
+const formRecord = () => form as unknown as Record<string, unknown>
 const variant = reactive({ name: '网申版', content: '' })
 const variantNameOptions = ['简短版', '网申版', '完整版']
 
@@ -32,41 +71,55 @@ const spec = computed(() => materialTypeSpec(form.type))
  * 注册表的字段 key → 表单字段。两者形状本来就不一样：表单要能装下没填完的半成品
  * （技术栈先是一串带逗号的文字），facts 要的是干净的 string[]。这层翻译只在提交时做。
  */
-const FORM_KEY: Record<string, 'role' | 'organization' | 'projectUrl' | 'techStackText' | 'startDate' | 'endDate'> = {
-  role: 'role',
-  organization: 'organization',
-  projectUrl: 'projectUrl',
-  techStack: 'techStackText',
-  startDate: 'startDate',
-  endDate: 'endDate',
-}
+/**
+ * 注册表 key → 表单字段。只有名字对不上的才写在这里：技术栈在表单里是一串待拆分的文字，
+ * 存进 facts 才是 string[]。其余字段的表单名和 key 同名，不用再维护一张全量表。
+ */
+const FORM_ALIAS: Record<string, string> = { techStack: 'techStackText' }
+const formKeyOf = (field: MaterialFieldSpec) => FORM_ALIAS[field.key] ?? field.key
 
 function fieldValue(field: MaterialFieldSpec): string {
-  // 必须先把 key 取成局部变量再索引：TS 不会把 `FORM_KEY[field.key]` 第一次查表的结果
-  // 带进第二次查表，那边仍然可能是 undefined。
-  const key = FORM_KEY[field.key]
-  if (!key) return ''
-  const value = form[key]
+  const value = formRecord()[formKeyOf(field)]
   return typeof value === 'string' ? value : ''
 }
 function setFieldValue(field: MaterialFieldSpec, value: string) {
-  const key = FORM_KEY[field.key]
-  if (key) (form as Record<string, unknown>)[key] = value
+  formRecord()[formKeyOf(field)] = value
 }
 
 /**
  * 把字段排成行：相邻的两个 text 字段并排（沿用原来的两列布局），其余各占一行。
  * 顺序完全由注册表的 fields 决定，这里不做任何按类型的判断。
  */
-const fieldRows = computed(() => {
-  const rows: MaterialFieldSpec[][] = []
-  for (const field of spec.value?.fields ?? []) {
-    const previous = rows[rows.length - 1]
-    if (field.kind === 'text' && previous && previous.length === 1 && previous[0]?.kind === 'text') previous.push(field)
-    else rows.push([field])
-  }
-  return rows
-})
+const fieldRows = computed(() => groupFieldRows(spec.value?.fields ?? []))
+
+/**
+ * 成果要点那一栏：
+ * - `contentField: 'hidden'`（教育背景）—— 根本不显示，因为这类卡没有"一段经历描述"；
+ * - `contentRequired: false`（奖项、证书）—— 显示但不强制填，写不写都行。
+ */
+const showContentField = computed(() => !editingId.value && spec.value?.contentField !== 'hidden')
+/** 没有右栏时（编辑态，或不写成果要点的类型）整宽排布。 */
+const hasAside = computed(() => showContentField.value)
+/** 整宽且字段多的时候流成两列：教育卡二十来个字段，单列会把弹窗拉成一长条。 */
+const denseFields = computed(() => !hasAside.value && fieldRows.value.length >= 6)
+
+/** 正在编辑的类型有没有「版本」这回事（教育背景没有文案，也就没有版本）。 */
+const formHasVersion = computed(() => materialHasVersion(form.type))
+/** 右侧详情面板用：选中卡片的规格，以及它有没有版本。 */
+const selectedSpec = computed(() => (selected.value ? materialTypeSpec(selected.value.type) : undefined))
+const selectedHasVersion = computed(() => (selected.value ? materialHasVersion(selected.value.type) : true))
+
+/**
+ * 详情面板里只读展示字段值。没有版本的卡片（教育背景）没有文案可看，
+ * 面板就用这些字段填满，而不是空着一片。
+ */
+function fieldText(facts: Record<string, unknown>, field: MaterialFieldSpec): string {
+  if (field.kind === 'dateRange') return materialPeriod(facts)
+  const value = facts[field.key]
+  if (field.kind === 'techList') return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').join('、') : ''
+  if (field.kind === 'number') return typeof value === 'number' ? String(value) : ''
+  return typeof value === 'string' ? value : ''
+}
 
 /**
  * 单字段行（项目/科研的链接、技术栈、技能卡的熟练程度…）一律整行铺满；
@@ -153,29 +206,39 @@ async function load() {
 function beginCreate() {
   editingId.value = null
   clearFieldErrors()
-  Object.assign(form, { type: 'PROJECT', title: '', organization: '', role: '', techStackText: '', tags: [], startDate: '', endDate: '', current: false, projectUrl: '', variantName: '简短版', content: '' })
+  Object.assign(form, emptyForm())
   editorOpen.value = true
   void nextTick(() => formRef.value?.clearValidate())
+}
+/**
+ * 卡片 facts → 表单。按注册表的字段列表走一遍，以后加字段不用再回来改这里
+ * （之前是手写 Object.assign 逐个字段，加一个漏一个）。
+ */
+function fillFormFromFacts(cardType: string, facts: Record<string, unknown>) {
+  for (const field of materialTypeSpec(cardType)?.fields ?? []) {
+    if (field.kind === 'number') {
+      formRecord()[field.key] = typeof facts[field.key] === 'number' ? String(facts[field.key]) : ''
+      continue
+    }
+    if (field.kind === 'dateRange') {
+      // 存量卡片可能还存着 YYYY-MM，交给 shared 补成当月 1 日，否则控件解析失败显示成空
+      form.startDate = materialDateInput(facts.startDate)
+      form.endDate = facts.endDate === '至今' ? '' : materialDateInput(facts.endDate)
+      form.current = facts.endDate === '至今'
+      continue
+    }
+    if (field.kind === 'techList') {
+      form.techStackText = formatTechStack(facts[field.key])
+      continue
+    }
+    formRecord()[field.key] = typeof facts[field.key] === 'string' ? facts[field.key] : ''
+  }
 }
 function beginEdit(card: Card) {
   editingId.value = card.id
   clearFieldErrors()
-  const facts = card.facts as Record<string, unknown>
-  Object.assign(form, {
-    type: card.type, title: card.title,
-    organization: typeof facts.organization === 'string' ? facts.organization : '',
-    role: typeof facts.role === 'string' ? facts.role : '',
-    techStackText: formatTechStack(facts.techStack),
-    tags: [...card.tags],
-    // 日期控件吃 YYYY-MM-DD；存量卡片存的可能还是 YYYY-MM，交给 shared 补齐，
-    // 否则 Element Plus 解析失败会把输入框显示成空。
-    startDate: materialDateInput(facts.startDate),
-    endDate: facts.endDate === '至今' ? '' : materialDateInput(facts.endDate),
-    current: facts.endDate === '至今',
-    projectUrl: typeof facts.projectUrl === 'string' ? facts.projectUrl : '',
-    variantName: '简短版',
-    content: '',
-  })
+  Object.assign(form, emptyForm(), { type: card.type, title: card.title, tags: [...card.tags] })
+  fillFormFromFacts(card.type, card.facts as Record<string, unknown>)
   editorOpen.value = true
   void nextTick(() => formRef.value?.clearValidate())
 }
@@ -205,6 +268,12 @@ function buildFacts(): Record<string, unknown> {
       if (form.startDate) facts[field.key] = form.startDate
       continue
     }
+    if (field.kind === 'number') {
+      const raw = fieldValue(field).trim()
+      const value = Number(raw)
+      if (raw && Number.isFinite(value)) facts[field.key] = value
+      continue
+    }
     const value = fieldValue(field).trim()
     if (value) facts[field.key] = value
   }
@@ -224,7 +293,7 @@ async function createCard() {
       await $fetch(`/api/v1/material-cards/${editingId.value}`, { method: 'PATCH', body: { title, tags: form.tags, facts } })
     }
     else {
-      await $fetch('/api/v1/material-cards', { method: 'POST', body: { type: form.type, title, tags: form.tags, facts, variant: { name: form.variantName, content: form.content } } })
+      await $fetch('/api/v1/material-cards', { method: 'POST', body: { type: form.type, title, tags: form.tags, facts, variant: { name: formHasVersion.value ? form.variantName : '默认', content: form.content } } })
     }
     editorOpen.value = false
     editingId.value = null
@@ -294,31 +363,42 @@ onMounted(() => void load())
         <aside class="card-detail" aria-live="polite">
           <template v-if="selected">
             <div class="card-detail__heading"><div class="card-detail__title"><span>{{ materialTypeLabel(selected.type) }}</span><h2>{{ displayCardTitle(selected) }}</h2><p v-if="cardMeta(selected)" class="card-period">{{ cardMeta(selected) }}</p></div><div class="card-detail__actions"><el-button plain type="primary" @click="beginEdit(selected)">编辑</el-button><el-button plain type="danger" :loading="deleting" @click="removeCard">删除</el-button></div></div>
-            <div class="variant-history"><article v-for="item in selected.variants" :key="item.id"><b>{{ item.name }}</b><small>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small><p>{{ item.content }}</p></article></div>
-            <el-form label-position="top">
-              <el-form-item label="新增或覆盖文案版本"><el-select v-model="variant.name" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
-              <el-form-item label="文案"><el-input v-model="variant.content" type="textarea" :rows="5" show-word-limit maxlength="20000" /></el-form-item>
-              <div class="card-actions"><el-button type="primary" :loading="saving" @click="addVariant">保存文案版本</el-button></div>
-            </el-form>
+            <!-- 有文案的类型才谈"版本"；没有文案的（教育背景）用只读字段列表填满面板 -->
+            <template v-if="selectedHasVersion">
+              <div class="variant-history"><article v-for="item in selected.variants" :key="item.id"><b>{{ item.name }}</b><small>{{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small><p>{{ item.content }}</p></article></div>
+              <el-form label-position="top">
+                <el-form-item label="新增或覆盖文案版本"><el-select v-model="variant.name" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
+                <el-form-item label="文案"><el-input v-model="variant.content" type="textarea" :rows="5" show-word-limit maxlength="20000" /></el-form-item>
+                <div class="card-actions"><el-button type="primary" :loading="saving" @click="addVariant">保存文案版本</el-button></div>
+              </el-form>
+            </template>
+            <ul v-else class="facts-readonly">
+              <template v-for="field in selectedSpec?.fields ?? []" :key="field.key">
+                <li v-if="fieldText(selected.facts, field)"><span>{{ field.label }}</span><b>{{ fieldText(selected.facts, field) }}</b></li>
+              </template>
+              <li v-if="!selectedSpec?.fields.some(field => fieldText(selected.facts, field))"><span>还没有填写任何字段</span></li>
+            </ul>
           </template>
           <el-empty v-else description="选择一张素材查看版本" />
         </aside>
       </div>
     </div>
-    <!-- 新建时两栏、按视口比例放宽；编辑时没有成果要点那一栏，宽度收回来，免得字段被拉得过稀。 -->
-    <el-dialog v-model="editorOpen" :title="editingId ? '编辑素材卡片' : '新建素材卡片'" :width="editingId ? 'min(760px, 92vw)' : 'min(1120px, 88vw)'">
+    <!-- 宽度跟着布局走：有右栏或要排两列时放宽，单列时收窄，免得字段被拉得稀稀拉拉。 -->
+    <el-dialog v-model="editorOpen" :title="editingId ? '编辑素材卡片' : '新建素材卡片'" :width="hasAside || denseFields ? 'min(1120px, 88vw)' : 'min(760px, 92vw)'">
       <!-- 左栏字段、右栏成果要点。以前全部竖着堆在 720px 里，又长又窄；
            现在宽度按视口比例走、正文两栏，高度砍掉一半。编辑已有卡片时右栏不出现，自动退成单栏。 -->
       <div class="editor-shell">
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" scroll-to-error>
-          <div class="editor-layout" :class="{ 'editor-layout--single': !!editingId }">
+          <div class="editor-layout" :class="{ 'editor-layout--single': !hasAside }">
             <div class="editor-main">
               <div class="dialog-grid">
                 <el-form-item label="经历类型"><el-select v-model="form.type" :disabled="!!editingId"><el-option v-for="(label, key) in MATERIAL_TYPE_LABELS" :key="key" :label="label" :value="key" /></el-select></el-form-item>
                 <el-form-item prop="title" :label="spec?.titleLabel ?? '标题'"><el-input v-model="form.title" :placeholder="spec?.titlePlaceholder ?? '输入素材标题'" /></el-form-item>
               </div>
               <!-- 字段全部来自注册表：有几行、每行放什么控件，由 spec.fields 的顺序和 kind 决定。
-                   这里不再出现任何按类型名的判断。 -->
+                   这里不再出现任何按类型名的判断。
+                   字段多的时候（教育卡有二十来个）这一块在整宽里流成两列，弹窗就不会被拉成一长条。 -->
+              <div class="editor-fields" :class="{ 'editor-fields--columns': denseFields }">
               <div v-for="(row, rowIndex) in fieldRows" :key="rowIndex" :class="rowClass(row)">
                 <template v-if="row[0]?.kind === 'dateRange'">
                   <el-form-item label="开始时间" :error="fieldErrors.startDate"><el-date-picker v-model="form.startDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
@@ -333,7 +413,11 @@ onMounted(() => void load())
                 </template>
                 <template v-else>
                   <el-form-item v-for="field in row" :key="field.key" :label="field.label" :error="fieldErrors[field.key]">
-                    <el-input :model-value="fieldValue(field)" :placeholder="field.placeholder" @update:model-value="value => setFieldValue(field, value)" />
+                    <el-select v-if="field.kind === 'select'" :model-value="fieldValue(field)" clearable :placeholder="field.placeholder ?? '请选择'" @update:model-value="(value: string | undefined) => setFieldValue(field, value ?? '')">
+                      <el-option v-for="option in field.options ?? []" :key="option.value" :label="option.label" :value="option.value" />
+                    </el-select>
+                    <el-input v-else-if="field.kind === 'textarea'" type="textarea" :rows="3" :model-value="fieldValue(field)" :placeholder="field.placeholder" @update:model-value="value => setFieldValue(field, value)" />
+                    <el-input v-else :type="field.kind === 'number' ? 'number' : 'text'" :model-value="fieldValue(field)" :placeholder="field.placeholder" @update:model-value="value => setFieldValue(field, value)" />
                     <p v-if="field.help" class="form-help">{{ field.help }}</p>
                   </el-form-item>
                 </template>
@@ -342,9 +426,10 @@ onMounted(() => void load())
                 <el-select v-model="form.tags" multiple filterable allow-create default-first-option placeholder="输入后按回车，例如：前端、Vue、数据分析" />
                 <p class="form-help">标签只用于搜索素材、匹配岗位和查找受影响的简历，不会显示在简历正文中。</p>
               </el-form-item>
-              <el-form-item v-if="!editingId" label="版本名称" :error="fieldErrors.variantName"><el-select v-model="form.variantName" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
+              <el-form-item v-if="!editingId && formHasVersion" label="版本名称" :error="fieldErrors.variantName"><el-select v-model="form.variantName" allow-create filterable placeholder="选择或输入版本名称"><el-option v-for="name in variantNameOptions" :key="name" :label="name" :value="name" /></el-select></el-form-item>
+              </div>
             </div>
-            <div v-if="!editingId" class="editor-aside">
+            <div v-if="showContentField" class="editor-aside">
               <el-form-item prop="content" label="成果要点" :error="fieldErrors.content"><el-input v-model="form.content" type="textarea" :rows="17" placeholder="每行写一个重点；可用“架构设计：……”这样的格式，冒号前会自动加粗。" /></el-form-item>
             </div>
           </div>
@@ -385,7 +470,13 @@ onMounted(() => void load())
 .card-list::-webkit-scrollbar-thumb,.card-detail::-webkit-scrollbar-thumb{border-radius:4px;background:rgba(116,132,124,.28)}
 /* 用 grid + align-content:start，而不是 flex 列：flex 项默认会收缩，
    卡片会被压扁去适应框高，而不是让框滚起来。 */
-.card-list{display:grid;align-content:start;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}
+.card-list{display:grid;align-content:start;gap:8px}.material-card-row{display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;text-align:left;border:1px solid transparent;border-radius:12px;background:transparent;padding:14px;color:inherit;cursor:pointer}.material-card-row:hover,.material-card-row.active{border-color:var(--el-color-primary-light-5);background:var(--el-color-primary-light-9)}.material-card-row__meta{grid-column:2;color:var(--el-text-color-secondary);font-size:12px}.material-card-row__type{font-size:12px;color:var(--el-color-primary)}.card-detail__heading{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start}.card-detail__title{min-width:0}.card-detail__heading h2{margin:4px 0 2px}.card-detail__actions{display:flex;flex:none;flex-wrap:wrap;gap:8px;justify-content:flex-end}.card-detail__actions .el-button{width:64px;margin:0}.card-period{margin:0 0 16px;color:var(--el-text-color-secondary);font-size:13px}.variant-history{display:grid;gap:10px;margin-bottom:20px}.variant-history article{padding:14px;border-radius:12px;background:var(--el-fill-color-light)}.variant-history small{float:right;color:var(--el-text-color-secondary)}.variant-history p{white-space:pre-wrap;margin-bottom:0}.card-actions{display:flex;justify-content:flex-end;gap:8px}
+/* 没有文案的卡片（教育背景）：详情面板用只读字段列表填满，而不是空着一片 */
+.facts-readonly{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.facts-readonly li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;padding:8px 12px;border-radius:10px;background:var(--el-fill-color-light);font-size:13px}
+.facts-readonly span{color:var(--el-text-color-secondary)}
+.facts-readonly b{font-weight:500;color:var(--el-text-color-primary);white-space:pre-wrap}
+.dialog-grid{display:grid;grid-template-columns:1fr 2fr;gap:12px}
 /* 单字段整行的行（技术栈这类）：原来它不在 grid 里、天然满宽，这里显式写成单列保持一致 */
 .wide-grid{display:grid;grid-template-columns:1fr;gap:12px}
 /* 编辑弹窗：宽度在 el-dialog 上按视口比例给（min(1120px, 88vw)），这里补左右内边距，
@@ -394,6 +485,20 @@ onMounted(() => void load())
 .editor-layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:28px;align-items:stretch}
 .editor-layout--single{grid-template-columns:1fr}
 .editor-main{min-width:0}
+/* 字段多的时候在整宽里流成两列（CSS 多列，不是 grid）：字段按顺序往下填，填满一列自动接到
+   第二列，高度自然平衡。每个"行"是一个块，break-inside: avoid 保证一行不会被拆到两列去。 */
+.editor-fields--columns{column-count:2;column-gap:26px}
+.editor-fields--columns > *{break-inside:avoid}
+/* 教育卡有二十来个字段，按 Element Plus 默认的 18px 行距会拉到两屏。
+   压到 10px、标签也收紧，一屏能多放三四条。 */
+.editor-main :deep(.el-form-item){margin-bottom:10px}
+.editor-main :deep(.el-form-item__label){margin-bottom:2px;line-height:1.3;font-size:13px}
+/* 数字字段用的是普通 el-input + type="number"，所以外框、聚焦、内边距、高度全都和其它字段
+   同一个组件保证一致，不需要额外的框样式。这里只做两件事：干掉浏览器自带的上下箭头，
+   以及数字向左对齐（右对齐在表单里看着像金额）。 */
+.editor-main :deep(input[type='number']){text-align:left;-moz-appearance:textfield}
+.editor-main :deep(input[type='number']::-webkit-outer-spin-button),
+.editor-main :deep(input[type='number']::-webkit-inner-spin-button){-webkit-appearance:none;margin:0}
 /* 右栏的文本域撑满整列，和左栏字段区等高 */
 .editor-aside{display:flex;min-width:0}
 .editor-aside :deep(.el-form-item){display:flex;flex:1;flex-direction:column;margin-bottom:0;min-height:0}
@@ -411,6 +516,7 @@ onMounted(() => void load())
   .card-detail{min-height:360px}
   /* 窄屏下编辑弹窗退回单栏：两栏在 900px 以下会把字段挤成一列字 */
   .editor-layout{grid-template-columns:1fr}
+  .editor-fields--columns{column-count:1}
   .editor-shell{padding:4px 0 8px}
   .editor-aside :deep(.el-textarea__inner){min-height:180px}
 }
