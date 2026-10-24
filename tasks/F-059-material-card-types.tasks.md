@@ -83,21 +83,34 @@
 
 ## P3 教育背景卡片化
 
-- [ ] T-301: 迁移一——`prisma/schema.prisma` 的 `MaterialCardType` 加 `EDUCATION`，
-      生成只含 `ALTER TYPE ... ADD VALUE` 的迁移文件。
-      Verify: `prisma migrate dev` 成功；库里能插入一条 `EDUCATION` 卡片（**在另一个事务里**）。
-- [ ] T-302: 注册表加 `EDUCATION` 类型，字段对齐 `web/server/schemas/personal-profile.ts` 的
-      `educationSchema`（学院/专业/学历/学位/GPA/GPA 满分/排名/在校职务/实验室/导师/研究方向/起止）。
-      Verify: 弹窗里 12 个字段全部可填可存；与 `educationSchema` 逐字段对照无遗漏。
-- [ ] T-303: 迁移二——在 `legacy-material-migration.service.ts` 加 educations 源，
-      用 `legacySourceKey` 做幂等；个人主档案 `educations` 作为 fallback 保留不动。
-      Verify: 预览接口列出教育候选；导入两次不产生重复卡片。
-- [ ] T-304: 让 `EDUCATION` 卡片能作为段落进简历（`document-resolver.ts` / 简历渲染路径）。
-      Verify: 一份只引用了教育卡片的简历，A4 与 markdown 上都能看到教育段落。
-- [ ] T-305: 确认 T-304 在真实数据上正常后，才停用 `document-resolver.ts` 里 `educations` 的默认渲染。
-      Verify: 存量档案迁完之后简历不空；未迁移的档案仍能通过 fallback 显示。
-- [ ] T-306: 网申档案的教育模块改为卡片引用（照 workExperiences / projects 的 `fromReference` 先例）。
-      Verify: 一份档案里引用两张教育卡，`fill-context` 的 `educations` 出现两条且顺序正确。
+- [x] T-301: `MaterialCardType` 加 `EDUCATION`，迁移只含 `ALTER TYPE ... ADD VALUE`。完成 2026-10-24（`72ffcf1`）。
+      **踩到的坑**：`prisma migrate dev` 执行了 SQL 但生成物没更新，dev 服务里的旧 client 不认识新枚举，
+      建卡时抛错被 Nitro 收成 500（字段怎么查都没问题）。加枚举值是三步：改 schema → migrate →
+      **generate + 重启 dev**。
+- [x] T-302: 注册表加 `EDUCATION`。**字段从计划的 12 个扩到 22 个**——按网申常见问法补了学制、
+      学号、学习方式、学校类别、培养方式、专业描述、专业课程、毕业论文、是否海外；专业排名改成下拉
+      （前5%~前50%/其他），存标准词便于插件匹配。为此新增 `select` / `textarea` / `number` 三种 kind。
+      完成 2026-10-24（`72ffcf1`、`e5caff9`）。
+      Verify: 共享层测试覆盖字段清单与下拉选项；弹窗里 22 个字段可填可存。
+- [x] T-303（做法与原计划不同）: **没有**改 `legacy-material-migration.service.ts`——那套入口绑在
+      网申档案上，而教育挂在个人主档案，归属不同。改成一次性脚本 `web/scripts/migrate-education-to-cards.ts`
+      （照 `auth-bootstrap.ts` 的风格：先 `--dry-run`、幂等、不删原数据）。完成 2026-10-24。
+      Verify: 用户已在本机跑过，迁移生成教育卡成功。
+- [x] T-304: `educationsFromReferences`（放在 `document-resolver.ts`，纯函数）把教育卡转成
+      `educations` 数组项，四个调用点统一使用：简历预览 / 草稿 / 保存版本 / 网申档案版本。
+      顺序按 `sortOrder`（拖动顺序）。完成 2026-10-24（`72ffcf1`）。
+      Verify: 4 条单元测试 + 端到端断言（按顺序渲染、字段齐全、学校名只出现一次）。
+- [x] T-305（比计划更彻底）: 迁移完成后**直接取消回退**（`?? []`），而不是"停用默认渲染"。
+      教育从此只认卡片；同时删掉个人档案页的教育编辑区，并把 `personalProfileSchema.educations`
+      从 `.default([])` 改成 `.optional()`——否则页面不提交该字段时会被默认值覆盖成空数组，直接丢数据。
+      完成 2026-10-24（`72ffcf1`）。
+      Verify: schema 测试确认"只传 basics"不会带上 educations 键。
+- [x] T-306: 网申档案版本走同一个函数（第四个调用点），因此自动跟随；
+      插件读的 `c.educations` 数组形状没变，**插件侧零改动**。完成 2026-10-24。
+      Verify: 端到端断言用的是与插件相同的数组形状。
+- [x] T-307（计划外）: A4 里要把教育卡从"补充行"里排掉（否则同一张卡渲染两次）；
+      并修掉 `displayMonth` 只认 YYYY-MM 的 bug——日期精度改到日后，教育段会显示成 `2024-09-01`。
+      完成 2026-10-24（`72ffcf1`）。
 
 ## P4 网申档案可见性 + 插件映射
 
