@@ -1,0 +1,15 @@
+{
+  "site": "北森 · jlcehr.zhiye.com（社会招聘表单，无区块标题）",
+  "dump": "beisen-jlcehr.json",
+  "profile": "example-profile.json",
+  "note": "这一页的特点是整页没有区块标题，段落只能从「相邻字段」里读。期望覆盖：人员字段不被邻居拉走、项目块日期归位、复选框读记录状态。",
+  "expect": [
+    { "id": "0::form-field-5", "key": "basics.birthDate", "value": "2001-11-11" },
+    { "id": "0::form-field-13", "key": "basics.targetCity", "value": "北京市" },
+    { "id": "0::form-field-14", "key": "basics.availableDate", "value": "一个月内", "why": "相邻字段里有「学校名称」，但它仍是本人信息" },
+    { "id": "0::form-field-6", "status": "needs_manual", "why": "示例档案没有证件号" },
+    { "id": "0::form-field-27", "key": "work.startDate", "why": "工作块的开始时间，靠相邻的「公司名称」判出段落" },
+    { "id": "0::form-field-40", "key": "project.endDate", "why": "项目块的结束时间，靠相邻的「项目描述」判出段落" },
+    { "id": "0::form-field-47", "key": "project.endDate", "value": "true", "why": "这条项目没有结束时间，勾选至今" }
+  ]
+}

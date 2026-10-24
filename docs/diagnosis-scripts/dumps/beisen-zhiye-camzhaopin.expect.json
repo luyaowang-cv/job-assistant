@@ -1,0 +1,15 @@
+{
+  "site": "北森 iTalentX · camzhaopin.zhiye.com",
+  "dump": "beisen-zhiye-camzhaopin.json",
+  "profile": "example-profile.json",
+  "note": "手写的期望，不是从当前输出倒推的。每条都是一个\"这家站点必须这样映射\"的结论；改规则后这里不动，跑不过就是回归。",
+  "expect": [
+    { "id": "0::form-field-1", "key": "basics.targetCity", "value": "北京市" },
+    { "id": "0::form-field-10", "key": "education.major", "value": "物联网工程" },
+    { "id": "0::form-field-34", "key": "project.role", "value": "独立开发" },
+    { "id": "0::form-field-25", "key": "work.endDate", "value": "true" },
+    { "id": "0::form-field-37", "key": "project.endDate", "value": "true" },
+    { "id": "0::form-field-46", "status": "needs_manual", "why": "现月薪没有可填的档案值" },
+    { "id": "0::form-field-52", "status": "needs_manual", "why": "技能是扁平数组，没有每项描述" }
+  ]
+}
