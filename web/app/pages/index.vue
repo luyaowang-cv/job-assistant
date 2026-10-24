@@ -124,6 +124,65 @@ const scheduleAll = computed(() => (summary.value?.schedule.items ?? []).map(ite
 const scheduleShown = computed(() => scheduleAll.value.slice(0, SCHEDULE_VISIBLE))
 const scheduleTodayCount = computed(() => scheduleAll.value.filter(item => item.label.dayDiff === 0).length)
 
+// ---- 就地「安排下一步」----
+// 填日期的入口本来只埋在投递看板的编辑弹窗里，卡片没内容时用户就得跳走。
+// 这里直接写 Application.nextAction / nextActionAt（复用 PATCH /api/v1/applications/:id），
+// 不新开接口、不新增字段。
+type ApplicationOption = { id: string, job: { title: string, company: { name: string } } }
+
+const scheduleDialogVisible = ref(false)
+const scheduleSaving = ref(false)
+const scheduleOptions = ref<ApplicationOption[]>([])
+const scheduleOptionsLoading = ref(false)
+const scheduleForm = reactive({ applicationId: '', nextAction: '', nextActionAt: '' })
+
+function openScheduleDialog() {
+  scheduleForm.applicationId = ''
+  scheduleForm.nextAction = ''
+  scheduleForm.nextActionAt = ''
+  scheduleDialogVisible.value = true
+  void loadScheduleOptions()
+}
+
+// 投递可能有上百条，列表接口只给 100 —— 所以做成远程搜索（走接口的 search，按公司/岗位匹配），
+// 而不是把 100 条塞进下拉框里让人自己翻。
+async function loadScheduleOptions(keyword?: string) {
+  scheduleOptionsLoading.value = true
+  try {
+    const response = await $fetch<{ data: { items: ApplicationOption[] } }>('/api/v1/applications', {
+      query: { pageSize: 100, ...(keyword ? { search: keyword } : {}) },
+    })
+    scheduleOptions.value = response.data.items
+  }
+  catch { scheduleOptions.value = [] }
+  finally { scheduleOptionsLoading.value = false }
+}
+
+// 卡片只列今天及以后，所以过去的日期在这里就不该可选，省得存进去却看不见
+function isPastDate(date: Date) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date.getTime() < today.getTime()
+}
+
+async function saveSchedule() {
+  if (!scheduleForm.applicationId) { ElMessage.warning('先选一条投递。'); return }
+  if (!scheduleForm.nextActionAt) { ElMessage.warning('选一个日期。'); return }
+  scheduleSaving.value = true
+  try {
+    await $fetch(`/api/v1/applications/${scheduleForm.applicationId}`, {
+      method: 'PATCH',
+      // nextActionAt 传 'YYYY-MM-DD'，schema 里是 z.coerce.date()，和投递表单存进去的口径一致
+      body: { nextAction: scheduleForm.nextAction.trim() || null, nextActionAt: scheduleForm.nextActionAt },
+    })
+    ElMessage.success('已经排上了。')
+    scheduleDialogVisible.value = false
+    await loadSummary()
+  }
+  catch { ElMessage.error('保存失败，请重试。') }
+  finally { scheduleSaving.value = false }
+}
+
 // 设计规范只允许"辅助理解"的动效，且不能缩放放大——条形生长和数字滚动都属于这一类。
 // index.scss 里的全局 prefers-reduced-motion 规则只能压 CSS 过渡，压不住这里用 rAF 写的动画，所以要自己判断。
 function animateFunnel() {
@@ -245,7 +304,10 @@ onMounted(() => { void loadSummary() })
             接下来
             <span v-if="scheduleTodayCount" class="dashboard-schedule__pill">今天 {{ scheduleTodayCount }}</span>
           </h2>
-          <NuxtLink to="/applications" class="dashboard-schedule__more">{{ summary?.schedule.total ? `${summary.schedule.total} 条 →` : '投递看板 →' }}</NuxtLink>
+          <div class="dashboard-schedule__actions">
+            <button type="button" class="dashboard-schedule__add" title="安排下一步" aria-label="安排下一步" @click="openScheduleDialog">＋</button>
+            <NuxtLink to="/applications" class="dashboard-schedule__more">{{ summary?.schedule.total ? `${summary.schedule.total} 条 →` : '投递看板 →' }}</NuxtLink>
+          </div>
         </header>
         <ul v-if="scheduleShown.length" class="dashboard-schedule__list">
           <li v-for="item in scheduleShown" :key="item.id">
@@ -259,7 +321,10 @@ onMounted(() => { void loadSummary() })
             </button>
           </li>
         </ul>
-        <p v-else-if="summary" class="dashboard-empty">接下来没有安排。只列今天及以后的「下一步日期」，已经过去的不会出现在这里 —— 去投递详情里填一个就会排上来。</p>
+        <div v-else-if="summary" class="dashboard-schedule__empty">
+          <p>接下来没有安排。只列今天及以后的「下一步日期」，已经过去的不会出现在这里。</p>
+          <button type="button" class="dashboard-schedule__empty-action" @click="openScheduleDialog">＋ 安排下一步</button>
+        </div>
         <p v-else class="dashboard-empty">正在读取投递数据…</p>
       </article>
     </section>
@@ -344,6 +409,46 @@ onMounted(() => { void loadSummary() })
         </div>
       </div>
       <template #footer><NuxtLink to="/applications" class="dashboard-dialog-link" @click="detailVisible = false">前往投递看板编辑</NuxtLink></template>
+    </el-dialog>
+
+    <!-- 就地安排下一步：选投递 + 写事项 + 选日期，直接写回那条投递的 nextAction/nextActionAt -->
+    <el-dialog v-model="scheduleDialogVisible" width="min(480px, calc(100vw - 32px))" class="schedule-dialog" title="安排下一步">
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="哪条投递">
+          <el-select
+            v-model="scheduleForm.applicationId"
+            class="w-full"
+            filterable
+            remote
+            :remote-method="loadScheduleOptions"
+            :loading="scheduleOptionsLoading"
+            placeholder="按公司或岗位搜索"
+          >
+            <el-option
+              v-for="option in scheduleOptions"
+              :key="option.id"
+              :label="`${option.job.company.name} · ${option.job.title}`"
+              :value="option.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="下一步做什么">
+          <el-input v-model="scheduleForm.nextAction" maxlength="60" placeholder="例如：准备一面 / 补交作品集链接" />
+        </el-form-item>
+        <el-form-item label="哪天">
+          <el-date-picker
+            v-model="scheduleForm.nextActionAt"
+            class="w-full"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选日期"
+            :disabled-date="isPastDate"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :loading="scheduleSaving" type="primary" @click="saveSchedule">保存</el-button>
+      </template>
     </el-dialog>
   </section>
 </template>

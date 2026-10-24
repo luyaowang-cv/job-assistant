@@ -14,6 +14,7 @@
 
 - `GET /api/v1/dashboard/summary` 返回体新增 `schedule` 块：`items` 与 `total`。
 - 取数口径：`Application.nextActionAt` 非空、未软删、状态不是挂了/放弃、**日期在今天及以后**；按 `nextActionAt` 升序。
+- 就地「安排下一步」：卡片右上角一个 ＋，空状态里一个「＋ 安排下一步」，都开同一个弹窗 —— 选投递（对列表接口做远程搜索）、写下一步、选日期，保存直接 `PATCH` 回那条投递。日期控件禁用今天以前的日子（因为卡片不列过去）。
 - 日期标签收敛到 `web/shared/schedule.ts` 一个纯函数里，配单测（`pnpm test:schedule`）。
 - 概览区从三列改四列：重点 / 今日投递 / 本周投递 / 接下来；1180px 以下折两行，900px 以下单列。
 
@@ -30,8 +31,9 @@
 - 每条显示公司、下一步（没填时退回岗位名）、相对时间和具体日期（`M/D · 周X`）。
 - 今天绿色、两天内琥珀、更远灰色；卡片头部在有条目落在今天时显示「今天 N」药丸。
 - **今天之前的日期一律不进卡片**，包括之前填过但没办的；挂了/放弃的投递不出现。
-- 没有日程时显示引导文案，说明只列今天及以后、去投递详情填「下一步日期」。
+- 没有日程时显示引导文案，说明只列今天及以后，并给一个「＋ 安排下一步」按钮。
 - 点击任意一条打开投递详情弹窗，不跳转页面。
+- 安排弹窗里：投递下拉可按公司/岗位远程搜索（投递可能超过列表接口 100 条的上限）；事项留空也允许，卡片会退回显示岗位名；日期必填且不能选今天以前。保存后卡片立即刷新。
 - `shared/schedule.test.ts` 在 UTC / Asia/Shanghai / America/New_York / Pacific/Auckland 四个时区下结果一致。
 - 概览区 1180px 以上四列一行；1180–900 两行（重点整行 → 两张统计卡 → 日程整行）；900px 以下单列。
 
@@ -40,7 +42,10 @@
 - **扩展**：`GET /api/v1/dashboard/summary`
   - 新增查询参数 `scheduleFrom`（ISO 字符串）：本地今天的**日历日**换算成的 UTC 零点。前端不传时服务端按 `dayStart` 的日期兜底。
   - 返回体新增 `schedule: { items: ScheduleItem[], total: number }`，其中 `ScheduleItem = { id, company, title, status, statusLabel, action, at }`（`at` 是 ISO 字符串）。
-- **复用不改**：`GET /api/v1/applications/:id`（弹窗数据源）。
+- **复用不改**：
+  - `GET /api/v1/applications/:id`（详情弹窗数据源）；
+  - `GET /api/v1/applications?search=`（安排弹窗的投递下拉，远程搜索，`pageSize: 100`）；
+  - `PATCH /api/v1/applications/:id`（写入 `nextAction` / `nextActionAt`，body 只带这两个字段，schema 允许部分更新）。
 
 ## Risks and open questions
 
@@ -50,4 +55,5 @@
 - **date-only 的时区坑**：「下一步日期」用 `el-date-picker type="date"` 提交 `YYYY-MM-DD`，zod 的 `z.coerce.date()` 把它存成 UTC 零点。按本地时区读，UTC+8 会变成当天 08:00，UTC-5 会退到前一天。所以：
   - 显示：`shared/schedule.ts` 一律按 UTC 取日历日，再跟浏览器本地的今天比较；
   - 筛选：日界传 `scheduleFrom`（本地日历日 → UTC 零点），不能复用 `dayStart`（那是本地零点的时刻，会差一个时区偏移）。
-- **「下一步日期」的填写率**：F-045 记录过 `nextAction` 在 110 条投递里填写数为 0。这张卡有没有内容完全取决于用户去投递详情里填日期——入口目前埋在投递看板的编辑弹窗里，可能需要在空状态或卡片上直接给一个「安排下一步」入口。
+- **「下一步日期」的填写率**：F-045 记录过 `nextAction` 在 110 条投递里填写数为 0。一开始入口只埋在投递看板的编辑弹窗里，等于这张卡没有内容来源，所以补了卡片上的「＋ 安排下一步」（2026-10-24）。
+- **写入会影响"最后动过"时间**：安排弹窗走的是通用 PATCH，`updateApplication` 会写一条 `UPDATE` 事件，于是这条投递在「今日重点」里的停滞天数会归零（显示成"今天刚动过"）。这是合理的——用户确实动过了；但如果以后想让"只是排了个日期"不算推进，就得换成不写事件的专用接口。

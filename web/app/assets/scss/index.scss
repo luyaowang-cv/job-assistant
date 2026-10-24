@@ -541,7 +541,17 @@ select {
 .dashboard-schedule__item.is-today em { color: #3e725a; }
 .dashboard-schedule__item.is-soon { border-left-color: rgba(202, 163, 103, .8); }
 .dashboard-schedule__item.is-soon em { color: #a8845a; }
-.dashboard-schedule .dashboard-empty { margin: auto 0; line-height: 1.7; }
+/* 头部右侧：＋ 安排按钮 + 条数链接 */
+.dashboard-schedule__actions { display: flex; flex: none; align-items: center; gap: 6px; }
+.dashboard-schedule__add { display: flex; width: 20px; height: 20px; align-items: center; justify-content: center; padding: 0; border: 1px solid rgba(116, 132, 124, .28); border-radius: 7px; background: rgba(255, 255, 255, .7); color: #4f7560; font-size: 13px; line-height: 1; cursor: pointer; }
+.dashboard-schedule__add:hover { border-color: rgba(84, 120, 100, .5); background: #fff; color: #365f48; }
+.dashboard-schedule__add:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 1px; }
+/* 空状态：一句话 + 就地「安排下一步」入口（不然用户只知道去填，找不到地方填） */
+.dashboard-schedule__empty { display: flex; margin: auto 0; flex-direction: column; align-items: flex-start; gap: 8px; }
+.dashboard-schedule__empty p { margin: 0; color: #6c8177; font-size: 12px; line-height: 1.65; }
+.dashboard-schedule__empty-action { padding: 4px 9px; border: 1px solid rgba(116, 132, 124, .3); border-radius: 8px; background: rgba(255, 255, 255, .72); color: #3e725a; font-size: 11px; cursor: pointer; }
+.dashboard-schedule__empty-action:hover { border-color: rgba(84, 120, 100, .5); background: #fff; }
+.dashboard-schedule__empty-action:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 1px; }
 
 /* 今日重点 + 投递转化并排。左栏给今日重点（标题长、条目多），右栏漏斗只需要够放条形。 */
 /* 不写 align-items:start，让两栏等高：右栏底边会自动跟左栏的今日重点对齐。
