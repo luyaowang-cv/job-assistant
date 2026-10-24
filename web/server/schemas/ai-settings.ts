@@ -20,3 +20,16 @@ export const aiProviderSettingSchema = z.object({
 }).strict()
 
 export type AiProviderSettingInput = z.infer<typeof aiProviderSettingSchema>
+
+/**
+ * The connection test accepts the values currently in the form, so a correction
+ * can be verified before it is saved. Every field is optional: omitting one means
+ * "use what is stored".
+ */
+export const aiProviderTestSchema = z.object({
+  baseUrl: z.string().trim().url().max(500).refine(allowedBaseUrl, '仅允许 HTTPS 地址或本地 HTTP 地址。').optional(),
+  model: z.string().trim().min(1).max(160).optional(),
+  apiKey: z.string().trim().max(500).optional(),
+}).strict()
+
+export type AiProviderTestInput = z.infer<typeof aiProviderTestSchema>

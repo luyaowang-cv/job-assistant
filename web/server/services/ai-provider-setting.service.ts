@@ -1,3 +1,4 @@
+import { baseUrlHint, chatCompletionsUrl, explainProviderFailure } from '../lib/ai-endpoint'
 import { decrypt, encrypt } from '../lib/encryption'
 import { prisma } from '../lib/prisma'
 import type { AiProviderSettingInput } from '../schemas/ai-settings'
@@ -99,4 +100,82 @@ export async function getAiProviderRuntime() {
     ...toPublic(resolved),
     apiKey: apiKey(resolved),
   }
+}
+
+/** What the settings page shows after a connection test. Never contains the key. */
+export type AiProviderTestResult = {
+  ok: boolean
+  /** The URL that was actually requested — the whole point of the button. */
+  url: string
+  model: string
+  status: number
+  elapsedMs: number
+  message: string
+  hint: string
+}
+
+const TEST_TIMEOUT_MS = 15_000
+/** Enough to prove the key, the address and the model are accepted; costs ~1 token. */
+const TEST_MAX_TOKENS = 1
+
+/**
+ * Sends one minimal chat completion with the configuration in the form.
+ *
+ * Values typed into the form win over what is stored, so a correction can be
+ * verified before it is saved. A key typed into the form is used for this request
+ * only and is not persisted — saving is a separate, explicit action.
+ *
+ * Everything that can go wrong is reported as data, not thrown: the page needs to
+ * show the status, the requested URL and the upstream's own words, and a stack
+ * trace through Nitro would replace all three with "500".
+ */
+export async function testAiProviderConnection(input: { baseUrl?: string, model?: string, apiKey?: string }): Promise<AiProviderTestResult> {
+  const user = await getCurrentUser()
+  const setting = await prisma.aiProviderSetting.findUnique({ where: { userId: user.id }, select: publicSelect })
+  const resolved = setting ?? DEFAULT_SETTING
+
+  const baseUrl = input.baseUrl?.trim() || resolved.baseUrl
+  const model = input.model?.trim() || resolved.model
+  const url = chatCompletionsUrl(baseUrl)
+  const typedKey = input.apiKey?.trim()
+  const key = typedKey || apiKey(resolved)
+
+  if (!key) {
+    return { ok: false, url, model, status: 0, elapsedMs: 0, message: '没有可用的 API Key。', hint: '在下面填一个再点保存；服务端环境变量也可以，但需要管理员配置。' }
+  }
+
+  const startedAt = Date.now()
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model, max_tokens: TEST_MAX_TOKENS, messages: [{ role: 'user', content: 'ping' }] }),
+      signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
+    })
+  }
+  catch (error) {
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    return {
+      ok: false,
+      url,
+      model,
+      status: 0,
+      elapsedMs: Date.now() - startedAt,
+      message: timedOut ? `${Math.round(TEST_TIMEOUT_MS / 1_000)} 秒内没有响应。` : '连不上这个地址。',
+      hint: timedOut ? '地址可能不对，或服务商当前不可用。' : '检查地址是否写错、是否需要代理，以及该域名是否允许服务器访问。',
+    }
+  }
+
+  const bodyText = await response.text().catch(() => '')
+  const elapsedMs = Date.now() - startedAt
+  // The address hint wins over the status hint: when the URL itself is wrong, the
+  // status code describes a request that was never going to work, and saying
+  // "check the Base URL" shortens the hunt more than "HTTP 404" does.
+  const addressHint = baseUrlHint(baseUrl)
+  if (response.ok) {
+    return { ok: true, url, model, status: response.status, elapsedMs, message: `连接成功（HTTP ${response.status}）。`, hint: addressHint }
+  }
+  const failure = explainProviderFailure(response.status, bodyText)
+  return { ok: false, url, model, status: response.status, elapsedMs, message: failure.message, hint: addressHint || failure.hint }
 }
