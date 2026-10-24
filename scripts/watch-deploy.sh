@@ -43,13 +43,25 @@ fi
 old_id=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo none)
 docker compose -f "$COMPOSE" pull --quiet web >/dev/null 2>&1
 new_id=$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || echo none)
+# 容器此刻实际在跑的镜像。单独看它，是因为上一次部署可能"以为重启了"其实没换
+# （见下面 force-recreate 的注释），那种状态下 latest 和容器会长期不一致。
+running_id=$(docker inspect --format '{{.Image}}' job-assistant-web 2>/dev/null || echo none)
 
-if [ "$old_id" = "$new_id" ]; then
-  exit 0 # 镜像没变，什么都不做（这是绝大多数轮次的情况）
+if [ "$old_id" = "$new_id" ] && [ "$running_id" = "$new_id" ]; then
+  exit 0 # 镜像没变、容器也在跑它，什么都不做（绝大多数轮次都走这里）
 fi
 
-say "发现新镜像 ${new_id:0:19}，开始部署"
+say "开始部署（latest=${new_id:0:19} 容器=${running_id:0:19}）"
 git pull --ff-only -q || { say "git pull 失败（服务器上有本地改动？）"; exit 1; }
-docker compose -f "$COMPOSE" up -d || { say "up -d 失败"; exit 1; }
-say "完成，当前提交 $(git rev-parse --short HEAD)"
+# 必须 force-recreate：compose 判断"要不要重建"看的是 service 配置哈希和镜像引用字符串，
+# 而这里是同一个 `:latest` 字符串，tag 背后换了 ID 它不管——实测只打印
+# "Container ... Running" 却没换镜像，线上还是旧的。--no-deps 保证不动 db / caddy。
+docker compose -f "$COMPOSE" up -d --no-deps --force-recreate web || { say "up -d 失败"; exit 1; }
+
+now_id=$(docker inspect --format '{{.Image}}' job-assistant-web 2>/dev/null || echo none)
+if [ "$now_id" != "$new_id" ]; then
+  say "警告：容器现在跑的是 ${now_id:0:19}，不是最新的 ${new_id:0:19}"
+else
+  say "完成，容器已切到 ${now_id:0:19}，当前提交 $(git rev-parse --short HEAD)"
+fi
 docker compose -f "$COMPOSE" ps | sed 's/^/    /'

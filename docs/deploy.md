@@ -53,6 +53,8 @@ tail -f /var/log/job-assistant-deploy.log
 
 镜像没变的轮次什么都不打印，这是正常的。
 
+**为什么脚本里是 `up -d --no-deps --force-recreate web`**：compose 判断"要不要重建"看的是 service 配置哈希和**镜像引用字符串**，而这里永远是同一个 `:latest`；tag 背后指向的 image ID 变了它不管。实测第一次部署就踩到了——日志打印"发现新镜像…开始部署"，接着是 `Container job-assistant-web Running`，`ps` 里容器还是旧镜像。所以现在：镜像 ID 一变就强制重建，重建完再 `docker inspect` 核对一次容器实际在跑的镜像，不一致就写警告。脚本还会在每轮里比"容器在跑的镜像"和"latest"，不一致也会补一次部署，能自愈。
+
 **一次性安装**（已经装过就跳过）：
 
 ```bash
