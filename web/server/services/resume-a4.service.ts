@@ -1,6 +1,9 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserType } from 'playwright-core'
+
+import { materialPeriod } from '#shared/material-types'
+
 import { resumeLayoutConfigSchema, type CompositionInput } from '../schemas/document-composition'
 import { prisma } from '../lib/prisma'
 import { resolveResumeDraft, resolveResumeVersion } from './document-composition.service'
@@ -17,13 +20,11 @@ const copy = (v: string) => `<ul>${v.split(/\r?\n/).map(x => x.trim()).filter(Bo
   return matched ? `<li><b>${esc(matched[1])}</b> ${esc(matched[2])}</li>` : `<li>${esc(value)}</li>`
 }).join('')}</ul>`
 
-const period = (facts: unknown) => {
-  const value = facts && typeof facts === 'object' ? facts as Record<string, unknown> : {}
-  return [value.startDate, value.endDate].filter(Boolean).map(esc).join(' — ')
-}
+// 起止时间的拼法只有一份：在 #shared/material-types.ts，素材库列表和简历都从那里取。
+// 以前这段逻辑有三份副本（页面、这里、以及测试里的手写期望），改奖项时间时差点只改一处。
 const materialMeta = (facts: unknown) => {
   const value = facts && typeof facts === 'object' ? facts as Record<string, unknown> : {}
-  return [value.role, value.organization, period(value)].filter(Boolean).map(esc).join(' | ')
+  return [value.role, value.organization, materialPeriod(value)].filter(Boolean).map(esc).join(' | ')
 }
 const stack = (facts: unknown) => {
   const value = facts && typeof facts === 'object' ? facts as Record<string, unknown> : {}

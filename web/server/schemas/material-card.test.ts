@@ -47,6 +47,20 @@ test('allows an empty title only for self evaluation cards', () => {
   assert.equal(updateMaterialCardSchema.parse({ title: '   ' }).title, '')
 })
 
+test('日期接受日精度，同时继续接受月精度的存量值', () => {
+  const base = { type: 'INTERNSHIP', title: '实习', tags: [], variant: { name: '标准版', content: '完成模块开发' } }
+  // 新数据：精确到日
+  assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025-06-15', endDate: '2025-08-01' } }).success, true)
+  // 存量数据：精确到月，必须继续通过，否则老卡片一编辑就保存失败
+  assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025-06', endDate: '2025-08' } }).success, true)
+  // 结束不能早于开始（两种精度混着比也要成立）
+  assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025-06-15', endDate: '2025-06-01' } }).success, false)
+  assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025-06', endDate: '2025-05' } }).success, false)
+  // 不补零、缺日缺月的都不算合法日期
+  assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025-6-15' } }).success, false)
+  assert.equal(createMaterialCardSchema.safeParse({ ...base, facts: { startDate: '2025' } }).success, false)
+})
+
 test('normalizes list query and enforces page limits', () => {
   const parsed = materialCardListQuerySchema.parse({ page: '2', pageSize: '50', tags: '前端,校招', includeArchived: 'true' })
   assert.deepEqual(parsed.tags, ['前端', '校招'])

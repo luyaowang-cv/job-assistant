@@ -35,8 +35,13 @@ export type MaterialCardType = (typeof MATERIAL_CARD_TYPES)[number]
 export type MaterialFieldKind =
   /** 单行文本。相邻的 text 字段会在弹窗里两两并排。 */
   | 'text'
-  /** 起止月份 + 「至今」勾选框。主键是 startDate，结束时间写 endDate，进行中写 '至今'。 */
-  | 'monthRange'
+  /**
+   * 起止日期 + 「至今」勾选框。主键是 startDate，结束时间写 endDate，进行中写 '至今'。
+   * 存的是 YYYY-MM-DD（网申表单普遍要求到日），显示只用前 7 位（简历上只要年月）。
+   */
+  | 'dateRange'
+  /** 单个日期。奖项、证书这类只有一个时间点的事实用它。只写 startDate，不写 endDate。 */
+  | 'date'
   /** 一串标签，页面里是逗号/斜杠分隔的字符串，facts 里是 string[]。 */
   | 'techList'
   /** 链接。 */
@@ -73,7 +78,8 @@ export type MaterialTypeSpec = {
 // 到时候只改某一个类型的那一段，不动其他类型。
 const role = (label: string): MaterialFieldSpec => ({ key: 'role', label, kind: 'text', placeholder: '显示在卡片标题右侧' })
 const organization = (label: string): MaterialFieldSpec => ({ key: 'organization', label, kind: 'text' })
-const period = (): MaterialFieldSpec => ({ key: 'startDate', label: '起止时间', kind: 'monthRange' })
+const period = (): MaterialFieldSpec => ({ key: 'startDate', label: '起止时间', kind: 'dateRange' })
+const date = (label: string): MaterialFieldSpec => ({ key: 'startDate', label, kind: 'date' })
 const techStack = (): MaterialFieldSpec => ({
   key: 'techStack',
   label: '技术栈',
@@ -129,9 +135,10 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleLabel: '奖项名称',
     titlePlaceholder: '例如：全国大学生竞赛一等奖',
     titleRequired: true,
-    // 注意：奖项本来只有一个获奖月份，现在和经历类共用 monthRange（两个日期）。
-    // 这是已知的错，P2 才改；P1 是纯重构，行为必须保持原样。
-    fields: [role('奖项等级'), organization('关联学校 / 颁发机构（可选）'), period()],
+    // 奖项只有一个获奖时间点。P1 时它和经历类共用起止区间（被迫填两个日期，
+    // 列表上显示成「2024-09 — 2024-09」），P2 换成单值。键名仍是 startDate，
+    // 不新造 awardedAt —— 否则存量卡片里的日期立刻读不到。
+    fields: [role('奖项等级'), organization('关联学校 / 颁发机构（可选）'), date('获奖时间')],
     listMeta: EXPERIENCE_META,
   },
   RESEARCH: {
@@ -147,7 +154,7 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleLabel: '证书名称',
     titlePlaceholder: '例如：软考数据库系统工程师',
     titleRequired: true,
-    fields: [role('级别 / 成绩（可选）'), organization('关联学校 / 颁发机构（可选）'), period()],
+    fields: [role('级别 / 成绩（可选）'), organization('关联学校 / 颁发机构（可选）'), date('取得时间')],
     listMeta: EXPERIENCE_META,
   },
   SKILL: {
@@ -195,11 +202,30 @@ export function materialTypeLabel(type: string): string {
 /**
  * 起止时间那一行：`2024-09 — 2025-03`，只有起始时就是 `2024-09`。
  * 空值一律跳过，不留下孤零零的分隔符。
+ *
+ * 注意这里**只显示到月**：库里存的是 YYYY-MM-DD（网申表单普遍要求到日），
+ * 但简历和列表上只要年月。显示精度只在这一处决定，改这里等于同时改简历和列表。
  */
 export function materialPeriod(facts: Record<string, unknown>): string {
   return [facts.startDate, facts.endDate]
     .filter((value): value is string => typeof value === 'string' && value !== '')
+    .map(monthOf)
     .join(' — ')
+}
+
+/** 2024-09-01 → 2024-09；'至今'、空值、年精度原样返回。 */
+function monthOf(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.slice(0, 7) : value
+}
+
+/**
+ * 表单回填用：日期控件吃 YYYY-MM-DD，而存量卡片里存的是 YYYY-MM（精确到月那个年代的数据）。
+ * 不补这一天，Element Plus 解析失败会把输入框显示成空，用户会以为日期丢了。
+ * 代价是"当月 1 日"这个值当初可能并不存在——显示不出日，所以看不出来。
+ */
+export function materialDateInput(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : value
 }
 
 /**

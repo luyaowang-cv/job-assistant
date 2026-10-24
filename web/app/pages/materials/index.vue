@@ -3,7 +3,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 // 类型的名字、该有哪些字段、列表副标题拼什么都来自这里。页面不再自己判断「这个类型有没有时间」，
 // 只问注册表。见 web/shared/material-types.ts 的头注释。
-import { MATERIAL_TYPE_LABELS, materialListMeta, materialTypeLabel, materialTypeSpec, type MaterialFieldSpec } from '#shared/material-types'
+import { MATERIAL_TYPE_LABELS, materialDateInput, materialListMeta, materialTypeLabel, materialTypeSpec, type MaterialFieldSpec } from '#shared/material-types'
 
 type Variant = { id: string; name: string; content: string; createdAt: string }
 type Card = { id: string; type: string; title: string; tags: string[]; facts: Record<string, unknown>; archivedAt: string | null; variants: Variant[] }
@@ -70,7 +70,7 @@ const fieldRows = computed(() => {
 /** 技术栈是整行输入框；其余单字段行沿用原来的 dialog-grid 列宽。 */
 function rowClass(row: MaterialFieldSpec[]) {
   if (row[0]?.kind === 'techList') return 'wide-grid'
-  if (row[0]?.kind === 'monthRange') return 'dialog-grid time-grid'
+  if (row[0]?.kind === 'dateRange') return 'dialog-grid time-grid'
   return 'dialog-grid'
 }
 
@@ -99,8 +99,10 @@ function beginEdit(card: Card) {
     role: typeof facts.role === 'string' ? facts.role : '',
     techStackText: Array.isArray(facts.techStack) ? facts.techStack.filter(value => typeof value === 'string').join('、') : '',
     tags: [...card.tags],
-    startDate: typeof facts.startDate === 'string' ? facts.startDate : '',
-    endDate: facts.endDate === '至今' ? '' : (typeof facts.endDate === 'string' ? facts.endDate : ''),
+    // 日期控件吃 YYYY-MM-DD；存量卡片存的可能还是 YYYY-MM，交给 shared 补齐，
+    // 否则 Element Plus 解析失败会把输入框显示成空。
+    startDate: materialDateInput(facts.startDate),
+    endDate: facts.endDate === '至今' ? '' : materialDateInput(facts.endDate),
     current: facts.endDate === '至今',
     projectUrl: typeof facts.projectUrl === 'string' ? facts.projectUrl : '',
     variantName: '简短版',
@@ -115,7 +117,7 @@ function beginEdit(card: Card) {
 function buildFacts(): Record<string, unknown> {
   const facts: Record<string, unknown> = {}
   for (const field of spec.value?.fields ?? []) {
-    if (field.kind === 'monthRange') {
+    if (field.kind === 'dateRange') {
       if (form.startDate) facts[field.key] = form.startDate
       const endDate = form.current ? '至今' : form.endDate
       if (endDate) facts.endDate = endDate
@@ -124,6 +126,12 @@ function buildFacts(): Record<string, unknown> {
     if (field.kind === 'techList') {
       const list = form.techStackText.split(/[,，/]/).map(value => value.trim()).filter(Boolean)
       if (list.length) facts[field.key] = list
+      continue
+    }
+    // 单月份只写 startDate。注意 PATCH 是整体替换 facts，所以不写 endDate 就等于删掉它——
+    // 这正是「编辑即清洗」：存量奖项卡里那个多余的结束月份会在下次保存时消失。
+    if (field.kind === 'date') {
+      if (form.startDate) facts[field.key] = form.startDate
       continue
     }
     const value = fieldValue(field).trim()
@@ -236,10 +244,15 @@ onMounted(() => void load())
         <!-- 字段全部来自注册表：有几行、每行放什么控件，由 spec.fields 的顺序和 kind 决定。
              这里不再出现任何按类型名的判断。 -->
         <div v-for="(row, rowIndex) in fieldRows" :key="rowIndex" :class="rowClass(row)">
-          <template v-if="row[0]?.kind === 'monthRange'">
-            <el-form-item label="开始时间"><el-date-picker v-model="form.startDate" type="month" value-format="YYYY-MM" format="YYYY-MM" placeholder="选择月份" /></el-form-item>
+          <template v-if="row[0]?.kind === 'dateRange'">
+            <el-form-item label="开始时间"><el-date-picker v-model="form.startDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
             <el-form-item label="结束时间">
-              <div class="end-date-control"><el-date-picker v-model="form.endDate" type="month" value-format="YYYY-MM" format="YYYY-MM" placeholder="选择月份" :disabled="form.current" /><el-checkbox v-model="form.current">至今</el-checkbox></div>
+              <div class="end-date-control"><el-date-picker v-model="form.endDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" placeholder="选择日期" :disabled="form.current" /><el-checkbox v-model="form.current">至今</el-checkbox></div>
+            </el-form-item>
+          </template>
+          <template v-else-if="row[0]?.kind === 'date'">
+            <el-form-item :label="row[0]?.label">
+              <el-date-picker v-model="form.startDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" placeholder="选择日期" />
             </el-form-item>
           </template>
           <template v-else>

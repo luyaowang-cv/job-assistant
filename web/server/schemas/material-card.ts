@@ -13,6 +13,13 @@ const TITLE_REQUIRED_TYPES = new Set<string>(MATERIAL_CARD_TYPES.filter(type => 
 
 const tagsSchema = z.array(z.string().trim().min(1).max(40)).max(20).default([])
 const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/
+const dayPattern = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
+/**
+ * 日期存到日（YYYY-MM-DD），但 YYYY-MM 必须继续接受：那是"精确到月"那个年代写进库的存量数据。
+ * 只认新格式的话，用户点开一张老卡片、什么都不改、保存，就会直接 400。
+ * 注意这里不做真实日历校验（2024-02-31 能过），日期选择器本身挡住了这一层。
+ */
+const isCardDate = (value: unknown): value is string => typeof value === 'string' && (monthPattern.test(value) || dayPattern.test(value))
 /**
  * 目前 facts 仍是「全类型通用」的校验：只检查已知键的形状，不拒绝不认识的键。
  *
@@ -31,13 +38,13 @@ const factsSchema = z.record(z.string().max(80), z.unknown()).superRefine((facts
   if (facts.techStack !== undefined && (!Array.isArray(facts.techStack) || facts.techStack.length > 20 || facts.techStack.some(value => typeof value !== 'string' || !value.trim() || value.length > 60))) {
     context.addIssue({ code: 'custom', path: ['techStack'], message: 'techStack must contain up to 20 non-empty strings.' })
   }
-  if (startDate !== undefined && (typeof startDate !== 'string' || !monthPattern.test(startDate))) {
-    context.addIssue({ code: 'custom', path: ['startDate'], message: 'startDate must use YYYY-MM.' })
+  if (startDate !== undefined && !isCardDate(startDate)) {
+    context.addIssue({ code: 'custom', path: ['startDate'], message: 'startDate must use YYYY-MM or YYYY-MM-DD.' })
   }
-  if (endDate !== undefined && (typeof endDate !== 'string' || (endDate !== '至今' && !monthPattern.test(endDate)))) {
-    context.addIssue({ code: 'custom', path: ['endDate'], message: 'endDate must use YYYY-MM or 至今.' })
+  if (endDate !== undefined && (typeof endDate !== 'string' || (endDate !== '至今' && !isCardDate(endDate)))) {
+    context.addIssue({ code: 'custom', path: ['endDate'], message: 'endDate must use YYYY-MM or YYYY-MM-DD, or 至今.' })
   }
-  if (typeof startDate === 'string' && typeof endDate === 'string' && endDate !== '至今' && monthPattern.test(startDate) && monthPattern.test(endDate) && startDate > endDate) {
+  if (isCardDate(startDate) && isCardDate(endDate) && startDate > endDate) {
     context.addIssue({ code: 'custom', path: ['endDate'], message: 'endDate must not be earlier than startDate.' })
   }
 }).default({})
