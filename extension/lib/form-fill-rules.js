@@ -26,6 +26,16 @@ import { isEmptyStateText } from './form-labels.js'
 
 const SCORE_THRESHOLD = 0.68
 
+/**
+ * How close two rules may score before neither of them gets to decide.
+ *
+ * An exact label match scores 0.99 and a “label contains alias” match 0.91, so
+ * 0.05 sits between the two: a field whose best two readings are equally good
+ * is a field nobody has told us the meaning of. Answering it anyway is how a
+ * plausible-looking value gets written where nothing can correct it.
+ */
+const SCORE_MARGIN = 0.05
+
 /** Aliases this generic only disambiguate when the section is already known. */
 const GENERIC_ALIASES = new Set(['描述', '经历描述', '职责描述', '内容', '说明', '详情', 'description', 'details', 'content'])
 
@@ -95,8 +105,12 @@ const SECTION_HINTS = [
   // 规则跨段填上（它的记录池里也含科研，见 buildContext 的 projects）。
   ['research', /科研经历|科研项目|科研名称|科研成果|研究经历|研究成果|研究项目|论文名称|论文题目|论文标题|课题名称|学术成果|researchname|papername|papertitle/i],
   ['project', /项目经历|项目名称|项目角色|项目链接|项目描述|项目内容|projectexperience|projectname|projectrole|projectdescription/i],
-  ['education', /学校名称|毕业院校|入学时间|毕业时间|schoolname|educationlevel|universityname/i],
-  ['work', /公司名称|工作经历|实习经历|任职经历|companyname|workexperience|employment/i],
+  // 「教育经历 / 教育背景」这类区块标题是最常见的写法，原来一个都不认——只认
+  // 「学校名称 / 毕业院校 / 入学时间」这类字段名。一块只写着「教育经历」的区块
+  // 因此判不出段落，里面的日期分片（年/月两个框）会整块变成「无法确定属于哪一段」，
+  // 页面上看着就是"这一段填不上"。专业/学历/学位是同一块标题的其它写法。
+  ['education', /学校名称|毕业院校|入学时间|毕业时间|教育经历|教育背景|学习经历|学历信息|专业|学历|学位|就读|schoolname|educationlevel|universityname/i],
+  ['work', /公司名称|企业名称|任职单位|工作经历|实习经历|任职经历|companyname|workexperience|employment/i],
   ['campus', /校园经历|学生工作名称|社团名称|活动名称|campustitle|activityname/i],
   ['certificates', /证书名称|资格证书|认证名称|发证日期|获证日期|certificationname|licensedate/i],
   ['languages', /语言名称|外语名称|语种|languagename/i],
@@ -154,9 +168,9 @@ const RULES = [
   { key: 'basics.maritalStatus', section: 'basic', aliases: ['婚姻状况', '婚姻状态', 'maritalstatus'], read: c => c.basics.maritalStatus },
   { key: 'basics.heightCm', section: 'basic', aliases: ['身高', 'height'], read: c => c.basics.heightCm },
   { key: 'basics.weightKg', section: 'basic', aliases: ['体重', 'weight'], read: c => c.basics.weightKg },
-  { key: 'basics.emergencyContactName', section: 'basic', aliases: ['紧急联系人', '紧急联系人姓名', 'emergencycontact', 'emergencycontactname'], read: c => c.basics.emergencyContactName },
-  { key: 'basics.emergencyContactRelation', section: 'basic', aliases: ['紧急联系人关系', '与紧急联系人关系', '紧急联系人及关系', 'emergencycontactrelation'], read: c => c.basics.emergencyContactRelation },
-  { key: 'basics.emergencyContactPhone', section: 'basic', aliases: ['紧急联系电话', '紧急联系人电话', '紧急联系人手机', 'emergencycontactphone'], types: ['tel'], read: c => c.basics.emergencyContactPhone },
+  { key: 'basics.emergencyContactName', section: 'basic', attribution: 'other', aliases: ['紧急联系人', '紧急联系人姓名', 'emergencycontact', 'emergencycontactname'], read: c => c.basics.emergencyContactName },
+  { key: 'basics.emergencyContactRelation', section: 'basic', attribution: 'other', aliases: ['紧急联系人关系', '与紧急联系人关系', '紧急联系人及关系', 'emergencycontactrelation'], read: c => c.basics.emergencyContactRelation },
+  { key: 'basics.emergencyContactPhone', section: 'basic', attribution: 'other', aliases: ['紧急联系电话', '紧急联系人电话', '紧急联系人手机', 'emergencycontactphone'], types: ['tel'], read: c => c.basics.emergencyContactPhone },
   { key: 'basics.targetCity', section: 'basic', aliases: ['期望工作地点', '意向工作地点', '期望工作城市', '期望城市', '意向城市', '意向工作地', '期望工作地', 'preferredcity', 'expectedlocation', 'worklocation'], read: c => c.targetCity },
   { key: 'basics.expectedSalary', section: 'basic', aliases: ['期望薪资', '期望薪酬', '薪资期望', '薪资要求', '期望月薪', 'expectedsalary', 'salaryexpectation'], read: c => c.expectedSalary },
   // “入职时间” means availability on a basic-info form and a work start date
@@ -509,6 +523,37 @@ function descriptorFor(field) {
   return normalize(`${field.label ?? ''} ${field.placeholder ?? ''} ${field.name ?? ''}`)
 }
 
+/**
+ * Words that mean the box is asking about somebody other than the applicant.
+ *
+ * Multi-character only. Single characters would catch 母公司 / 子公司 / 子女教育
+ * inside a company or project name, and silently blank a legitimate field.
+ */
+const OTHER_PERSON_PATTERN = /父亲|母亲|家长|配偶|爱人|丈夫|妻子|子女|家庭成员|家庭|紧急|联系人|推荐人|证明人|介绍人|担保人|监护人|亲属|家人|亲友/
+
+/**
+ * Words that keep a field on the applicant even though it carries an
+ * other-person word: “家庭住址” is the applicant's own address. The veto runs
+ * before the other-person test for exactly this reason.
+ */
+const SELF_CONTEXT_PATTERN = /住址|地址|籍贯|户口|户籍|现居|所在城市/
+
+/** Which person a rule supplies a value for. Defaults to the applicant. */
+function ruleAttribution(rule) {
+  return rule.attribution ?? 'self'
+}
+
+export function attributionOfDescriptor(descriptor) {
+  const text = String(descriptor ?? '')
+  if (!text) return 'self'
+  if (SELF_CONTEXT_PATTERN.test(text)) return 'self'
+  return OTHER_PERSON_PATTERN.test(text) ? 'other' : 'self'
+}
+
+export function inferAttribution(field) {
+  return attributionOfDescriptor(descriptorFor(field))
+}
+
 function contextTextFor(field) {
   return normalize(field.context)
 }
@@ -683,12 +728,24 @@ function scoreRule(rule, field, signals, sectionHint, descriptor, sections) {
   const inputType = String(field?.inputType ?? '').toLowerCase()
   const controlType = String(field?.controlType ?? '').toLowerCase()
 
+  // Whose value this box wants is decided before any label is scored: a “姓名”
+  // box that says 父亲 must never be answered from the applicant's own record.
+  if (attributionOfDescriptor(descriptor) !== ruleAttribution(rule)) return 0
   if (sectionHint && rule.section !== sectionHint) {
     // Dates are the ambiguous case: “开始时间” appears in every block, so an
     // exact label alone is not enough to move one across sections. Everything
     // else may cross when the label matches exactly, which is how a stray
     // “学校名称” box inside a work block still reads the education record.
-    if (rule.date || score < 0.99) return 0
+    //
+    // Person-level facts are the exception. A 到岗时间 box that happens to sit
+    // next to a 学校名称 is still the applicant's availability, not that school's
+    // date — and the neighbour list is weak evidence, since it spills into the
+    // block after this one. Requiring an exact label keeps this from reopening
+    // the property boxes (“工作地点” inside a work block is still its location).
+    if (rule.section === 'basic') {
+      if (score < 0.99) return 0
+    }
+    else if (rule.date || score < 0.99) return 0
   }
   if (sections.includes(rule.section)) total += 0.08
   if (sectionHint === rule.section) total += 0.08
@@ -724,9 +781,20 @@ function bestRuleFor(field) {
   const descriptor = descriptorFor(field)
   const sections = contextSections(field)
   let best = null
+  let second = null
   for (const rule of RULES) {
     const score = scoreRule(rule, field, signals, sectionHint, descriptor, sections)
-    if (score > SCORE_THRESHOLD && (!best || score > best.score)) best = { rule, score }
+    if (score <= SCORE_THRESHOLD) continue
+    if (!best || score > best.score) {
+      second = best
+      best = { rule, score }
+    }
+    else if (!second || score > second.score) {
+      second = { rule, score }
+    }
+  }
+  if (best && second && best.score - second.score < SCORE_MARGIN) {
+    return { rule: null, score: best.score, conflict: [best.rule.key, second.rule.key] }
   }
   return best
 }
@@ -770,6 +838,39 @@ function chooseOption(value, options) {
 
 function isOptionControl(controlType) {
   return controlType === 'select' || controlType === 'radio-group'
+}
+
+/**
+ * A `<input type="number">` holds one plain number.
+ *
+ * Handing it “20k-25k” is not a value the control can keep: the setter drops it,
+ * readback then fails, and the report blames the page for refusing something it
+ * was never able to accept. Stopping here says what the profile actually holds.
+ *
+ * One number inside the text is still an answer (“20000元” → 20000). Two are a
+ * range, and picking one of them is the applicant's decision, not ours.
+ */
+function resolveNumericValue(value, field) {
+  if (String(field?.inputType ?? '').toLowerCase() !== 'number') return { value }
+  const text = normalizeText(value)
+  if (!text) return { value }
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) return { value: text }
+  const numbers = [...new Set(text.match(/-?\d+(?:\.\d+)?/g) ?? [])]
+  if (numbers.length > 1) {
+    return { error: `这个输入框只接受一个数字，档案里存的是「${text}」，需要你确认填哪个数。` }
+  }
+  // One digit plus a unit (“20k”, “2万”) is not an answer either: converting it
+  // invents the magnitude, and writing the bare 20 is off by three orders. This
+  // is the one case worth refusing outright.
+  if (numbers.length === 1 && /\d\s*(?:[kK]|千|万)/.test(text)) {
+    return { error: `这个输入框只接受数字，档案里存的是「${text}」，单位需要你确认后再填。` }
+  }
+  if (numbers.length === 1) return { value: numbers[0] }
+  return {
+    error: numbers.length
+      ? `这个输入框只接受一个数字，档案里存的是「${text}」，需要你确认填哪个数。`
+      : `这个输入框只接受数字，档案里存的是「${text}」。`,
+  }
 }
 
 /** Returns the option text to write, `undefined` when the control has no list. */
@@ -874,10 +975,9 @@ function isSensitive(field) {
     || SENSITIVE_PATTERNS.filter((_, index) => index !== EXEMPT_SENSITIVE_PATTERN_INDEX).some(pattern => pattern.test(identity))
 }
 
-export function classifyField(field) {
+export function classifyField(field, match = bestRuleFor(field)) {
   const identity = fieldIdentityText(field)
   if (isSensitive(field)) return 'sensitive'
-  const match = bestRuleFor(field)
   // `rule` is null for a date component that could not be placed in a block.
   if (match?.rule) return match.rule.section
   const inputType = String(field?.inputType ?? '').toLowerCase()
@@ -914,8 +1014,13 @@ export function buildFillPlan(profile, fields) {
   const descriptors = array(fields).map(candidate => (candidate && typeof candidate === 'object' ? candidate : {}))
 
   // Pass 1: decide what each field is before any record index exists.
+  //
+  // Every field that matches a rule joins `structure`, whether or not it will be
+  // written. Record numbering reads the page's structure, and a block that the
+  // user already filled is still one of the page's blocks — counting only the
+  // blank ones renumbers the rest from zero and writes the first record twice.
   const decisions = new Map()
-  const candidates = []
+  const structure = []
   for (const field of descriptors) {
     if (!normalizeText(field.id)) {
       decisions.set(field, { entry: baseEntry(field, 'unknown', 'needs_manual', '字段缺少稳定标识，无法安全填写。') })
@@ -929,7 +1034,11 @@ export function buildFillPlan(profile, fields) {
       decisions.set(field, { entry: { ...needsManual(field, 'unlabeled', '这个控件没有任何可识别的标签，无法判断它该填什么。'), skipAi: true } })
       continue
     }
-    const category = classifyField(field)
+    // Scored once and reused: the same field must not be read two ways in one
+    // pass, and `classifyField` would otherwise run the whole table again.
+    const match = bestRuleFor(field)
+    if (match?.rule) structure.push({ field, rule: match.rule, datePart: match.datePart })
+    const category = classifyField(field, match)
     if (category === 'sensitive') {
       decisions.set(field, { entry: baseEntry(field, category, 'skipped_sensitive', '敏感字段或上传控件不会填写。') })
       continue
@@ -942,7 +1051,17 @@ export function buildFillPlan(profile, fields) {
       decisions.set(field, { entry: needsManual(field, category, '字段当前不可编辑。') })
       continue
     }
-    const match = bestRuleFor(field)
+    // Two readings score the same: the label does not say which one it means.
+    // Neither the rule table nor a model can settle it, so it goes to the person.
+    if (match?.conflict) {
+      decisions.set(field, {
+        entry: {
+          ...needsManual(field, category, `两条规则都能对上（${match.conflict.join(' / ')}），不猜。`),
+          skipAi: true,
+        },
+      })
+      continue
+    }
     if (!match?.rule) {
       // A “至今” box is not a question: it is the end of a range, and it is
       // answered from the same fact the end-date box beside it is answered from.
@@ -978,18 +1097,20 @@ export function buildFillPlan(profile, fields) {
         continue
       }
       decisions.set(field, {
-        entry: needsManual(field, category, category === 'unknown' ? '字段含义无法可靠确认。' : '字段未匹配到档案中的可用栏目。'),
+        entry: needsManual(field, category, inferAttribution(field) === 'other'
+          ? '这是他人信息，本人档案不提供这一项。'
+          : category === 'unknown' ? '字段含义无法可靠确认。' : '字段未匹配到档案中的可用栏目。'),
       })
       continue
     }
-    candidates.push({ field, rule: match.rule, score: match.score, datePart: match.datePart })
   }
 
   // Pass 2: map repeating page blocks onto saved records, in page order.
-  assignRecordIndices(candidates)
+  // Input is the whole page structure, not the subset still waiting to be filled.
+  assignRecordIndices(structure)
 
   // Pass 3: resolve values and emit one entry per field, in page order.
-  const candidateByField = new Map(candidates.map(candidate => [candidate.field, candidate]))
+  const candidateByField = new Map(structure.map(candidate => [candidate.field, candidate]))
   const claimed = new Map()
   const entries = descriptors.map((field) => {
     const decided = decisions.get(field)
@@ -1008,8 +1129,13 @@ export function buildFillPlan(profile, fields) {
         // nothing to draw on and would invent one — a third degree for someone
         // who has two — so it is not asked.
         if (records.length > 0) {
+          // Name the block, not just the fact: “这块没数据” sends people to look
+          // at the whole section, “档案里没有第 3 条” sends them to the 3rd block.
+          const blockNumber = Number.isInteger(candidate.anchorIndex) ? candidate.anchorIndex + 1 : null
           return {
-            ...needsManual(field, category, '页面中的重复区块多于档案中的记录条数，此字段需要人工确认。', rule.key),
+            ...needsManual(field, category, blockNumber
+              ? `档案里没有第 ${blockNumber} 条对应记录，这一块需要人工填写。`
+              : '页面中的重复区块多于档案中的记录条数，此字段需要人工确认。', rule.key),
             skipAi: true,
           }
         }
@@ -1044,6 +1170,8 @@ export function buildFillPlan(profile, fields) {
 
     const resolved = resolveOptionValue(value, field)
     if (resolved.error) return needsManual(field, category, resolved.error, rule.key)
+    const shaped = resolveNumericValue(resolved.value, field)
+    if (shaped.error) return needsManual(field, category, shaped.error, rule.key)
 
     claimed.set(dedupeKey, field)
     return baseEntry(field, category, 'filled', describeRule(rule, recordIndex), {
@@ -1052,7 +1180,7 @@ export function buildFillPlan(profile, fields) {
       // fields of one record in the same AI batch, so a description is never
       // answered from another internship's facts.
       record: isRepeatable ? recordIndex : undefined,
-      value: resolved.value,
+      value: shaped.value,
       derived: rule.derived === true || undefined,
     })
   })

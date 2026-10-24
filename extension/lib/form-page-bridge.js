@@ -450,6 +450,99 @@ export function scanVisibleFormFields() {
   })
 }
 
+/**
+ * Paints this run's outcome on the controls themselves.
+ *
+ * The popup is destroyed the moment it loses focus, so anything the applicant is
+ * meant to act on has to live on the page. Three states, three meanings:
+ * filled (green), needs a decision (amber), the write did not stick (red).
+ *
+ * Only `outline` and a `data-` attribute are touched. `background-color` belongs
+ * to the transient highlight the writers use while typing, and `class` belongs to
+ * the page — painting either would make the page look broken.
+ *
+ * Runs inside the page via `chrome.scripting.executeScript`, so nothing here may
+ * reference a module-scope constant.
+ */
+export function markFieldStates(instructions) {
+  const groups = instructions && typeof instructions === 'object' ? instructions : {}
+  const CONTROL_SELECTOR = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'
+  const STATE_ATTRIBUTE = 'data-wl-fill-state'
+  const COLORS = { ok: 'rgba(22, 163, 74, 0.9)', manual: 'rgba(217, 119, 6, 0.9)', failed: 'rgba(220, 38, 38, 0.9)' }
+  const allRoots = () => {
+    const roots = [document]
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const node of roots[index].querySelectorAll('*')) {
+        if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot)
+      }
+    }
+    return roots
+  }
+  const queryAll = selector => allRoots().flatMap(root => Array.from(root.querySelectorAll(selector)))
+  const allControls = queryAll(CONTROL_SELECTOR)
+
+  // An id names a control by its position in `allControls`, which is how the scan,
+  // both writers and the value read all spell it.
+  const resolve = (fieldId) => {
+    const match = String(fieldId ?? '').match(/^(.*)-(\d+)$/)
+    if (!match) return null
+    const element = allControls[Number(match[2])]
+    if (!element) return null
+    // A radio group is painted on its block, not on the first radio in it.
+    return match[1].endsWith('radio-group')
+      ? element.closest('.el-form-item, .ant-form-item, .form-item, .form-group, .ud-formily-item, [role="group"]') ?? element
+      : element
+  }
+  const paint = (element, state) => {
+    if (!element || !COLORS[state]) return
+    element.setAttribute(STATE_ATTRIBUTE, state)
+    element.style.outline = `2px solid ${COLORS[state]}`
+    element.style.outlineOffset = '2px'
+  }
+
+  for (const state of Object.keys(COLORS)) {
+    for (const fieldId of groups[state] ?? []) paint(resolve(fieldId), state)
+  }
+
+  const counts = {}
+  for (const state of Object.keys(COLORS)) counts[state] = (groups[state] ?? []).length
+  return counts
+}
+
+/** Removes every mark this extension put on the page, including stale highlights. */
+export function clearFieldMarks() {
+  const STATE_ATTRIBUTE = 'data-wl-fill-state'
+  // The writers highlight by background while typing; those strings are the only
+  // ones this extension ever sets, so matching them cannot erase the page's own.
+  const OWN_HIGHLIGHTS = new Set(['#dcfce7', '#fee2e2', '#fef3c7', 'rgb(220, 252, 231)', 'rgb(254, 226, 226)', 'rgb(254, 243, 199)'])
+  const allRoots = () => {
+    const roots = [document]
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const node of roots[index].querySelectorAll('*')) {
+        if (node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot)
+      }
+    }
+    return roots
+  }
+  let cleared = 0
+  for (const root of allRoots()) {
+    for (const element of root.querySelectorAll(`[${STATE_ATTRIBUTE}]`)) {
+      element.removeAttribute(STATE_ATTRIBUTE)
+      element.style.outline = ''
+      element.style.outlineOffset = ''
+      cleared += 1
+    }
+    for (const element of root.querySelectorAll('input, textarea, select, [contenteditable]')) {
+      const painted = String(element.style.backgroundColor ?? '').replace(/\s+/g, '')
+      if (!OWN_HIGHLIGHTS.has(painted)) continue
+      element.style.backgroundColor = ''
+      element.style.transition = ''
+      cleared += 1
+    }
+  }
+  return cleared
+}
+
 export async function applyFillEntries(instructions) {
   const entries = Array.isArray(instructions) ? instructions : (instructions?.entries ?? [])
   const unresolvedIds = new Set(Array.isArray(instructions) ? [] : (instructions?.unresolvedIds ?? []))

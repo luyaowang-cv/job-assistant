@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildFillPlan, classifyField, reconcileFillOutcome } from './form-fill-rules.js'
+import { attributionOfDescriptor, buildFillPlan, classifyField, inferAttribution, reconcileFillOutcome } from './form-fill-rules.js'
 import { applyChoiceEntries, applyFillEntries, collectControlValues, scanVisibleFormFields } from './form-page-bridge.js'
 
 const profile = {
@@ -907,4 +907,298 @@ test('puts research records behind projects when a form only has 项目经历 bl
 
   assert.equal(value('first'), '多 Agent 前端迁移系统')
   assert.equal(value('second'), 'DA-PhysDiff')
+})
+
+// ---------------------------------------------------------------- F-048 归属
+
+const attributionProfile = { basics: { fullName: '张三', phone: '13800138000', email: 'wang@example.com' } }
+
+/** 桌面上的“别人”字段。档案里没有这些人的任何信息，所以一个都不该被填。 */
+const OTHER_PERSON_LABELS = [
+  '父亲姓名', '父亲手机号', '家长姓名', '联系人姓名', '推荐人姓名',
+  '证明人姓名', '推荐人手机号', '家庭联系电话', '家庭成员电话', '配偶手机号',
+]
+
+test('F-048 他人字段留空，不写本人的姓名与手机号', () => {
+  const fields = OTHER_PERSON_LABELS.map((label, index) => ({ id: `other-${index}`, label, inputType: 'text', controlType: 'input' }))
+  const plan = buildFillPlan(attributionProfile, fields)
+  const leaked = plan.entries
+    .filter(entry => entry.status === 'filled')
+    .map(entry => [OTHER_PERSON_LABELS[Number(entry.fieldId.split('-')[1])], entry.value])
+  assert.deepEqual(leaked, [], '他人字段不得被写入本人的值')
+})
+
+test('F-048 归属判定与字段在页面上的先后顺序无关', () => {
+  const own = [
+    { id: 'own-name', label: '姓名', inputType: 'text', controlType: 'input' },
+    { id: 'own-phone', label: '手机号', inputType: 'tel', controlType: 'input' },
+  ]
+  const others = OTHER_PERSON_LABELS.map((label, index) => ({ id: `other-${index}`, label, inputType: 'text', controlType: 'input' }))
+  const statusOf = (plan) => Object.fromEntries(plan.entries.map(entry => [entry.fieldId, entry.status]))
+  const forward = statusOf(buildFillPlan(attributionProfile, [...others, ...own]))
+  const backward = statusOf(buildFillPlan(attributionProfile, [...own, ...others]))
+  for (const field of others) {
+    assert.equal(forward[field.id], backward[field.id], `${field.label} 的状态随顺序变化，说明挡住它的是去重而不是归属`)
+    assert.notEqual(forward[field.id], 'filled', `${field.label} 被填上了`)
+  }
+  assert.equal(forward['own-name'], 'filled')
+  assert.equal(forward['own-phone'], 'filled')
+})
+
+test('F-048 档案里确有紧急联系人时按其自身取值，不与本人交叉', () => {
+  const withEmergency = {
+    basics: { fullName: '张三', phone: '13800138000', emergencyContactName: '李四', emergencyContactPhone: '13900139000' },
+  }
+  const plan = buildFillPlan(withEmergency, [
+    { id: 'name', label: '姓名', inputType: 'text', controlType: 'input' },
+    { id: 'phone', label: '手机号', inputType: 'tel', controlType: 'input' },
+    { id: 'ec-name', label: '紧急联系人姓名', inputType: 'text', controlType: 'input' },
+    { id: 'ec-phone', label: '紧急联系人电话', inputType: 'tel', controlType: 'input' },
+  ])
+  const value = (id) => plan.entries.find(entry => entry.fieldId === id)?.value
+  assert.equal(value('name'), '张三')
+  assert.equal(value('phone'), '13800138000')
+  assert.equal(value('ec-name'), '李四')
+  assert.equal(value('ec-phone'), '13900139000')
+})
+
+test('F-048 归属不符的字段给出「他人信息」类原因，而不是「认不出来」', () => {
+  const plan = buildFillPlan(attributionProfile, [
+    { id: 'father', label: '父亲姓名', inputType: 'text', controlType: 'input' },
+    { id: 'unknown', label: '某个看不懂的框', inputType: 'text', controlType: 'input' },
+  ])
+  const reason = (id) => plan.entries.find(entry => entry.fieldId === id)?.reason ?? ''
+  assert.match(reason('father'), /他人|该归属/, `实际原因：${reason('father')}`)
+  assert.doesNotMatch(reason('father'), /无法可靠确认/)
+  assert.match(reason('unknown'), /无法可靠确认/)
+})
+
+test('F-048 归属判定：他人词命中，但住址类反例优先', () => {
+  assert.equal(inferAttribution({ label: '父亲姓名' }), 'other')
+  assert.equal(inferAttribution({ label: '紧急联系人电话' }), 'other')
+  assert.equal(inferAttribution({ label: '家庭住址' }), 'self', '家庭住址是本人地址')
+  assert.equal(inferAttribution({ label: '公司名称' }), 'self', '公司名里的“公司”不是他人')
+  assert.equal(inferAttribution({ label: '子公司名称' }), 'self', '单字“子”不作数')
+  assert.equal(inferAttribution({ label: '姓名' }), 'self')
+  assert.equal(attributionOfDescriptor(''), 'self')
+})
+
+// ------------------------------------------------------- F-048 规则冲突分差
+
+test('F-048 两条规则分差过小时不猜，且不交给模型', () => {
+  const plan = buildFillPlan(profile, [
+    { id: 'start', label: '开始时间', inputType: 'text', controlType: 'input' },
+    { id: 'end', label: '结束时间', inputType: 'text', controlType: 'input' },
+  ])
+  for (const entry of plan.entries) {
+    assert.equal(entry.status, 'needs_manual', `${entry.label} 应该是人工确认`)
+    assert.equal(entry.skipAi, true, `${entry.label} 不应该交给模型`)
+    assert.match(entry.reason, /两条规则都能对上/, `实际原因：${entry.reason}`)
+  }
+})
+
+test('F-048 有段落线索时，开始时间仍然照常填上（分差闸门不误伤）', () => {
+  const withEducation = {
+    ...profile,
+    educations: [{ school: '北京大学', major: '计算机', educationLevel: '本科', startDate: '2020-09', endDate: '2024-06' }],
+  }
+  const plan = buildFillPlan(withEducation, [
+    { id: 'edu-start', label: '开始时间', context: '教育经历', inputType: 'text', controlType: 'input' },
+  ])
+  const [entry] = plan.entries
+  assert.equal(entry.status, 'filled', `实际：${entry.status} / ${entry.reason}`)
+  assert.equal(entry.target, 'education.startDate')
+})
+
+// ------------------------------------------------------- F-049 记录定位
+
+const twoWorkProfile = {
+  ...profile,
+  workExperiences: [
+    { company: '甲公司', title: '前端实习生', startDate: '2024-06', endDate: '2024-09', description: 'A' },
+    { company: '乙公司', title: '后端实习生', startDate: '2025-06', endDate: '2025-09', description: 'B' },
+  ],
+}
+
+test('F-049 已填的第 1 段不参与编号：第 2 段仍取第 2 条记录', () => {
+  const plan = buildFillPlan(twoWorkProfile, [
+    { id: 'c0', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input', hasValue: true },
+    { id: 's0', label: '开始时间', context: '实习经历', inputType: 'text', controlType: 'input', hasValue: true },
+    { id: 'c1', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 's1', label: '开始时间', context: '实习经历', inputType: 'text', controlType: 'input' },
+  ])
+  const value = (id) => plan.entries.find(entry => entry.fieldId === id)?.value
+  assert.equal(value('c1'), '乙公司', `第 2 段取到了 ${value('c1')}`)
+  assert.equal(value('s1'), '2025-06', `第 2 段取到了 ${value('s1')}`)
+})
+
+test('F-049 两段都空时按页面顺序取第 1、2 条（原行为不退化）', () => {
+  const plan = buildFillPlan(twoWorkProfile, [
+    { id: 'c0', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 'c1', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 's1', label: '开始时间', context: '实习经历', inputType: 'text', controlType: 'input' },
+  ])
+  const entry = (id) => plan.entries.find(item => item.fieldId === id)
+  assert.equal(entry('c0').value, '甲公司')
+  assert.equal(entry('c1').value, '乙公司')
+  assert.equal(entry('s1').value, '2025-06')
+})
+
+test('F-049 页面块数多于档案时，多出的块如实报告而不是重复用第 2 条', () => {
+  const plan = buildFillPlan(twoWorkProfile, [
+    { id: 'c0', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 'c1', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 'c2', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+  ])
+  const entry = (id) => plan.entries.find(item => item.fieldId === id)
+  assert.equal(entry('c0').value, '甲公司')
+  assert.equal(entry('c1').value, '乙公司')
+  assert.equal(entry('c2').status, 'needs_manual')
+  assert.match(entry('c2').reason, /第 3 条/, `实际原因：${entry('c2').reason}`)
+})
+
+test('F-049 区块里的他人字段不改变编号', () => {
+  const plan = buildFillPlan(twoWorkProfile, [
+    { id: 'c0', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input', hasValue: true },
+    { id: 'c1', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 'other1', label: '父亲姓名', context: '实习经历', inputType: 'text', controlType: 'input' },
+    { id: 's1', label: '开始时间', context: '实习经历', inputType: 'text', controlType: 'input' },
+  ])
+  const entry = (id) => plan.entries.find(item => item.fieldId === id)
+  assert.equal(entry('c1').value, '乙公司')
+  assert.equal(entry('s1').value, '2025-06')
+  assert.equal(entry('other1').status, 'needs_manual', '他人字段仍应留空，且不影响编号')
+})
+
+test('F-049 拆分的年/月属于同一条记录，不各占一条', () => {
+  const twoWork = {
+    ...profile,
+    workExperiences: [
+      { company: '甲公司', title: 'A', startDate: '2024-06', endDate: '2024-09' },
+      { company: '乙公司', title: 'B', startDate: '2025-07', endDate: '2025-11' },
+    ],
+  }
+  const part = (id, unit, extra = {}) => ({ id, label: '开始时间', context: '实习经历', inputType: 'text', controlType: 'input', dateUnit: unit, dateRole: 'start', ...extra })
+  const plan = buildFillPlan(twoWork, [
+    { id: 'c0', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input', hasValue: true },
+    part('y0', 'year', { hasValue: true }),
+    part('m0', 'month', { hasValue: true }),
+    { id: 'c1', label: '公司名称', context: '实习经历', inputType: 'text', controlType: 'input' },
+    part('y1', 'year'),
+    part('m1', 'month'),
+  ])
+  const entry = (id) => plan.entries.find(item => item.fieldId === id)
+  assert.equal(entry('y1').value, '2025')
+  assert.equal(entry('m1').value, '7')
+  assert.equal(entry('y1').record, 1)
+  assert.equal(entry('m1').record, 1)
+})
+
+// ------------------------------------------------------- F-050 控件覆盖
+
+test('F-050 区块标题只写「教育经历」时，日期分片也能归到教育', () => {
+  const withEducation = {
+    ...profile,
+    educations: [{ school: '北京大学', major: '计算机', educationLevel: '本科', startDate: '2020-09', endDate: '2024-06' }],
+  }
+  const part = (id, unit, role) => ({ id, label: '时间', context: '教育经历', inputType: 'text', controlType: 'input', dateUnit: unit, dateRole: role })
+  const plan = buildFillPlan(withEducation, [
+    { id: 'school', label: '学校名称', context: '教育经历', inputType: 'text', controlType: 'input' },
+    part('y', 'year', 'start'),
+    part('m', 'month', 'start'),
+    part('em', 'month', 'end'),
+  ])
+  const value = (id) => plan.entries.find(entry => entry.fieldId === id)?.value
+  assert.equal(value('y'), '2020', '年份分片应归到教育经历')
+  assert.equal(value('m'), '9', '月份分片应归到教育经历')
+  assert.equal(value('em'), '6', '结束月份应归到教育经历')
+})
+
+test('F-050 「企业名称」在只有「工作经历」标题的区块里照样认得出', () => {
+  const withWork = { ...profile, workExperiences: [{ company: '字节跳动', title: '前端实习生', startDate: '2025-06', endDate: '2025-09' }] }
+  const plan = buildFillPlan(withWork, [
+    { id: 'company', label: '企业名称', context: '工作经历', inputType: 'text', controlType: 'input' },
+    { id: 'title', label: '职位名称', context: '工作经历', inputType: 'text', controlType: 'input' },
+  ])
+  const value = (id) => plan.entries.find(entry => entry.fieldId === id)?.value
+  assert.equal(value('company'), '字节跳动')
+  assert.equal(value('title'), '前端实习生')
+})
+
+test('F-050 单选组与下拉能选中非逐字一致的选项', () => {
+  const plan = buildFillPlan(profile, [
+    { id: 'gender', label: '性别', inputType: 'radio', controlType: 'radio-group', options: ['男（Male）', '女（Female）'] },
+    { id: 'edu', label: '学历', inputType: 'text', controlType: 'select', options: ['请选择', '大学本科', '研究生'] },
+  ])
+  const value = (id) => plan.entries.find(entry => entry.fieldId === id)?.value
+  assert.equal(value('gender'), '女（Female）', '应当选中包含答案的那一项（档案里是“女”）')
+})
+
+// ------------------------------------------------------- F-051 值形态
+
+const salaryProfile = { ...profile, strategy: { expectedSalary: '20k-25k' } }
+const salaryField = (inputType) => ({ id: 'salary', label: '期望月薪', inputType, controlType: 'input' })
+
+test('F-051 数字输入框不接受区间值，改为让人确认，而不是写进去再被页面拒绝', () => {
+  const [entry] = buildFillPlan(salaryProfile, [salaryField('number')]).entries
+  assert.equal(entry.status, 'needs_manual')
+  assert.equal(entry.value, undefined)
+  assert.match(entry.reason, /只接受一个数字/, `实际原因：${entry.reason}`)
+})
+
+test('F-051 数字输入框里的单个数字会被取出，单位与说明被丢掉', () => {
+  const plan = buildFillPlan({ ...profile, strategy: { expectedSalary: '20000元' } }, [salaryField('number')])
+  const [entry] = plan.entries
+  assert.equal(entry.status, 'filled')
+  assert.equal(entry.value, '20000')
+})
+
+test('F-051 普通文本框仍然原样写入区间（数字规则不误伤）', () => {
+  const [entry] = buildFillPlan(salaryProfile, [salaryField('text')]).entries
+  assert.equal(entry.status, 'filled')
+  assert.equal(entry.value, '20k-25k')
+})
+
+test('F-051 带「k / 千 / 万」单位的值不换算，交给人确认', () => {
+  for (const value of ['20k', '2万', '5千']) {
+    const [entry] = buildFillPlan({ ...profile, strategy: { expectedSalary: value } }, [salaryField('number')]).entries
+    assert.equal(entry.status, 'needs_manual', `${value} 不该被写成裸数字`)
+    assert.match(entry.reason, /单位需要你确认/)
+  }
+  const [exact] = buildFillPlan({ ...profile, strategy: { expectedSalary: '20000' } }, [salaryField('number')]).entries
+  assert.equal(exact.value, '20000')
+})
+
+test('F-050 人员层面的字段不被邻居的区块词拉走（到岗时间挨着「学校名称」）', () => {
+  // 真机来源：北森 jlcehr 页面，「到岗时间」的相邻字段里有「学校名称」，
+  // 段落推断因此把它判成教育区块，而日期类规则不许跨段落——于是一个本来
+  // 能填的字段变成了「认不出」。人员层面的字段属于人，不属于某个区块。
+  const plan = buildFillPlan(
+    { ...profile, strategy: { availableDate: '一个月内' } },
+    [{
+      id: 'arrive',
+      label: '到岗时间',
+      context: '到岗时间 请选择；页面字段 13/45；相邻字段：期望月薪(税前)、期望工作城市、学校名称、专业名称',
+      inputType: 'text',
+      controlType: 'input',
+    }],
+  )
+  const [entry] = plan.entries
+  assert.equal(entry.status, 'filled', `实际：${entry.status} / ${entry.reason}`)
+  assert.equal(entry.target, 'basics.availableDate')
+  assert.equal(entry.value, '一个月内')
+})
+
+test('F-050 放宽只对「精确命中」生效，含糊的标签仍不会被拉成本人字段', () => {
+  // 「工作地点」包含「期望工作地点」这个别名，但只是包含而非相等。放宽的
+  // 那条分支要求 0.99（精确命中），所以它不该被填成本人的期望城市。
+  const plan = buildFillPlan(
+    { ...profile, strategy: { targetLocations: ['北京市'] } },
+    [{ id: 'loc', label: '工作地点', context: '公司名称、职位名称、工作地点；相邻字段：开始时间、结束时间', inputType: 'text', controlType: 'input' }],
+  )
+  const [entry] = plan.entries
+  assert.ok(
+    entry.status !== 'filled' || entry.target !== 'basics.targetCity',
+    `含糊的标签被跨段落填成了 ${entry.target}：${entry.value}`,
+  )
 })

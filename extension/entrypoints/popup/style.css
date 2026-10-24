@@ -47,3 +47,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .memory-scope { margin: 0; grid-column: 1; color: #94a3b8; font-size: 11px; }
 .memory-entry button { grid-row: 1 / 4; grid-column: 2; align-self: center; min-height: 26px; padding: 3px 8px; font-size: 11px; }
 .memory-empty { margin: 0; color: #94a3b8; font-size: 12px; }
+/* F-054 报告分区：四个「需手动处理」类别各有标题，颜色与页面标记一致 */
+.fill-legend { color: #64748b; }
+.fill-group { margin-top: 6px; font-weight: 600; }
+.fill-group-filled { color: #0f766e; }
+.fill-group-skipped { color: #64748b; }
+.fill-group-write_failed { color: #b91c1c; }
+.fill-group-unanswered { color: #b45309; }
+.fill-group-not_attempted { color: #64748b; }
+.fill-group-manual { color: #b45309; }

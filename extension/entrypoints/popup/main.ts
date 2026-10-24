@@ -8,10 +8,13 @@ import {
   rememberAnswer,
   touchAnswer,
 } from '../../lib/answer-memory.js'
-import { applyChoiceEntries, applyFillEntries, collectControlValues, scanVisibleFormFields } from '../../lib/form-page-bridge.js'
+import { applyChoiceEntries, applyFillEntries, clearFieldMarks, collectControlValues, markFieldStates, scanVisibleFormFields } from '../../lib/form-page-bridge.js'
 import { buildFillBatches } from '../../lib/fill-batches.js'
-import { countUnreachedFrames, groupByFrame, isChoiceField, qualifyFieldId } from '../../lib/frame-scope.js'
+import { countUnreachedFrames, frameOf, groupByFrame, isChoiceField, localFieldId, qualifyFieldId } from '../../lib/frame-scope.js'
 import { buildFillPlan } from '../../lib/form-fill-rules.js'
+import { ApiError, FILL_RATE_LIMIT_DELAYS_MS, isGlobalFailure, isRetryable, retryDelayFor } from '../../lib/failure-policy.js'
+import { progressText } from '../../lib/progress-text.js'
+import { groupReportEntries } from '../../lib/report-groups.js'
 import {
   appendTurn,
   readThread,
@@ -55,27 +58,6 @@ const MAX_FILL_BATCHES = 60
 
 /** Attempts per batch. A batch that still fails is skipped; the rest carry on. */
 const FILL_BATCH_ATTEMPTS = 3
-/**
- * How long to wait before re-sending a batch that failed.
- *
- * A dropped connection clears in a second or two. A rate limit does not: the
- * allowance reopens on a per-minute clock, so retrying after one second is not
- * only certain to fail, it is one more request against the very limit that is
- * being hit — which is how a single 429 becomes a run of them. The two waits
- * were the same before, and the short one was applied to the case that needs the
- * long one.
- */
-const FILL_RETRY_DELAYS_MS = [1_000, 3_000]
-const FILL_RATE_LIMIT_DELAYS_MS = [15_000, 30_000]
-
-/** How long to wait before attempt `attempt + 1` of a failed batch. */
-function retryDelayFor(error: unknown, attempt: number) {
-  const delays = error instanceof ApiError && error.code === 'AI_PROVIDER_RATE_LIMITED'
-    ? FILL_RATE_LIMIT_DELAYS_MS
-    : FILL_RETRY_DELAYS_MS
-  return delays[attempt]
-}
-
 /**
  * Breathes between batches so a fast form does not trip a requests-per-minute
  * cap. Twenty back-to-back calls is what turned a working fill into a mid-form
@@ -143,64 +125,6 @@ type ApiFailure = {
       message?: string
     }>
   }
-}
-
-/**
- * Carries the response's status and machine-readable code alongside the message
- * the user sees. Without them a caller cannot tell a rate limit — which clears
- * on its own — from a rejected API key, which never will.
- */
-class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string) {
-    super(message)
-    this.name = 'ApiError'
-  }
-}
-
-/** Codes where a second attempt can plausibly succeed. */
-const RETRYABLE_CODES = new Set([
-  'NETWORK_UNREACHABLE',
-  'AI_PROVIDER_RATE_LIMITED',
-  'AI_PROVIDER_UNAVAILABLE',
-  'AI_PROVIDER_TIMEOUT',
-  // A truncated reply is a sampling accident; the next attempt usually parses.
-  'AI_PROVIDER_INVALID_RESPONSE',
-])
-
-/**
- * Codes where *every* remaining batch would fail the same way, so sending them is
- * only noise. Everything else is this batch's problem: a rejected batch is not a
- * reason to abandon the rest of the form, which is what used to happen.
- */
-const ABORTING_CODES = new Set([
-  'AI_KEY_INVALID',
-  'AI_KEY_NOT_CONFIGURED',
-  'UNAUTHORIZED',
-  'EMAIL_NOT_VERIFIED',
-])
-
-function isRetryable(error: unknown) {
-  if (!(error instanceof ApiError)) return false
-  if (RETRYABLE_CODES.has(error.code)) return true
-  // An unrecognised 5xx is the workbench itself failing, which is worth one more
-  // try. An unrecognised 4xx is this request being wrong, which is not.
-  return !error.code && error.status >= 500
-}
-
-/**
- * A request that ran out the client's own clock is deliberately not retried, which
- * is why `NETWORK_TIMEOUT` is absent from `RETRYABLE_CODES`: it means the workbench
- * was still working after 100 seconds, well past its own 60-second ceiling on the
- * model. Re-sending spends another 100 seconds and another full provider call to
- * ask the same stuck question, so that batch is reported as failed and the rest of
- * the form gets its turn instead. A connection that drops outright arrives as
- * `NETWORK_UNREACHABLE`, which *is* retried.
- */
-
-/** Whether the rest of the form is worth sending after this error. */
-function isGlobalFailure(error: unknown) {
-  if (!(error instanceof ApiError)) return false
-  return ABORTING_CODES.has(error.code) || error.status === 401 || error.status === 403
 }
 
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
@@ -273,6 +197,11 @@ type FillEntry = {
    * a date component with no block to belong to.
    */
   skipAi?: boolean
+  /**
+   * Why a field still needs the applicant, for the report's four buckets. Filled
+   * and skipped entries carry none — only `needs_manual` splits further.
+   */
+  group?: 'write_failed' | 'unanswered' | 'not_attempted' | 'manual'
 }
 
 type FillPlan = { entries: FillEntry[], summary: Record<FillEntry['status'], number> }
@@ -600,6 +529,8 @@ type StreamOutcome = {
   fills: number
   error: string
   warning: string
+  /** HTTP status of a refused request; 0 when the connection itself failed. */
+  status: number
 }
 
 /**
@@ -621,7 +552,7 @@ async function requestFillStream(
   onFills: (fills: Array<{ fieldId: string, value: string }>) => Promise<void>,
   remainingMs: () => number,
 ): Promise<StreamOutcome> {
-  const outcome: StreamOutcome = { handled: false, provider: '', model: '', fills: 0, error: '', warning: '' }
+  const outcome: StreamOutcome = { handled: false, provider: '', model: '', fills: 0, error: '', warning: '', status: 0 }
   const controller = new AbortController()
   let idleTimer = window.setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS)
   const keepAlive = () => {
@@ -637,9 +568,18 @@ async function requestFillStream(
       signal: controller.signal,
     })
     const reader = response.body?.getReader()
-    // A JSON error body, or a proxy that swallowed the body entirely: either way
-    // there is nothing to read, and the batch path says more about why.
-    if (!response.ok || !reader) return outcome
+    // A refused request never becomes a stream. Read the reason out of the body
+    // before falling back: without it the caller can only say "the stream did not
+    // start", which is the same sentence for a rate limit and a missing endpoint.
+    if (!response.ok) {
+      outcome.status = response.status
+      const body = await response.json().catch(() => ({})) as ApiFailure
+      outcome.error = body?.error?.message ?? (response.status === 429
+        ? 'AI 服务限流（HTTP 429）。'
+        : `流式接口返回 ${response.status}。`)
+      return outcome
+    }
+    if (!reader) return outcome
 
     const decoder = new TextDecoder()
     let buffer = ''
@@ -752,23 +692,44 @@ async function loadApplicationProfiles() {
 function renderFillReport(report: Omit<FillPlan, 'entries'> & { entries: Array<Omit<FillEntry, 'value'>> }) {
   if (!fillReportElement) return
   fillReportElement.replaceChildren()
+  const { filled, skipped, buckets, manualTotal } = groupReportEntries(report.entries)
   const labels: Record<FillEntry['status'], string> = {
     filled: '已填写',
     skipped_existing: '已有内容，已跳过',
     skipped_sensitive: '敏感字段，已跳过',
     needs_manual: '需手动处理',
   }
+
   const summary = document.createElement('p')
   summary.className = 'fill-summary'
-  summary.textContent = `已填写 ${report.summary.filled} 项，已有内容跳过 ${report.summary.skipped_existing} 项，敏感字段跳过 ${report.summary.skipped_sensitive} 项，需手动处理 ${report.summary.needs_manual} 项。`
+  const bucketText = buckets.map(group => `${group.label} ${group.count}`).join('、')
+  summary.textContent = `已填写 ${filled.length} 项，跳过 ${skipped.length} 项，需处理 ${manualTotal} 项（${bucketText}）。`
   fillReportElement.append(summary)
 
-  for (const entry of report.entries) {
-    const row = document.createElement('p')
-    row.className = `fill-entry fill-entry-${entry.status}`
-    row.textContent = `${labels[entry.status]}｜${entry.label}：${entry.reason}`
-    fillReportElement.append(row)
+  const paint = document.createElement('p')
+  paint.className = 'fill-legend'
+  paint.textContent = '页面颜色：绿色＝已填写，橙色＝需要你确认，红色＝写了但页面没有接受。'
+  fillReportElement.append(paint)
+
+  const append = (title, entries, className) => {
+    if (!entries.length) return
+    const heading = document.createElement('p')
+    heading.className = `fill-group ${className}`
+    heading.textContent = `${title}（${entries.length}）`
+    fillReportElement.append(heading)
+    for (const entry of entries) {
+      const row = document.createElement('p')
+      row.className = `fill-entry fill-entry-${entry.status}`
+      row.textContent = `${labels[entry.status]}｜${entry.label}：${entry.reason}`
+      fillReportElement.append(row)
+    }
   }
+
+  append('已填写', filled, 'fill-group-filled')
+  append('已跳过', skipped, 'fill-group-skipped')
+  // Every needs_manual entry belongs to exactly one bucket, so these four counts
+  // always add up to the manual total printed above.
+  for (const bucket of buckets) append(bucket.label, bucket.entries, `fill-group-${bucket.key}`)
 }
 
 // Many ATS vendors render the whole application form inside an iframe, where a
@@ -800,6 +761,29 @@ async function scanEveryFrame(tabId: number) {
       .map(field => ({ ...field, id: qualifyFieldId(result.frameId, field.id) }))),
     unreachedFrames: countUnreachedFrames(fieldResults.length, declaredChildren),
   }
+}
+
+/**
+ * Reads what every control currently holds, without rebuilding the plan.
+ *
+ * The scan answers “what is this box?”; this only answers “does it have a value
+ * now?”. Both walk the same controls in the same order, so the ids line up — but
+ * this one skips label geometry and section inference, which is the expensive
+ * half of a scan and is recomputed for nothing when all we need is a yes/no.
+ */
+async function readControlValuesEveryFrame(tabId: number) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: collectControlValues,
+  })
+  const values = new Map<string, string>()
+  for (const entry of results) {
+    const raw = (entry.result ?? {}) as Record<string, string>
+    for (const [id, value] of Object.entries(raw)) {
+      if (value) values.set(qualifyFieldId(entry.frameId, id), value)
+    }
+  }
+  return values
 }
 
 type FillOutcome = {
@@ -854,6 +838,48 @@ async function applyEveryFrame(
     }
   }
   return outcome
+}
+
+/**
+ * Paints the outcome on the page, one frame at a time.
+ *
+ * Green for what landed, amber for what a person has to decide, red for a write
+ * the page did not keep. Skipped fields (already filled, sensitive) are left
+ * alone: colouring them would suggest the applicant has something to do there.
+ */
+async function paintFillOutcome(tabId: number, entries: FillEntry[]) {
+  const perFrame = new Map<number, { ok: string[], manual: string[], failed: string[] }>()
+  for (const entry of entries) {
+    const frameId = frameOf(entry.fieldId)
+    if (frameId === null || !Number.isInteger(frameId)) continue
+    const bucket = entry.status === 'filled'
+      ? 'ok'
+      : entry.status === 'needs_manual'
+        ? (entry.group === 'write_failed' ? 'failed' : 'manual')
+        : null
+    if (!bucket) continue
+    const existing = perFrame.get(frameId) ?? { ok: [], manual: [], failed: [] }
+    existing[bucket].push(localFieldId(entry.fieldId))
+    perFrame.set(frameId, existing)
+  }
+  for (const [frameId, groups] of perFrame) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, func: markFieldStates, args: [groups] })
+    }
+    catch (error) {
+      // A frame that cannot be injected is one whose marks are lost, not one whose
+      // values are wrong; the report still names every field.
+      console.warn('[form-fill] 标记失败', frameId, error instanceof Error ? error.message : String(error))
+    }
+  }
+}
+
+/** Removes the previous run's marks so two fills never stack up on one control. */
+async function clearFillOutcome(tabId: number) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: clearFieldMarks })
+  }
+  catch { /* nothing painted yet is the same as nothing to clear */ }
 }
 
 /** The host of the page in the active tab, or `''` when it cannot be read. */
@@ -1097,6 +1123,8 @@ async function fillCurrentPage() {
     // Held in a local: narrowing of `tab.id` does not survive into a callback that
     // runs later, and the streaming path writes to the page from exactly such a one.
     const tabId = tab.id
+    // Two runs in a row must not leave the first run's colours on the page.
+    await clearFillOutcome(tabId)
 
     const { fields, unreachedFrames } = await scanEveryFrame(tab.id)
     // Frames from an origin outside the vendor allowlist cannot be injected
@@ -1115,6 +1143,9 @@ async function fillCurrentPage() {
     const planned = [...localEntries, ...remembered.fills]
     const choiceEntries = planned.filter(entry => isChoiceField(entry.fieldId))
     const textEntries = planned.filter(entry => !isChoiceField(entry.fieldId))
+    /** Page label per field id, for the progress line. */
+    const labelById = new Map(fields.map(field => [field.id, field.label]))
+    setResult(fillResultElement, `${progressText({ done: 0, total: planned.length, label: planned.length ? labelById.get(planned[0].fieldId) : '' })}…`)
     const [textOutcome, choiceOutcome] = await Promise.all([
       applyEveryFrame(tab.id, textEntries, [], applyFillEntries),
       applyEveryFrame(tab.id, choiceEntries, [], applyChoiceEntries),
@@ -1125,30 +1156,49 @@ async function fillCurrentPage() {
       unavailableIds: [...textOutcome.unavailableIds, ...choiceOutcome.unavailableIds],
     }
     if (remembered.fills.length) await persistAnswerMemory()
-    const appliedSignatureCounts = localOutcome.appliedIds.reduce((counts, id) => {
-      const field = fields.find(candidate => candidate.id === id)
-      if (field) counts.set(fieldSignature(field), (counts.get(fieldSignature(field)) ?? 0) + 1)
-      return counts
-    }, new Map<string, number>())
-    const { fields: activeFields } = await scanEveryFrame(tab.id)
-    const activePlan = buildFillPlan(fillContext.localFacts, activeFields) as FillPlan
-    const activeById = new Map(activePlan.entries.map(entry => [entry.fieldId, entry]))
-    const activeLocalAppliedIds = new Set<string>()
-    /** Whether a locally-filled control was answered from the profile or remembered. */
-    const activeLocalSource = new Map<string, 'profile' | 'memory'>()
-    for (const field of activeFields) {
-      if (!field.hasValue) continue
-      const signature = fieldSignature(field)
-      const remaining = appliedSignatureCounts.get(signature) ?? 0
-      if (remaining > 0) {
-        activeLocalAppliedIds.add(field.id)
-        activeLocalSource.set(field.id, remembered.signatures.has(signature) ? 'memory' : 'profile')
-        appliedSignatureCounts.set(signature, remaining - 1)
-      }
+    if (planned.length) {
+      const lastPlanned = planned[planned.length - 1]
+      setResult(fillResultElement, `${progressText({ done: localOutcome.appliedIds.length, total: planned.length, label: labelById.get(lastPlanned.fieldId) })}…`)
     }
-    const aiFields = activeFields.filter((field) => {
+    // One light read instead of a second full scan.
+    //
+    // `collectControlValues` walks the same controls in the same order as the
+    // scan, so a `form-field-N` it reports is the control `form-field-N` already
+    // names — but it reads values only, skipping the label geometry and section
+    // inference that a rescan would redo for every field.
+    const liveValues = await readControlValuesEveryFrame(tabId)
+    const localWrittenIds = new Set(localOutcome.appliedIds)
+    /** Written and still holding the value after readback. */
+    const activeLocalAppliedIds = new Set([...localWrittenIds].filter(id => liveValues.has(id)))
+    /** Written, but the control no longer shows the value: the page refused it. */
+    const unconfirmedIds = [...localWrittenIds].filter(id => !liveValues.has(id))
+    /** Fields this run has already decided the fate of; the AI phase must not re-decide. */
+    const settledIds = new Set([...activeLocalAppliedIds, ...unconfirmedIds])
+    const rememberedIds = new Set(remembered.fills.map(fill => fill.fieldId))
+    /** Whether a locally-filled control was answered from the profile or remembered. */
+    const activeLocalSource = new Map([...activeLocalAppliedIds].map(id => [id, rememberedIds.has(id) ? 'memory' as const : 'profile' as const]))
+    const activeById = new Map(localPlan.entries.map(entry => [entry.fieldId, entry]))
+    /** One field's report line, with what this run did to it folded in. */
+    const reportEntry = (entry: FillPlan['entries'][number]) => {
+      const { value: _value, ...safeEntry } = entry
+      if (activeLocalAppliedIds.has(entry.fieldId)) {
+        return { ...safeEntry, status: 'filled' as const, reason: localFillReason(activeLocalSource.get(entry.fieldId)) }
+      }
+      if (unconfirmedIds.includes(entry.fieldId)) {
+        return {
+          ...safeEntry,
+          status: 'needs_manual' as const,
+          group: 'write_failed' as const,
+          reason: '写进去之后读不到内容，页面可能没有接受这个值。',
+        }
+      }
+      return safeEntry
+    }
+    const aiFields = fields.filter((field) => {
       const entry = activeById.get(field.id)
-      return !activeLocalAppliedIds.has(field.id)
+      // Anything showing a value right now — pre-filled by the page or written by
+      // this run — is not a question for the model.
+      return !liveValues.has(field.id)
         && entry?.category !== 'sensitive'
         // The plan knows when a control names nothing, or when a repeating page
         // block has no saved record behind it. Both are cases where a model can
@@ -1161,12 +1211,7 @@ async function fillCurrentPage() {
         && field.multiple !== true
     })
     if (aiFields.length === 0) {
-      const entries = activePlan.entries.map((entry) => {
-        const { value: _value, ...safeEntry } = entry
-        return activeLocalAppliedIds.has(entry.fieldId)
-          ? { ...safeEntry, status: 'filled' as const, reason: localFillReason(activeLocalSource.get(entry.fieldId)) }
-          : safeEntry
-      })
+      const entries = localPlan.entries.map(reportEntry)
       const report = {
         entries,
         summary: entries.reduce((summary, entry) => {
@@ -1175,6 +1220,7 @@ async function fillCurrentPage() {
         }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
       }
       renderFillReport(report)
+      await paintFillOutcome(tabId, entries as FillEntry[])
       setResult(fillResultElement, `${unreachedFrameWarning}当前页面没有可填写的空白字段。`, Boolean(unreachedFrameWarning))
       return
     }
@@ -1196,6 +1242,8 @@ async function fillCurrentPage() {
     let failure = ''
     let stoppedEarly = ''
     let batchSummary = ''
+    /** Why the streamed path did not run, when it was tried first. */
+    let streamFallbackNote = ''
 
     /**
      * Writes the answers a stream has handed over so far.
@@ -1204,6 +1252,8 @@ async function fillCurrentPage() {
      * would throw the point of streaming away, and one injection per answer would
      * spend more time talking to the page than the whole fill.
      */
+    /** How many of the AI's fields have been handed to the page so far. */
+    const processedAiIds = new Set<string>()
     const flushFills = async (pending: Array<{ fieldId: string, value: string }>) => {
       if (!pending.length) return
       const [textOutcome, choiceOutcome] = await Promise.all([
@@ -1215,13 +1265,26 @@ async function fillCurrentPage() {
       for (const outcome of [textOutcome, choiceOutcome]) {
         for (const [id, reason] of Object.entries(outcome.unavailableReasons ?? {})) unavailableReasons.set(id, reason)
       }
-      setResult(fillResultElement, `AI 填写中：已填 ${appliedIds.size} / ${aiFields.length} 项…`)
+      for (const fill of pending) processedAiIds.add(fill.fieldId)
+      const lastFill = pending[pending.length - 1]
+      setResult(fillResultElement, `${progressText({ done: processedAiIds.size, total: aiFields.length, label: labelById.get(lastFill.fieldId) })}…`)
     }
 
     // One streamed request for the whole form: the model sees every field at once
     // instead of a batch at a time, the answers land as they are written, and a form
     // that used to cost one provider call per batch costs one.
-    const streamed = await requestFillStream(profile.id, aiFields, flushFills, remainingMs)
+    let streamed = await requestFillStream(profile.id, aiFields, flushFills, remainingMs)
+    // A rate limit is not a reason to change channels. The batch path spends the
+    // same allowance and would burn the wait twice — which is exactly what happened
+    // the first time this ran on a real page: the stream was refused, the fallback
+    // was refused a second later, and every AI field was lost. Give the same
+    // request the pause the limit asked for, once, before falling back.
+    if (!streamed.handled && streamed.status === 429 && remainingMs() > FILL_RATE_LIMIT_DELAYS_MS[0] + 20_000) {
+      const waitMs = FILL_RATE_LIMIT_DELAYS_MS[0]
+      setResult(fillResultElement, `${progressText({ done: 0, total: aiFields.length })}…AI 服务限流，${Math.round(waitMs / 1_000)} 秒后重试`)
+      await pause(waitMs)
+      streamed = await requestFillStream(profile.id, aiFields, flushFills, remainingMs)
+    }
     if (streamed.handled) {
       provider = streamed.provider
       model = streamed.model
@@ -1229,6 +1292,7 @@ async function fillCurrentPage() {
       if (streamed.warning) stoppedEarly = streamed.warning
     }
     else {
+      if (streamed.error) streamFallbackNote = `流式填写未能开始（${streamed.error}）已改用分批重试，会更慢。`
       // The stream produced no event at all — a proxy sitting on the response, a
       // deployment without this endpoint, or a request refused before any byte. The
       // batch path is slower and costs one call per batch, but it works, so it is
@@ -1318,16 +1382,19 @@ async function fillCurrentPage() {
       batchSummary = batches.length > 1 ? `已完成 ${completedBatches}/${batches.length} 批。` : ''
     }
 
-    const entries = activePlan.entries.map((entry) => {
-      const { value: _value, ...safeEntry } = entry
-      if (activeLocalAppliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: localFillReason(activeLocalSource.get(entry.fieldId)) }
-      if (!aiFieldIds.has(entry.fieldId) || entry.status === 'skipped_existing' || entry.status === 'skipped_sensitive') return safeEntry
+    const entries = localPlan.entries.map((entry) => {
+      if (settledIds.has(entry.fieldId)) return reportEntry(entry)
+      const safeEntry = reportEntry(entry)
+      if (!aiFieldIds.has(entry.fieldId) || entry.status === 'skipped_existing' || entry.status === 'skipped_sensitive') {
+        return safeEntry.status === 'needs_manual' && !safeEntry.group ? { ...safeEntry, group: 'manual' as const } : safeEntry
+      }
       if (appliedIds.has(entry.fieldId)) return { ...safeEntry, status: 'filled' as const, reason: `AI 已填写（${provider} / ${model}）。` }
       if (unavailableIds.has(entry.fieldId)) {
         const why = unavailableReasons.get(entry.fieldId)
         return {
           ...safeEntry,
           status: 'needs_manual' as const,
+          group: 'write_failed' as const,
           reason: why ? `AI 已给出建议，但页面控件未能应用：${why}` : 'AI 已给出建议，但页面控件未能应用。',
         }
       }
@@ -1339,6 +1406,7 @@ async function fillCurrentPage() {
         return {
           ...safeEntry,
           status: 'needs_manual' as const,
+          group: 'unanswered' as const,
           reason: `${batchReason ? `${batchReason}；` : ''}其所在批次接口请求失败，本次未填写。`,
         }
       }
@@ -1350,6 +1418,7 @@ async function fillCurrentPage() {
         return {
           ...safeEntry,
           status: 'needs_manual' as const,
+          group: 'not_attempted' as const,
           reason: `${localReason ? `${localReason.replace(/。$/, '')}；` : ''}本次没有询问 AI（${stoppedEarly || '前面的批次失败后中止'}）。`,
         }
       }
@@ -1359,6 +1428,7 @@ async function fillCurrentPage() {
       return {
         ...safeEntry,
         status: 'needs_manual' as const,
+        group: 'unanswered' as const,
         reason: localReason ? `${localReason.replace(/。$/, '')}；AI 也未能给出答案。` : 'AI 未给出可用答案。',
       }
     })
@@ -1370,6 +1440,7 @@ async function fillCurrentPage() {
       }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
     }
     renderFillReport(report)
+    await paintFillOutcome(tabId, entries as FillEntry[])
 
     const rememberedSummary = remembered.fills.length ? `其中 ${remembered.fills.length} 项来自你记住的答案。` : ''
     if (failure) {
@@ -1378,7 +1449,7 @@ async function fillCurrentPage() {
         ? `另有 ${notAttemptedFieldIds.size} 项${stoppedEarly ? `（${stoppedEarly}）` : '因中止'}本次没有询问 AI，已在下方标出。`
         : ''
       const kept = report.summary.filled ? `已写入并校验的 ${report.summary.filled} 项保留在页面上，可直接使用或手动修改。` : ''
-      setResult(fillResultElement, `${unreachedFrameWarning}${batchSummary}${rememberedSummary}${failure} ${failed}${skipped}${kept}`, true)
+      setResult(fillResultElement, `${unreachedFrameWarning}${streamFallbackNote}${batchSummary}${rememberedSummary}${failure} ${failed}${skipped}${kept}`, true)
       return
     }
     const unfinished = notAttemptedFieldIds.size
@@ -1388,7 +1459,7 @@ async function fillCurrentPage() {
       : stoppedEarly
     setResult(
       fillResultElement,
-      `${unreachedFrameWarning}${batchSummary}${rememberedSummary}${unfinished}AI 填写已完成：浅绿色为已填写，浅红色为未能填写。请在提交前检查。`,
+      `${unreachedFrameWarning}${streamFallbackNote}${batchSummary}${rememberedSummary}${unfinished}AI 填写已完成：绿色为已填写，橙色为需要你确认，红色为未能填写。请在提交前检查。`,
       Boolean(unreachedFrameWarning) || Boolean(unfinished),
     )
   }
