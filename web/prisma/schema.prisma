@@ -78,6 +78,10 @@ enum MaterialCardType {
   SKILL
   SELF_EVALUATION
   CUSTOM_ANSWER
+  // 教育背景（2026-10-24 新增）。顺序与 web/shared/material-types.ts 的
+  // MATERIAL_CARD_TYPES 不必一致——那边管界面顺序，这边只是取值集合；
+  // 但两边必须是同一批值，加值时两处都要改，且要写一个只含 ADD VALUE 的迁移。
+  EDUCATION
 }
 
 enum DocumentMutationType {

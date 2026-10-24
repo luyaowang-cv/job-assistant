@@ -18,6 +18,7 @@ export const MATERIAL_CARD_TYPES = [
   'INTERNSHIP',
   'WORK',
   'CAMPUS',
+  'EDUCATION',
   'AWARD',
   'RESEARCH',
   'CERTIFICATE',
@@ -46,6 +47,15 @@ export type MaterialFieldKind =
   | 'techList'
   /** 链接。 */
   | 'url'
+  /** 数字（GPA 这类）。facts 里存 number，不是字符串。 */
+  | 'number'
+  /**
+   * 下拉选择。选项在 spec.options 里声明，存的是 option.value（一律存标准词，
+   * 不存界面上的文案——插件靠标准词匹配表单下拉框，见 docs 里 OPTION_ALIASES 的说明）。
+   */
+  | 'select'
+  /** 多行文本（专业描述、专业课程这类会写好几行的）。 */
+  | 'textarea'
 
 export type MaterialFieldSpec = {
   /** 写进 facts 的键名。改这个键名等于改插件，见 docs 里的映射说明。 */
@@ -55,6 +65,10 @@ export type MaterialFieldSpec = {
   placeholder?: string
   /** 字段下方的说明文字。 */
   help?: string
+  /** kind === 'select' 时的选项。value 是存进 facts 的标准词，label 是界面文案。 */
+  options?: Array<{ value: string, label: string }>
+  /** 强制整行。多行文本、链接、技术栈默认就整行，这个用于个别想独占一行的短字段。 */
+  fullWidth?: boolean
 }
 
 export type MaterialTypeSpec = {
@@ -70,6 +84,11 @@ export type MaterialTypeSpec = {
    * 奖项、证书这类只有「名称 + 时间 + 机构」的卡，写不写说明都不影响简历，所以允许留空。
    */
   contentRequired?: boolean
+  /**
+   * 彻底不显示成果要点输入框（不是"可以留空"，是根本没有这个概念）。
+   * 目前只有教育背景用它——简历上的教育段是按字段排版的，没有「一段经历描述」。
+   */
+  contentField?: 'hidden'
   /** 编辑弹窗里的字段，数组顺序就是渲染顺序。 */
   fields: MaterialFieldSpec[]
   /**
@@ -134,6 +153,83 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleRequired: true,
     fields: [role('担任角色'), organization('学校 / 社团（可选）'), period()],
     listMeta: EXPERIENCE_META,
+  },
+  EDUCATION: {
+    label: '教育背景',
+    titleLabel: '学校名称',
+    titlePlaceholder: '例如：某某大学',
+    titleRequired: true,
+    // 教育背景没有「一段经历描述」，简历上的教育段也是按字段排版的：
+    // 不是"可以不填"，是这个框根本不该出现，所以两个标记都要打上。
+    contentRequired: false,
+    contentField: 'hidden',
+    // 字段对齐 server/schemas/personal-profile.ts 的 educationSchema，并按网申表单的常见问法补齐。
+    // school 是卡片的 title，不重复进 facts；起止时间用 dateRange。
+    //
+    // 下拉的那些不是"为了好看"：插件填下拉框靠的是标准词匹配（OPTION_ALIASES + 四层匹配），
+    // 存「全日制」比存「全日制本科在读」命中率高得多。自由发挥的（学号、专业描述、论文题目）
+    // 才用文本。注意这些字段目前**都还没有插件规则**，加完只服务简历和存档。
+    fields: [
+      { key: 'college', label: '学院', kind: 'text', placeholder: '例如：计算机科学与技术学院' },
+      { key: 'major', label: '专业', kind: 'text' },
+      {
+        key: 'educationLevel',
+        label: '学历',
+        kind: 'select',
+        options: ['大专', '本科', '硕士', '博士', '其他'].map(value => ({ value, label: value })),
+      },
+      { key: 'academicDegree', label: '学位', kind: 'text', placeholder: '例如：工学学士' },
+      {
+        key: 'studyMode',
+        label: '学习方式',
+        kind: 'select',
+        options: ['全日制', '非全日制', '其他'].map(value => ({ value, label: value })),
+      },
+      {
+        key: 'duration',
+        label: '学制',
+        kind: 'select',
+        options: ['2 年', '2.5 年', '3 年', '4 年', '5 年', '其他'].map(value => ({ value, label: value })),
+      },
+      {
+        key: 'schoolCategory',
+        label: '学校类别',
+        kind: 'select',
+        options: ['985', '211', '双一流', '普通本科', '海外院校', '其他'].map(value => ({ value, label: value })),
+      },
+      {
+        key: 'trainingMode',
+        label: '培养方式',
+        kind: 'select',
+        options: ['统招', '定向', '委培', '自费', '其他'].map(value => ({ value, label: value })),
+      },
+      {
+        key: 'overseas',
+        label: '是否为海外教育经历',
+        kind: 'select',
+        options: ['是', '否'].map(value => ({ value, label: value })),
+      },
+      {
+        key: 'ranking',
+        label: '专业排名',
+        kind: 'select',
+        // 存标准说法，别名里已经有「专业排名」，插件填下拉时能对上
+        options: ['前5%', '前10%', '前20%', '前30%', '前50%', '其他'].map(value => ({ value, label: value })),
+      },
+      { key: 'gpa', label: 'GPA', kind: 'number' },
+      { key: 'gpaScale', label: 'GPA 满分', kind: 'number', placeholder: '例如：4 或 100' },
+      { key: 'studentId', label: '学号', kind: 'text' },
+      { key: 'campusRole', label: '在校职务', kind: 'text' },
+      { key: 'lab', label: '实验室', kind: 'text' },
+      { key: 'advisor', label: '导师', kind: 'text' },
+      { key: 'researchDirection', label: '研究方向', kind: 'text' },
+      { key: 'thesis', label: '毕业论文', kind: 'text', placeholder: '论文题目', fullWidth: true },
+      { key: 'majorDescription', label: '专业描述', kind: 'textarea', fullWidth: true },
+      { key: 'courses', label: '专业课程', kind: 'textarea', fullWidth: true },
+      period(),
+    ],
+    // 学校名在标题上，副标题取学院和专业，再加一段起止时间
+    listMeta: ['college', 'major', 'period'],
   },
   AWARD: {
     label: '荣誉奖项',
@@ -200,6 +296,32 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
   },
 }
 
+/** 能两两并排的控件种类。文本和下拉可以混搭（「学历」下拉 + 「学位」文本是很常见的组合）。 */
+const PAIRABLE_KINDS = new Set<MaterialFieldKind>(['text', 'select', 'number'])
+
+/**
+ * 把字段排成行：相邻两个可并排的控件放一行，其余各占一行，`fullWidth` 强制独占一行。
+ *
+ * 放在 shared 而不是页面里，是因为它只依赖字段规格、不含任何 Vue 状态——放这儿就能单独测，
+ * 也免得验证脚本只能"照着页面代码再抄一遍"，抄错了还看不出来。
+ */
+export function groupFieldRows(fields: MaterialFieldSpec[]): MaterialFieldSpec[][] {
+  const rows: MaterialFieldSpec[][] = []
+  for (const field of fields) {
+    const previous = rows[rows.length - 1]
+    const first = previous?.[0]
+    const canPair = !field.fullWidth
+      && PAIRABLE_KINDS.has(field.kind)
+      && previous?.length === 1
+      && first !== undefined
+      && !first.fullWidth
+      && PAIRABLE_KINDS.has(first.kind)
+    if (previous && canPair) previous.push(field)
+    else rows.push([field])
+  }
+  return rows
+}
+
 /** 推导出来的类型 → 中文名。只在这里生成，别再手写第二份。 */
 export const MATERIAL_TYPE_LABELS = Object.fromEntries(
   MATERIAL_CARD_TYPES.map(type => [type, MATERIAL_TYPE_SPECS[type].label]),
@@ -212,6 +334,20 @@ export function materialTypeSpec(type: string): MaterialTypeSpec | undefined {
 
 export function materialTypeLabel(type: string): string {
   return materialTypeSpec(type)?.label ?? type
+}
+
+/**
+ * 这个类型有没有「文案版本」这回事。
+ *
+ * 版本存在唯一理由是装文案（同一段经历的不同写法）；`contentField: 'hidden'` 的类型
+ * （教育背景）没有文案，对用户就不该出现版本概念。
+ *
+ * 注意数据层不能真的省掉版本：`DocumentCardReference.variantId` 是非空外键，
+ * 卡片要进简历/网申就必须挂一个 variant。所以这类卡片由系统建一个默认版本，
+ * 界面上不显示、也不能新增。
+ */
+export function materialHasVersion(type: string): boolean {
+  return materialTypeSpec(type)?.contentField !== 'hidden'
 }
 
 /**

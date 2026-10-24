@@ -32,10 +32,13 @@ export async function deletePersonalProfilePhoto() {
 
 export async function savePersonalProfile(input: PersonalProfileInput) {
   const user = await getCurrentUser()
+  // educations 是可选字段：页面上已经不编辑它（教育改成素材卡了），
+  // 没传就不覆盖——写成 `educations: asJson(input.educations)` 会把 undefined 存成 null / 清空历史。
+  const educations = input.educations === undefined ? {} : { educations: asJson(input.educations) }
   return prisma.personalProfile.upsert({
     where: { userId: user.id },
-    create: { userId: user.id, basics: asJson(input.basics), educations: asJson(input.educations) },
-    update: { basics: asJson(input.basics), educations: asJson(input.educations) },
+    create: { userId: user.id, basics: asJson(input.basics), ...educations },
+    update: { basics: asJson(input.basics), ...educations },
     select: publicSelect,
   })
 }

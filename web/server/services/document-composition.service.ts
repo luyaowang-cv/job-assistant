@@ -3,7 +3,7 @@ import type { Prisma } from '../generated/prisma/client'
 import { prisma } from '../lib/prisma'
 import type { CompositionInput, CreateApplicationProfileVersionInput } from '../schemas/document-composition'
 import { getCurrentUser } from './current-user'
-import { resolveDocument } from './document-resolver'
+import { educationsFromReferences, resolveDocument } from './document-resolver'
 
 const json = (value: unknown) => value as Prisma.InputJsonValue
 const compositionInclude = {
@@ -45,7 +45,7 @@ export async function resolveResumeVersion(resumeId: string, versionId: string) 
     version,
     resolved: resolveDocument({
       basics: (profile?.basics ?? {}) as Record<string, unknown>,
-      educations: (profile?.educations ?? []) as unknown[],
+      educations: educationsFromReferences(references) ?? [],
       fieldVisibility: (version.composition?.fieldVisibility ?? {}) as Record<string, boolean>,
       references,
       legacyContent: version.composition ? undefined : version.content,
@@ -62,14 +62,15 @@ export async function resolveResumeDraft(resumeId: string, composition: Composit
     prisma.materialCardVariant.findMany({ where: { id: { in: composition.references.map(item => item.variantId) } }, include: { card: true } }),
   ])
   const byId = new Map(variants.map(variant => [variant.id, variant]))
+  const references = composition.references.map(reference => ({ ...reference, card: byId.get(reference.variantId)!.card, variant: byId.get(reference.variantId)! }))
   return {
     resume,
     profile,
     resolved: resolveDocument({
       basics: (profile?.basics ?? {}) as Record<string, unknown>,
-      educations: (profile?.educations ?? []) as unknown[],
+      educations: educationsFromReferences(references) ?? [],
       fieldVisibility: composition.fieldVisibility,
-      references: composition.references.map(reference => ({ ...reference, card: byId.get(reference.variantId)!.card, variant: byId.get(reference.variantId)! })),
+      references,
     }),
   }
 }
@@ -81,11 +82,12 @@ export async function createComposedResumeVersion(resumeId: string, composition:
   const profile = await prisma.personalProfile.findUnique({ where: { userId: user.id } })
   const variants = await prisma.materialCardVariant.findMany({ where: { id: { in: composition.references.map(item => item.variantId) } }, include: { card: true } })
   const byId = new Map(variants.map(variant => [variant.id, variant]))
+  const references = composition.references.map(reference => ({ ...reference, card: byId.get(reference.variantId)!.card, variant: byId.get(reference.variantId)! }))
   const resolved = resolveDocument({
     basics: (profile?.basics ?? {}) as Record<string, unknown>,
-    educations: (profile?.educations ?? []) as unknown[],
+    educations: educationsFromReferences(references) ?? (profile?.educations ?? []) as unknown[],
     fieldVisibility: composition.fieldVisibility,
-    references: composition.references.map(reference => ({ ...reference, card: byId.get(reference.variantId)!.card, variant: byId.get(reference.variantId)! })),
+    references,
   })
   const content = resolved.references.map(item => `## ${item.title}\n\n${item.content}`).join('\n\n')
   return prisma.$transaction(async (tx) => {
@@ -153,13 +155,14 @@ export async function resolveApplicationProfileVersion(profileId: string, versio
   })
   if (!version) return null
   const profile = await prisma.personalProfile.findUnique({ where: { userId: user.id } })
+  const references = version.composition?.references ?? []
   return {
     version,
     resolved: resolveDocument({
       basics: (profile?.basics ?? {}) as Record<string, unknown>,
-      educations: (profile?.educations ?? []) as unknown[],
+      educations: educationsFromReferences(references) ?? [],
       fieldVisibility: (version.composition?.fieldVisibility ?? {}) as Record<string, boolean>,
-      references: version.composition?.references ?? [],
+      references,
       blocks: (version.blocks ?? []) as Parameters<typeof resolveDocument>[0]['blocks'],
     }),
   }

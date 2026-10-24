@@ -39,6 +39,13 @@ const factsSchema = z.record(z.string().max(80), z.unknown()).superRefine((facts
   if (facts.techStack !== undefined && (!Array.isArray(facts.techStack) || facts.techStack.length > 20 || facts.techStack.some(value => typeof value !== 'string' || !value.trim() || value.length > 60))) {
     context.addIssue({ code: 'custom', path: ['techStack'], message: 'techStack must contain up to 20 non-empty strings.' })
   }
+  // 教育卡的 GPA 是数字，不是字符串；范围与 personal-profile 的 educationSchema 保持一致
+  if (facts.gpa !== undefined && (typeof facts.gpa !== 'number' || !Number.isFinite(facts.gpa) || facts.gpa < 0 || facts.gpa > 10)) {
+    context.addIssue({ code: 'custom', path: ['gpa'], message: 'gpa must be a number between 0 and 10.' })
+  }
+  if (facts.gpaScale !== undefined && (typeof facts.gpaScale !== 'number' || !Number.isFinite(facts.gpaScale) || facts.gpaScale <= 0 || facts.gpaScale > 100)) {
+    context.addIssue({ code: 'custom', path: ['gpaScale'], message: 'gpaScale must be a positive number up to 100.' })
+  }
   if (startDate !== undefined && !isCardDate(startDate)) {
     context.addIssue({ code: 'custom', path: ['startDate'], message: 'startDate must use YYYY-MM or YYYY-MM-DD.' })
   }

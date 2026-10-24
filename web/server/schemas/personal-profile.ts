@@ -24,7 +24,9 @@ export const educationSchema = z.object({
   college: text(160), lab: text(160), researchDirection: text(200), advisor: text(80),
   startDate: date, endDate: educationEndDate,
 }).strict()
-export const personalProfileSchema = z.object({ basics: commonBasicsSchema.default({}), educations: z.array(educationSchema).max(10).default([]) }).strict()
+// educations 已迁成素材卡（2026-10-24），个人档案页不再编辑它。做成 optional 而不是
+// default([])：页面不再提交这个字段时，服务端必须"不动它"，否则保存一次就把历史数据清空。
+export const personalProfileSchema = z.object({ basics: commonBasicsSchema.default({}), educations: z.array(educationSchema).max(10).optional() }).strict()
 export type CommonBasics = z.infer<typeof commonBasicsSchema>
 export type Education = z.infer<typeof educationSchema>
 export type PersonalProfileInput = z.infer<typeof personalProfileSchema>

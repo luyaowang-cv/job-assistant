@@ -31,7 +31,12 @@ const stack = (facts: unknown) => {
   return Array.isArray(value.techStack) ? value.techStack.filter(item => typeof item === 'string' && item).map(esc).join(' / ') : ''
 }
 
-const displayMonth = (value: unknown) => typeof value === 'string' ? value.replace(/^([0-9]{4})-([0-9]{2})$/, '$1/$2') : value
+// 简历上的教育时间只到月：2024-09-01 → 2024/09，2024-09 → 2024/09。
+// 库里存到日（网申要日），但简历上写到日又长又没意义，所以在这里截断。
+// "至今" 这类不是日期的值原样返回。
+const displayMonth = (value: unknown) => typeof value === 'string'
+  ? value.replace(/^([0-9]{4})-([0-9]{2})(?:-[0-9]{2})?$/, '$1/$2')
+  : value
 
 function educationSupplement(reference: Resolved['references'][number]) {
   const facts = (reference.facts && typeof reference.facts === 'object' ? reference.facts : {}) as Record<string, unknown>
@@ -101,7 +106,9 @@ function educationUnit(educations: Resolved['educations'], references: Resolved[
 
 function units(resolved: Resolved) {
   const out: string[] = []
-  const educationReferences = resolved.references.filter(reference => reference.section === 'education')
+  // 教育卡已经通过 resolved.educations 进了教育段（见 document-composition 的
+  // educationsFromReferences），这里要把它们从"补充行"里排掉，否则同一张卡会被渲染两次。
+  const educationReferences = resolved.references.filter(reference => reference.section === 'education' && reference.type !== 'EDUCATION')
   const groups = new Map<string, typeof resolved.references>()
   for (const ref of resolved.references.filter(reference => reference.section !== 'education')) groups.set(ref.section, [...(groups.get(ref.section) ?? []), ref])
   let educationRendered = false
