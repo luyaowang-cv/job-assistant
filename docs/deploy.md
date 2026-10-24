@@ -45,24 +45,28 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 1. `build`：和以前一样构建镜像推到 ghcr（实测约 2 分钟）；
 2. `deploy`：构建成功后用受限 SSH key 进服务器跑 `/root/deploy.sh`，也就是 `git pull --ff-only` + `compose pull web` + `up -d`，最后从 GitHub 的 runner 对 `https://offerscoming.cn/` 做一次健康检查（200/204/302，最多重试 60 秒）。
 
-**一次性配置**（已经配过就跳过）：
+**一次性配置**（已经配过就跳过）。**密钥在服务器上生成、私钥用 base64 传**——多行 PEM 在终端和剪贴板里复制太容易丢换行（第一次配就是这么失败的），一行 base64 不会。
 
 ```bash
-# 本机（Git Bash 或 PowerShell 都行）生成一把专用 key，不要用你平时登录服务器的那把
-ssh-keygen -t ed25519 -C 'gha-deploy' -f ~/.ssh/gha-deploy -N ''
+# ① 在服务器上跑：生成专用 key、把自己装进 authorized_keys 并限制成只能跑部署脚本
+rm -f /root/gha_deploy /root/gha_deploy.pub
+ssh-keygen -t ed25519 -f /root/gha_deploy -N '' -C gha-deploy -q
+sed -i '/gha-deploy/d' /root/.ssh/authorized_keys
+printf 'restrict,command=/root/deploy.sh %s\n' "$(cat /root/gha_deploy.pub)" >> /root/.ssh/authorized_keys
+chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+echo "=== 下面这一整行（只有一行）复制走，粘进 DEPLOY_SSH_KEY ==="
+base64 -w0 /root/gha_deploy; echo
 
-# 公钥装到服务器，并且限制它只能跑部署脚本
-ssh root@43.108.107.79 'cat >> ~/.ssh/authorized_keys' < ~/.ssh/gha-deploy.pub
-# 然后用编辑器把刚追加的那一行改成（注意是同一行，不是新增一行）：
-#   restrict,command="bash /root/deploy.sh" <原来的 ssh-ed25519 ... 部分>
-
-# 部署脚本也要拷上去
-scp scripts/deploy-remote.sh root@43.108.107.79:/root/deploy.sh
+# ② 部署脚本
+scp scripts/deploy-remote.sh root@43.108.107.79:/root/deploy.sh   # 本机执行
 ssh root@43.108.107.79 'chmod +x /root/deploy.sh'
 ```
 
-然后在 GitHub 仓库 → Settings → Secrets and variables → Actions 加三个 secret：
-`DEPLOY_SSH_KEY`（`~/.ssh/gha-deploy` 私钥全文，含头尾）、`DEPLOY_HOST`（服务器 IP）、`DEPLOY_USER`（`root`）。
+② 里的 `scripts/deploy-remote.sh` 是仓库里的副本，服务器上跑的是 `/root/deploy.sh`，改了要重新拷一次。
+
+然后在 GitHub 仓库 → Settings → Secrets and variables → Actions 加三个 secret：`DEPLOY_SSH_KEY`（① 打出来的那行 base64）、`DEPLOY_HOST`（`43.108.107.79`）、`DEPLOY_USER`（`root`）。secret 保存后不可回读，改就是删掉重加。
+
+workflow 同时兼容两种格式：内容是 base64 就解码，是完整 PEM 就直接用；解出来不是私钥会在那一步直接报错，不会拖到 ssh 变成一句看不懂的 `Permission denied`。
 
 **secret 没配齐之前**，`deploy` job 会打一条 `::warning::` 然后跳过，这次运行仍然是绿的——也就是说代码推上去了、镜像也构建了，但不会自动上线，得手动部署。配齐之后那条 warning 就不该再出现，所以哪天它突然冒出来，多半是 secret 被删了。
 

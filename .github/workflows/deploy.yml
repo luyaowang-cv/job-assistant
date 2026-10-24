@@ -93,36 +93,28 @@ jobs:
             exit 0
           fi
           install -m 700 -d ~/.ssh
-          # Windows 上粘贴的私钥可能带 CRLF，sshd 会因为格式不对直接拒掉
-          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-
-          # 诊断：把 secret 里那把 key 的公钥指纹打出来。
-          # 它必须和本机 `ssh-keygen -lf ~/.ssh/gha-deploy` 以及服务器
-          # `ssh-keygen -lf /root/.ssh/authorized_keys` 里 gha-deploy 那行完全一致。
-          # 指纹只是哈希，公开在日志里没关系。
-          echo "== secret 里那把私钥的指纹 =="
-          if ssh-keygen -lf ~/.ssh/id_ed25519 2>/dev/null; then
-            echo "私钥解析正常"
+          # DEPLOY_SSH_KEY 存的是私钥的 base64（服务器上 `base64 -w0` 出来的一整行）。
+          # 这么做的唯一原因是：多行 PEM 在终端/剪贴板里复制极易丢换行或多吃空格，
+          # 而一行 base64 复制不会出错。也兼容直接粘 PEM 的旧配法。
+          if printf '%s' "$DEPLOY_SSH_KEY" | grep -q 'BEGIN OPENSSH PRIVATE KEY'; then
+            printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           else
-            echo "::error::secret 里的内容不是一把能解析的私钥（多半粘成了 .pub 公钥，或者少了 BEGIN/END 行）"
-            echo "文件开头 30 个字符是：$(head -c 30 ~/.ssh/id_ed25519)"
+            printf '%s' "$DEPLOY_SSH_KEY" | tr -d '\r\n ' | base64 -d > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          # 解析不出来就在这一步停下，别把错误拖到 ssh 那里变成一句看不懂的 Permission denied
+          if ! ssh-keygen -lf ~/.ssh/id_ed25519; then
+            echo "::error::DEPLOY_SSH_KEY 解出来不是一把能用的私钥（不是 base64，也不是完整的 PEM）"
             exit 1
           fi
-          echo "== 服务器地址 / 用户名会被 GitHub 打码，改用它们解析出的机器的 host key 指纹 =="
-          echo "   拿这个值对比服务器上的 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"
-          echo "   两台机（首尔 43.108.107.79 / 旧香港 114.134.185.94）指纹不同，一眼能看出连的是哪台"
-          ssh-keyscan -H "$DEPLOY_HOST" 2>/dev/null | ssh-keygen -lf - || echo "（连不上，host 或网络有问题）"
 
           # 首次连接需要指纹；要更严可以把它钉成 secret，见 docs/deploy.md
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          # -v 会把"我们提供了哪个 key、服务器接受了没有"写进去；失败时只把这几行挑出来，
-          # 成功时日志就是正常的部署输出（不做预先的探测连接，免得部署脚本跑两遍）。
-          set -o pipefail
+          # 调试信息走 stderr 另存：成功时日志只有部署输出，失败时只挑关键几行出来
           if ! ssh -v -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" 2>&1 | tee /tmp/deploy.log; then
+            "$DEPLOY_USER@$DEPLOY_HOST" 2>/tmp/ssh.err; then
             echo "::group::SSH 诊断（关键几行）"
-            grep -Ei 'Offering public key|Server accepts key|Authentications that can continue|Permission denied|no mutual signature' /tmp/deploy.log || true
+            grep -Ei 'Offering public key|Server accepts key|Authentications that can continue|Permission denied|no mutual signature' /tmp/ssh.err || true
             echo "::endgroup::"
             exit 1
           fi
