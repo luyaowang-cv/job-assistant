@@ -125,16 +125,37 @@ function units(resolved: Resolved) {
   return out.join('')
 }
 
+/**
+ * 技能卡在简历上只占一行：`名称：成果要点`。
+ *
+ * 其他类型走「标题行 + bullet 正文」的块状排版，但技能是并列的短条目，块状会白占七八行；
+ * 熟练程度（facts.role）也不进简历——文案里本来就写着「熟悉…；了解…」，再标一个「熟悉」是重复。
+ * 文案里的换行和行首的 `-` 在这里被抹平成「；」，保证无论怎么写都只占一行。
+ */
+function skillLine(content: string) {
+  return content
+    .split(/\r?\n/)
+    .map(line => line.trim().replace(/^[-•*]\s*/, ''))
+    .filter(Boolean)
+    .join('；')
+}
+
 function renderReferenceUnit(section: string, ref: Resolved['references'][number], index: number) {
     const techStack = stack(ref.facts)
     const title = ref.title.trim()
+    const heading = index === 0 ? `<h2>${esc(labels[section] ?? section)}</h2>` : ''
+    if (ref.type === 'SKILL') {
+      const body = skillLine(ref.content)
+      // unit--skill：技能是并列的短条目，行距要按行算，不能沿用「模块之间」的 sectionGapMm
+      return `<section class="unit unit--skill">${heading}<article class="material-entry"><div class="skill-line">${title ? `<strong>${esc(title)}</strong>` : ''}${title && body ? '：' : ''}${esc(body)}</div></article></section>`
+    }
     const meta = materialMeta(ref.facts)
     const line = title || meta ? `<div class="line">${title ? `<strong>${esc(title)}</strong>` : ''}${meta ? `<span>${meta}</span>` : ''}</div>` : ''
-    return `<section class="unit">${index === 0 ? `<h2>${esc(labels[section] ?? section)}</h2>` : ''}<article class="material-entry">${line}${techStack ? `<p class="stack"><b>技术栈：</b>${techStack}</p>` : ''}<div class="copy">${copy(ref.content)}</div></article></section>`
+    return `<section class="unit">${heading}<article class="material-entry">${line}${techStack ? `<p class="stack"><b>技术栈：</b>${techStack}</p>` : ''}<div class="copy">${copy(ref.content)}</div></article></section>`
 }
 
 const style = `*{box-sizing:border-box}html,body{margin:0;background:#e9edf3;color:#172033;font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;-webkit-print-color-adjust:exact}.book{padding:24px 0}.page{position:relative;width:210mm;height:297mm;margin:0 auto 20px;background:#fff;box-shadow:0 14px 42px #1b294229;overflow:hidden}.inner{height:100%;padding:12mm;overflow:hidden}.header{min-height:29mm;display:grid;grid-template-columns:24mm minmax(0,1fr) 24mm;gap:5mm;align-items:center;padding-bottom:4mm;margin-bottom:3.6mm}.identity{grid-column:2;text-align:center}.header h1{margin:0 0 2.2mm;font-family:Georgia,"Songti SC",serif;font-size:23pt;letter-spacing:.8mm}.contact{display:flex;justify-content:center;flex-wrap:wrap;gap:1.6mm 4mm;font-size:9.3pt;color:#344157}.detail{margin-top:1.6mm;font-size:8.7pt;color:#697386}.photo{grid-column:3;width:24mm;height:32mm;object-fit:cover;border:1px solid #d7deea;background:#f3f5f8}.empty{display:grid;place-items:center;color:#9aa4b4;font-size:8pt}.unit{margin:0 0 3.1mm;break-inside:auto}.unit.education{padding-top:0}.unit.education:not(.education-continuation){border-top:1.2px solid #2458b8;padding-top:2.2mm}.unit.education-continuation{margin-top:-1.2mm}.unit h2{display:flex;align-items:center;gap:2mm;margin:0 0 1.7mm;font-size:11.6pt;color:#183765}.unit h2:after{content:"";height:1px;flex:1;background:#bfcce0}.unit article{margin:0 0 2mm;break-inside:auto}.unit.continued{margin-top:0}.unit.continued .material-entry{padding-top:0}.education-entry:last-child{margin-bottom:0}.education-line{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1.45fr) auto;align-items:baseline;gap:4mm}.education-line strong{font-size:9.8pt}.education-summary{font-size:9pt;color:#26354b}.education-period{font-size:8.5pt;color:#28364a;white-space:nowrap}.education-supplements{display:grid;gap:.45mm;margin:1.1mm 0 0;padding-left:5mm;font-size:8.5pt;line-height:1.42}.education-supplements li{break-inside:avoid}.line{display:flex;justify-content:space-between;gap:6mm}.line strong{font-size:9.7pt}.line span{font-size:8pt;color:#7a8493;white-space:nowrap}.unit p{margin:.6mm 0;font-size:8.5pt;color:#596579}.copy{font-size:8.65pt;line-height:1.48}.copy ul{margin:.7mm 0;padding-left:4mm;display:grid;gap:.45mm}.copy li{break-inside:avoid}.number{position:absolute;right:12mm;bottom:5.5mm;color:#9aa4b4;font:7.5pt Georgia}@page{size:A4;margin:0}@media print{html,body{background:#fff}.book{padding:0}.page{margin:0;box-shadow:none;break-after:page}}`
-const cardStyle = `.material-entry{padding:2.2mm 0 2.4mm;background:transparent}.material-entry .line strong{color:#15386d;font-size:10pt}.material-entry .line span{color:#37465b;font-weight:600}.material-entry .stack{margin:1mm 0 .5mm;color:#40506a}.material-entry .stack b,.material-entry .copy b{color:#16243a}.material-entry .copy ul{margin-top:1mm}`
+const cardStyle = `.material-entry{padding:2.2mm 0 2.4mm;background:transparent}.material-entry .line strong{color:#15386d;font-size:10pt}.material-entry .line span{color:#37465b;font-weight:600}.material-entry .stack{margin:1mm 0 .5mm;color:#40506a}.material-entry .stack b,.material-entry .copy b{color:#16243a}.material-entry .copy ul{margin-top:1mm}.material-entry .skill-line{font-size:8.65pt;line-height:1.5;color:#26354b}.material-entry .skill-line strong{color:#15386d}.unit.unit--skill{margin-bottom:0.8mm}.unit.unit--skill .material-entry{margin-bottom:0;padding:0.5mm 0}`
 const layoutStyle = (layout: ResumeLayoutConfig) => `.inner{padding:${layout.verticalMarginMm}mm 12mm}.unit{margin-bottom:${layout.sectionGapMm}mm}.copy ul{gap:${layout.paragraphGapMm}mm}`
 
 const pagination = `(async()=>{

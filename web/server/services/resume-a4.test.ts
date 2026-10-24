@@ -59,3 +59,33 @@ test('renders fixed A4 metadata, escaped content and pagination guard', () => {
   assert.doesNotMatch(html, /border-left:/)
   assert.doesNotMatch(html, /linear-gradient/)
 })
+
+test('技能卡在简历上只占一行：名称：成果要点，且不显示熟练程度', () => {
+  const html = buildA4ResumeHtml({ title: '测试简历', resolved: {
+    basics: { fullName: '王小明' }, educations: [], blocks: [], legacyContent: null, source: 'COMPOSITION',
+    references: [
+      { id: 's0', cardId: 'cs0', variantId: 'vs0', section: 'skill', sortOrder: 0, fieldKey: null, renderRules: {}, title: 'LLM & Agent', type: 'SKILL', facts: { role: '熟悉' }, variantName: '简短版', content: '熟悉 Agent 工作流编排、多 Agent 架构设计\n- 了解 LangChain、LangGraph.js', source: 'MATERIAL_VARIANT' },
+      { id: 's1', cardId: 'cs1', variantId: 'vs1', section: 'skill', sortOrder: 1, fieldKey: null, renderRules: {}, title: '前端技术', type: 'SKILL', facts: { role: '熟练' }, variantName: '简短版', content: '熟悉 HTML5、CSS3、Vue', source: 'MATERIAL_VARIANT' },
+    ],
+  } })
+  // 两张技能卡 = 两行，不是一个块里塞两段
+  assert.equal((html.match(/class="skill-line"/g) ?? []).length, 2)
+  // 文案里的换行和行首的 "- " 被抹平成一行的「；」，标题后接全角冒号
+  assert.match(html, /<strong>LLM &amp; Agent<\/strong>：熟悉 Agent 工作流编排、多 Agent 架构设计；了解 LangChain、LangGraph\.js/)
+  // 熟练程度（facts.role）不进简历：文案里已经写了「熟悉…；了解…」，再标一个「熟悉」是重复
+  assert.doesNotMatch(html, /<span>熟悉<\/span>/)
+  assert.doesNotMatch(html, /<span>熟练<\/span>/)
+  // 技能段不再生成块状的标题行 + bullet 正文
+  assert.doesNotMatch(html, /<div class="line">/)
+})
+
+test('项目经历仍然是块状排版（技能分支不影响其他类型）', () => {
+  const html = buildA4ResumeHtml({ title: '测试简历', resolved: {
+    basics: { fullName: '王小明' }, educations: [], blocks: [], legacyContent: null, source: 'COMPOSITION',
+    references: [
+      { id: 'p0', cardId: 'cp0', variantId: 'vp0', section: 'project', sortOrder: 0, fieldKey: null, renderRules: {}, title: 'Offer来', type: 'PROJECT', facts: { role: '独立开发', organization: '个人项目', startDate: '2025-09', endDate: '至今' }, variantName: '简短版', content: '架构设计：完成核心模块', source: 'MATERIAL_VARIANT' },
+    ],
+  } })
+  assert.match(html, /<div class="line"><strong>Offer来<\/strong><span>独立开发 \| 个人项目 \| 2025-09 — 至今<\/span><\/div>/)
+  assert.doesNotMatch(html, /class="skill-line"/)
+})
