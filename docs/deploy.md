@@ -38,6 +38,40 @@ Cloudflare **免费版没有中国大陆节点**，实测大陆用户（电脑�
 
 ## 更新上线流程（改完功能后）
 
+### 现在：推送即部署（2026-10-24 起）
+
+`git push origin main` 之后不用再做任何事。`.github/workflows/deploy.yml` 有两个 job：
+
+1. `build`：和以前一样构建镜像推到 ghcr（实测约 2 分钟）；
+2. `deploy`：构建成功后用受限 SSH key 进服务器跑 `/root/deploy.sh`，也就是 `git pull --ff-only` + `compose pull web` + `up -d`，最后从 GitHub 的 runner 对 `https://offerscoming.cn/` 做一次健康检查（200/204/302，最多重试 60 秒）。
+
+**一次性配置**（已经配过就跳过）：
+
+```bash
+# 本机（Git Bash 或 PowerShell 都行）生成一把专用 key，不要用你平时登录服务器的那把
+ssh-keygen -t ed25519 -C 'gha-deploy' -f ~/.ssh/gha-deploy -N ''
+
+# 公钥装到服务器，并且限制它只能跑部署脚本
+ssh root@43.108.107.79 'cat >> ~/.ssh/authorized_keys' < ~/.ssh/gha-deploy.pub
+# 然后用编辑器把刚追加的那一行改成（注意是同一行，不是新增一行）：
+#   restrict,command="bash /root/deploy.sh" <原来的 ssh-ed25519 ... 部分>
+
+# 部署脚本也要拷上去
+scp scripts/deploy-remote.sh root@43.108.107.79:/root/deploy.sh
+ssh root@43.108.107.79 'chmod +x /root/deploy.sh'
+```
+
+然后在 GitHub 仓库 → Settings → Secrets and variables → Actions 加三个 secret：
+`DEPLOY_SSH_KEY`（`~/.ssh/gha-deploy` 私钥全文，含头尾）、`DEPLOY_HOST`（服务器 IP）、`DEPLOY_USER`（`root`）。
+
+**secret 没配齐之前**，`deploy` job 会打一条 `::warning::` 然后跳过，这次运行仍然是绿的——也就是说代码推上去了、镜像也构建了，但不会自动上线，得手动部署。配齐之后那条 warning 就不该再出现，所以哪天它突然冒出来，多半是 secret 被删了。
+
+**带数据库迁移的发布会自动停住**：`deploy` job 会先看这次推送有没有动 `web/prisma/migrations/`，动了就直接报错停下（镜像已经构建好，但没有上线）。流程是：本机按下面「数据库迁移」一节跑完迁移 → Actions 页 → 选 `build-and-push-web` → Run workflow → 勾上 `force` → 再部署一次。这是刻意做的：生产镜像里没有 Prisma CLI，新代码先上线就会撞上旧表结构。
+
+**要不要更严一点**：现在 `ssh-keyscan` 自动接受主机指纹。想钉死的话，把服务器指纹存成 secret（`DEPLOY_KNOWN_HOSTS`）并改成写 `~/.ssh/known_hosts`，可以避免中间人。一个人的项目暂时没做。
+
+### 手动部署（自动部署失败、或者要回滚时）
+
 1. 本机提交并推送：
 
    ```bash

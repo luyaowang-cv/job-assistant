@@ -4,10 +4,22 @@ on:
   push:
     branches:
       - main
+  # 手动触发只有一个用途：带数据库迁移的发布被自动部署拦下后，本机跑完迁移，来这里补一次部署。
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '迁移已经在本机跑过了，跳过迁移检查直接部署'
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-web
+
+# 两次推送挨太近时排队，不要并发重启生产容器
+concurrency:
+  group: deploy-web
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -25,7 +37,7 @@ jobs:
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -37,3 +49,70 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # 镜像推上去之后自动进服务器：git pull + compose pull + up -d。
+  # 服务器上那个 key 是受限的（authorized_keys 里写了 command="bash /root/deploy.sh"），
+  # 所以这里只是一条不带命令的 ssh，能做的事由服务器端的脚本决定。
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 要拿 push 的 before 提交，才能算出"这次一共改了哪些文件"
+
+      # 生产镜像里没有 Prisma CLI 也没有 schema（Dockerfile 只 COPY .output），迁移只能在本机
+      # 通过 SSH 隧道跑。所以带迁移的推送绝不能自动上线——新代码会撞上旧表结构。
+      # 这里直接拦下来，让人先跑迁移，再手动触发一次跳过检查。
+      - name: 带数据库迁移的发布先停住
+        if: ${{ inputs.force != true }}
+        run: |
+          base='${{ github.event.before }}'
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base='HEAD^'
+          fi
+          echo "比较范围：$base..HEAD"
+          if git diff --name-only "$base" HEAD | grep -q '^web/prisma/migrations/'; then
+            echo "::error::这次提交带了新的数据库迁移，镜像已构建但没有上线。"
+            echo "先按 docs/deploy.md 的「数据库迁移」在本机跑完迁移，再 Actions → Run workflow → 勾上 force 部署。"
+            exit 1
+          fi
+          echo "没有新的迁移，继续部署。"
+
+      - name: Deploy over SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          # 三个 secret 还没配的时候不把这次运行弄红：镜像已经构建好了，手动部署一样能用。
+          # 配好之后这行就不该再出现——如果有一天它突然开始 warning，说明 secret 被删了。
+          if [ -z "${DEPLOY_SSH_KEY:-}" ] || [ -z "${DEPLOY_HOST:-}" ] || [ -z "${DEPLOY_USER:-}" ]; then
+            echo "::warning::DEPLOY_SSH_KEY / DEPLOY_HOST / DEPLOY_USER 没配齐，跳过自动部署（配置步骤见 docs/deploy.md）"
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          # Windows 上粘贴的私钥可能带 CRLF，sshd 会因为格式不对直接拒掉
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # 首次连接需要指纹；要更严可以把它钉成 secret，见 docs/deploy.md
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST"
+
+      - name: 健康检查
+        run: |
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 https://offerscoming.cn/ || true)
+            case "$code" in
+              200 | 204 | 302)
+                echo "站点已恢复：HTTP $code"
+                exit 0
+                ;;
+            esac
+            echo "第 $i 次探测：HTTP $code，5 秒后重试"
+            sleep 5
+          done
+          echo "::error::部署后 60 秒内站点没有正常响应，去服务器看 docker compose logs web"
+          exit 1
