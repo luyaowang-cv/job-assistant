@@ -109,8 +109,10 @@ jobs:
             echo "文件开头 30 个字符是：$(head -c 30 ~/.ssh/id_ed25519)"
             exit 1
           fi
-          echo "== 服务器地址 / 用户名（方括号里能看出有没有多余空格）=="
-          printf 'host=[%s] user=[%s]\n' "$DEPLOY_HOST" "$DEPLOY_USER"
+          echo "== 服务器地址 / 用户名会被 GitHub 打码，改用它们解析出的机器的 host key 指纹 =="
+          echo "   拿这个值对比服务器上的 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"
+          echo "   两台机（首尔 43.108.107.79 / 旧香港 114.134.185.94）指纹不同，一眼能看出连的是哪台"
+          ssh-keyscan -H "$DEPLOY_HOST" 2>/dev/null | ssh-keygen -lf - || echo "（连不上，host 或网络有问题）"
 
           # 首次连接需要指纹；要更严可以把它钉成 secret，见 docs/deploy.md
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
