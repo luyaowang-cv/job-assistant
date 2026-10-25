@@ -126,8 +126,18 @@
 - [x] T-403（**结论：不需要做**）: 教育卡走的是 `resolved.educations` 数组，不是 `fromReference`。
       插件读的 `c.educations[i]` 形状没变，所以只要转换正确，插件侧零改动。完成 2026-10-24（隐含于 P3）。
       Verify: P3 的端到端断言用的就是与插件相同的数组形状。
-- [ ] T-404: 个人主档案加 `familyMembers` 数组（关系/姓名/工作单位/职务/电话），页面可增删。
-      Verify: 保存后重新载入不丢条目；插件侧暂不加规则，`fill-context` 里能原样带出。
+- [x] T-404: 个人主档案加 `familyMembers`（姓名/关系/工作单位/职务/联系电话/年龄/政治面貌/籍贯），
+      页面可增删，关系与政治面貌是下拉（保留 allow-create）。完成 2026-10-25（`40af0b4`）。
+      链路：JSON 列（迁移只加列）→ zod optional（不能 default([])，否则清空历史）→
+      service「传了才写」+ publicSelect 加列 → 页面 → `resolveProfile` 返回并带进两条 fill-context 路径。
+      Verify: schema 测试全过；fill-context 的 localFacts 能看到 familyMembers。
+      **插件仍无规则**，数据只到 fill-context 不会被填（归入 T-406）。
+- [x] T-407（计划外）: 个人档案表单重排 —— 新增生源地/户籍类型/健康状况/特长/兴趣爱好，
+      删掉期望工作地点，民族/政治面貌/户籍类型/健康状况/证件类型改下拉、出生日期改日期选择器，
+      证件号码标签随证件类型变且去掉遮罩，个人档案页单独一套 `auto-fill minmax(250px)` 栅格。
+      完成 2026-10-25（`40af0b4`）。
+      Verify: SFC 与 SCSS 编译通过；`targetCities` 已被 zod 拒绝（页面不再提交）。
+      **注意**：新栅格规则权重高于文件底部的小屏单列规则，已在 767px 断点补了同权重声明。
 - [ ] T-405: 跨包契约测试——web 侧导出卡片键名清单，extension 侧 `node --test` 断言两边集合一致。
       Verify: 故意改错一个键名，测试变红。
 - [ ] T-406（新记）: 给教育卡新增的那批字段补插件规则（学制/学习方式/学校类别/培养方式/是否海外/
