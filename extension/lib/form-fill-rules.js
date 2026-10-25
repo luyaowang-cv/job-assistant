@@ -203,6 +203,15 @@ const RULES = [
   { key: 'work.startDate', section: 'work', collection: 'works', aliases: ['实习开始', '实习开始时间', '工作开始', '工作开始时间', '任职开始时间', '入职时间', '入职日期', '开始时间', '起始时间', 'startdate', 'begindate', 'from'], date: true, read: (c, i) => c.works[i]?.startDate },
   { key: 'work.endDate', section: 'work', collection: 'works', aliases: ['实习结束', '实习结束时间', '工作结束', '工作结束时间', '任职结束时间', '离职时间', '离职日期', '结束时间', 'enddate', 'finishdate', 'to'], date: true, endOfMonth: true, read: (c, i) => c.works[i]?.endDate },
   { key: 'work.description', section: 'work', collection: 'works', aliases: ['工作内容', '工作描述', '主要职责', '岗位职责', '工作职责', '职责', '实习内容', '核心职责', '职责及业绩', '工作业绩', '工作成果', '描述', 'jobdescription', 'responsibilities', 'duties', 'description'], multiline: true, read: (c, i) => c.works[i]?.description },
+  // 公司背景与证明人：网申的实习/工作区块常把这几栏单独问一次。
+  // 别名都带「公司/企业/工作」前缀或足够长，避免和 basic 段的「行业」这类短词互抢。
+  { key: 'work.companySize', section: 'work', collection: 'works', aliases: ['公司规模', '企业规模', '人员规模', '公司人数', '企业人数', '单位规模', 'companysize'], read: (c, i) => c.works[i]?.companySize },
+  { key: 'work.industry', section: 'work', collection: 'works', aliases: ['所属行业', '公司行业', '企业行业', '行业类别', 'industry'], read: (c, i) => c.works[i]?.industry },
+  { key: 'work.employmentType', section: 'work', collection: 'works', aliases: ['工作性质', '职位性质', '任职性质', '工作类型', '雇佣类型', 'employmenttype', 'jobtype'], read: (c, i) => c.works[i]?.employmentType },
+  { key: 'work.refereeName', section: 'work', collection: 'works', attribution: 'other', aliases: ['证明人', '证明人姓名', '背调联系人', 'referee', 'refereename'], read: (c, i) => c.works[i]?.refereeName },
+  { key: 'work.refereePhone', section: 'work', collection: 'works', attribution: 'other', aliases: ['证明人电话', '证明人手机', '证明人联系方式', '证明人联系电话', '背调电话', 'refereephone', 'refereemobile'], types: ['tel'], read: (c, i) => c.works[i]?.refereePhone },
+  { key: 'work.refereeRelation', section: 'work', collection: 'works', attribution: 'other', aliases: ['证明人关系', '与证明人关系', 'refereerelation'], read: (c, i) => c.works[i]?.refereeRelation },
+
   // “无实习经历”是常见的阻断项：不勾选就无法提交，而档案里没有经历时答案本就是确定的。
   { key: 'work.none', section: 'work', aliases: ['没有实习经历', '无实习经历', '暂无实习经历', '没有工作经历', '无工作经历', '暂无工作经历', 'noworkexperience', 'nointernshipexperience'], checkbox: true, skipReason: '档案中存在实习或工作经历，此项不应勾选。', read: c => (c.works.length === 0 ? 'true' : '') },
 
@@ -452,7 +461,9 @@ function buildContext(profile) {
     // “毕业院校” box means the highest degree, and a repeating education block
     // reads top-down from the most recent record.
     educations: array(root.educations).map(record).sort((left, right) => text(right.endDate).localeCompare(text(left.endDate))),
-    works: explicitWork.length ? explicitWork : fromReference('INTERNSHIP'),
+    // 实习卡和工作卡都进 works 集合：早先只认 INTERNSHIP，导致建了「工作经历」卡也填不进去。
+    // 顺序保持"实习在前"——校招表里用户通常先想到实习。
+    works: explicitWork.length ? explicitWork : fromReference('INTERNSHIP').concat(fromReference('WORK')),
     // 科研记录同时挂在 research 和 projects 下面：表单把「科研经历」单列一块时走 research，
     // 并进「项目经历」时走 projects（项目记录排在前面，不够了才轮到科研）。
     research: fromReference('RESEARCH'),

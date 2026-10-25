@@ -103,6 +103,28 @@ test('leaves a genuinely ambiguous select option for manual review', () => {
   assert.equal(plan.entries[0].reason, '下拉选项不存在可确认的唯一匹配，需要人工确认。')
 })
 
+test('实习/工作的公司背景与证明人字段来自素材卡，工作卡也进 works 集合', () => {
+  const withCards = {
+    basics: {},
+    references: [
+      { type: 'INTERNSHIP', title: '搜狐', content: '做前端', facts: { role: '前端实习生', companySize: '500-999 人', industry: '互联网', employmentType: '实习', refereeName: '张三', refereePhone: '13800138000', refereeRelation: '直属上级' } },
+      // 工作卡过去被忽略（works 只取 INTERNSHIP），这里同时验证它也被收进来
+      { type: 'WORK', title: '某公司', content: '做后端', facts: { role: '后端工程师', industry: '软件与信息服务' } },
+    ],
+  }
+  const plan = buildFillPlan(withCards, [
+    { id: 'size', label: '公司规模', controlType: 'input' },
+    { id: 'industry', label: '所属行业', controlType: 'input' },
+    { id: 'employment', label: '工作性质', controlType: 'input' },
+    { id: 'referee', label: '证明人姓名', controlType: 'input' },
+    { id: 'referee-phone', label: '证明人电话', controlType: 'input', inputType: 'tel' },
+    { id: 'referee-relation', label: '证明人关系', controlType: 'input' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.status), Array(6).fill('filled'))
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['500-999 人', '互联网', '实习', '张三', '13800138000', '直属上级'])
+})
+
 test('never reports or overwrites existing field content', () => {
   const plan = buildFillPlan(profile, [{ id: 'name', label: '姓名', hasValue: true }])
 

@@ -112,6 +112,37 @@ const techStack = (): MaterialFieldSpec => ({
   help: '使用斜杠、中文逗号或英文逗号分隔；技术栈会直接显示在简历卡片中。',
 })
 
+/** 实习/工作共用的六个「公司背景」字段。网申表单常问，按标准词存更容易命中下拉选项。 */
+const companyFields = (): MaterialFieldSpec[] => [
+  {
+    key: 'companySize',
+    label: '公司规模',
+    kind: 'select',
+    options: ['1-20 人', '20-99 人', '100-499 人', '500-999 人', '1000-9999 人', '10000 人以上'].map(value => ({ value, label: value })),
+  },
+  {
+    key: 'industry',
+    label: '所属行业',
+    kind: 'select',
+    options: ['互联网', '软件与信息服务', '金融', '教育', '医疗健康', '制造业', '通信', '能源', '政府/事业单位', '其他'].map(value => ({ value, label: value })),
+  },
+  {
+    key: 'employmentType',
+    label: '工作性质',
+    kind: 'select',
+    options: ['实习', '全职', '兼职', '劳务派遣', '其他'].map(value => ({ value, label: value })),
+  },
+  // 证明人（背调联系人）：网申表单经常单独一栏要
+  { key: 'refereeName', label: '证明人姓名', kind: 'text' },
+  { key: 'refereePhone', label: '证明人电话', kind: 'text' },
+  {
+    key: 'refereeRelation',
+    label: '证明人关系',
+    kind: 'select',
+    options: ['直属上级', '部门主管', '同事', 'HR', '导师', '其他'].map(value => ({ value, label: value })),
+  },
+]
+
 /** 经历类类型共用的列表副标题：角色 · 组织 · 时间。 */
 const EXPERIENCE_META = ['role', 'organization', 'period']
 
@@ -135,7 +166,7 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleLabel: '公司名称',
     titlePlaceholder: '例如：搜狐',
     titleRequired: true,
-    fields: [role('实习职位'), organization('部门 / 团队（可选）'), period(), techStack()],
+    fields: [role('实习职位'), organization('部门 / 团队（可选）'), period(), techStack(), ...companyFields()],
     listMeta: EXPERIENCE_META,
   },
   WORK: {
@@ -143,7 +174,7 @@ export const MATERIAL_TYPE_SPECS: Record<MaterialCardType, MaterialTypeSpec> = {
     titleLabel: '公司名称',
     titlePlaceholder: '例如：某科技公司',
     titleRequired: true,
-    fields: [role('工作职位'), organization('部门 / 团队（可选）'), period(), techStack()],
+    fields: [role('工作职位'), organization('部门 / 团队（可选）'), period(), techStack(), ...companyFields()],
     listMeta: EXPERIENCE_META,
   },
   CAMPUS: {
