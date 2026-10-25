@@ -1066,7 +1066,17 @@ export function buildFillPlan(profile, fields) {
     }
     // Scored once and reused: the same field must not be read two ways in one
     // pass, and `classifyField` would otherwise run the whole table again.
-    const match = bestRuleFor(field)
+    //
+    // A question answered 是/否 is never one of the profile's columns. “是否服从
+    // 公司调剂” contains “公司”, so the rule for 公司名称 matches a word *inside*
+    // the question rather than the question itself, and the value it would
+    // produce — a company name — cannot even be chosen from the options. The one
+    // kind of rule that may answer such a control is the one that computes the
+    // boolean itself (`checkbox: true`, e.g. “无实习经历”), so every other match
+    // is dropped and the field falls through to the binary branch below — the
+    // one that refuses to guess.
+    const candidate = bestRuleFor(field)
+    const match = candidate?.rule && candidate.rule.checkbox !== true && isBinaryQuestion(field) ? null : candidate
     if (match?.rule) structure.push({ field, rule: match.rule, datePart: match.datePart })
     const category = classifyField(field, match)
     if (category === 'sensitive') {

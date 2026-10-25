@@ -218,18 +218,87 @@ export function scanVisibleFormFields() {
   const allControls = queryAll(CONTROL_SELECTOR)
   const customSelectFor = (element) => element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select')
     ?? (element.getAttribute('role') === 'combobox' ? element.closest('[role="combobox"]') ?? element : null)
+  // #region radio-group identity
+  // Byte-for-byte identical in `scanVisibleFormFields`, `applyChoiceEntries` and
+  // `collectControlValues`: the scan names a group `radio-group-<index of its
+  // first radio>`, and both of the others rebuild that same name from the page.
+  // A copy that grouped differently would write into a field the plan never
+  // meant, so the three are locked together by a test rather than by hope.
+  const radioText = (value) => String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[*\s]+|[*\s]+$/g, '')
+    .replace(/[:：]\s*$/, '')
+    .trim()
+  /**
+   * The words on one option.
+   *
+   * Component libraries wrap the input in a `<label>` and put the words there;
+   * hand-rolled forms leave the text as a plain sibling. The wrapper is only
+   * trusted when it holds this input and nothing else — a group's own container
+   * holds every option in it, and reading that would name every option the same.
+   */
+  const radioOptionText = (element) => {
+    const wrapper = element.parentElement
+    const ownWrapper = wrapper && wrapper.querySelectorAll(CONTROL_SELECTOR).length === 1
+    // `<div><input type="radio"></div><span>是</span>` — the text sits outside the
+    // box the input was put in, so the wrapper's own text says nothing.
+    const beside = ownWrapper && wrapper.nextElementSibling && !wrapper.nextElementSibling.querySelector(CONTROL_SELECTOR)
+      ? wrapper.nextElementSibling.textContent
+      : ''
+    return [
+      element.getAttribute('aria-label'),
+      element.closest('label')?.textContent,
+      wrapper?.querySelector('.el-radio__label, .ant-radio-wrapper, [class*="radio__label"]')?.textContent,
+      ownWrapper ? wrapper.textContent : '',
+      beside,
+    ].map(radioText).find(Boolean) ?? ''
+  }
+  /**
+   * The radios that answer one question.
+   *
+   * A shared `name` is the page saying so itself. Without one — and plenty of
+   * Vue forms render bare siblings — the group is the nearest ancestor holding
+   * two radios or more. Climbing to it is the whole point: stopping at the
+   * nearest wrapper that holds “a control” lands on the box around a *single*
+   * option, and then a 是/否 question reaches the plan as two separate fields,
+   * named after the option each one happens to sit next to.
+   *
+   * Two questions rendered side by side in one wrapper look exactly like one
+   * group from here, and the tell is repeated option text (“是, 否, 是, 否”).
+   * That case goes back to being a single option: an answer would match two
+   * radios, and refusing to write beats writing into the wrong question.
+   */
   const radioGroupFor = (element) => {
     const name = element.getAttribute('name')
     if (name) return allControls.filter(candidate => candidate instanceof HTMLInputElement && candidate.type === 'radio' && candidate.getAttribute('name') === name)
-    const container = semanticContainerFor(element)
-    return container ? Array.from(container.querySelectorAll('input[type="radio"]')) : [element]
+    const alone = [element]
+    for (let node = element.parentElement, level = 0; node && level < 5; node = node.parentElement, level += 1) {
+      const radios = Array.from(node.querySelectorAll('input[type="radio"]'))
+      if (radios.length < 2) continue
+      const texts = radios.map(radio => radioOptionText(radio)).filter(Boolean)
+      if (new Set(texts).size !== texts.length) return alone
+      return radios
+    }
+    return alone
   }
-  const radioOptionText = (element) => normalizeLabel(
-    element.getAttribute('aria-label')
-      ?? element.closest('label')?.textContent
-      ?? element.parentElement?.querySelector('.el-radio__label, .ant-radio-wrapper, [class*="radio__label"]')?.textContent
-      ?? '',
-  )
+  // #endregion radio-group identity
+  /**
+   * The box a group's question is written in.
+   *
+   * `semanticContainerFor` answers “the box around this control”, which for a
+   * radio is the box around one *option*. When the group is wider than that, the
+   * question cannot be in it, so the search moves out to the first ancestor that
+   * holds the whole group.
+   */
+  const radioGroupContainer = (group) => {
+    const own = semanticContainerFor(group[0])
+    if (group.length < 2 || (own && group.every(radio => own.contains(radio)))) return own
+    let node = group[0].parentElement
+    for (let level = 0; node && level < 6; level += 1, node = node.parentElement) {
+      if (group.every(radio => node.contains(radio))) return node
+    }
+    return own
+  }
   /**
    * The question a radio group answers.
    *
@@ -248,7 +317,7 @@ export function scanVisibleFormFields() {
    */
   const radioGroupLabel = (group) => {
     const anchor = group[0]
-    const container = semanticContainerFor(anchor)
+    const container = radioGroupContainer(group)
     if (container) {
       // Two ways to drop an option, because wrappers vary: by containment for a
       // component that wraps each option, and by exact text for one that renders
@@ -358,11 +427,17 @@ export function scanVisibleFormFields() {
     group.forEach(radio => seenRadioAnchors.add(allControls.indexOf(radio)))
     const visibleOption = group.find(radio => isVisible(radio.closest('label') ?? radio.parentElement ?? radio))
     if (!visibleOption) return
+    const container = radioGroupContainer(group)
+    const label = radioGroupLabel(group)
+    // The context is what the page writes around the question. Reading it from
+    // the option's own box would only ever repeat the option, which is why a
+    // group used to reach the next export with no context at all.
+    const containerText = container ? shortVisibleText(container) : ''
     radioGroups.push({
       sortIndex: anchorIndex,
       id: `radio-group-${anchorIndex}`,
-      label: radioGroupLabel(group),
-      context: contextFor(element),
+      label,
+      context: containerText && containerText !== label ? containerText.slice(0, 240) : '',
       name: element.getAttribute('name') ?? '',
       placeholder: '',
       inputType: 'radio',
@@ -868,12 +943,70 @@ export async function applyChoiceEntries(instructions) {
     await pause(REMOTE_SEARCH_MS)
     return true
   }
-  const radioOptionText = (element) => normalizeOption(
-    element.getAttribute('aria-label')
-      ?? element.closest('label')?.textContent
-      ?? element.parentElement?.querySelector('.el-radio__label, .ant-radio-wrapper, [class*="radio__label"]')?.textContent
-      ?? '',
-  )
+  // #region radio-group identity
+  // Byte-for-byte identical in `scanVisibleFormFields`, `applyChoiceEntries` and
+  // `collectControlValues`: the scan names a group `radio-group-<index of its
+  // first radio>`, and both of the others rebuild that same name from the page.
+  // A copy that grouped differently would write into a field the plan never
+  // meant, so the three are locked together by a test rather than by hope.
+  const radioText = (value) => String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[*\s]+|[*\s]+$/g, '')
+    .replace(/[:：]\s*$/, '')
+    .trim()
+  /**
+   * The words on one option.
+   *
+   * Component libraries wrap the input in a `<label>` and put the words there;
+   * hand-rolled forms leave the text as a plain sibling. The wrapper is only
+   * trusted when it holds this input and nothing else — a group's own container
+   * holds every option in it, and reading that would name every option the same.
+   */
+  const radioOptionText = (element) => {
+    const wrapper = element.parentElement
+    const ownWrapper = wrapper && wrapper.querySelectorAll(CONTROL_SELECTOR).length === 1
+    // `<div><input type="radio"></div><span>是</span>` — the text sits outside the
+    // box the input was put in, so the wrapper's own text says nothing.
+    const beside = ownWrapper && wrapper.nextElementSibling && !wrapper.nextElementSibling.querySelector(CONTROL_SELECTOR)
+      ? wrapper.nextElementSibling.textContent
+      : ''
+    return [
+      element.getAttribute('aria-label'),
+      element.closest('label')?.textContent,
+      wrapper?.querySelector('.el-radio__label, .ant-radio-wrapper, [class*="radio__label"]')?.textContent,
+      ownWrapper ? wrapper.textContent : '',
+      beside,
+    ].map(radioText).find(Boolean) ?? ''
+  }
+  /**
+   * The radios that answer one question.
+   *
+   * A shared `name` is the page saying so itself. Without one — and plenty of
+   * Vue forms render bare siblings — the group is the nearest ancestor holding
+   * two radios or more. Climbing to it is the whole point: stopping at the
+   * nearest wrapper that holds “a control” lands on the box around a *single*
+   * option, and then a 是/否 question reaches the plan as two separate fields,
+   * named after the option each one happens to sit next to.
+   *
+   * Two questions rendered side by side in one wrapper look exactly like one
+   * group from here, and the tell is repeated option text (“是, 否, 是, 否”).
+   * That case goes back to being a single option: an answer would match two
+   * radios, and refusing to write beats writing into the wrong question.
+   */
+  const radioGroupFor = (element) => {
+    const name = element.getAttribute('name')
+    if (name) return allControls.filter(candidate => candidate instanceof HTMLInputElement && candidate.type === 'radio' && candidate.getAttribute('name') === name)
+    const alone = [element]
+    for (let node = element.parentElement, level = 0; node && level < 5; node = node.parentElement, level += 1) {
+      const radios = Array.from(node.querySelectorAll('input[type="radio"]'))
+      if (radios.length < 2) continue
+      const texts = radios.map(radio => radioOptionText(radio)).filter(Boolean)
+      if (new Set(texts).size !== texts.length) return alone
+      return radios
+    }
+    return alone
+  }
+  // #endregion radio-group identity
   /**
    * Why a choice control could not be set. See `applyFillEntries` for why the
    * reason travels back with the id instead of being collapsed into “未能应用”.
@@ -888,10 +1021,7 @@ export async function applyChoiceEntries(instructions) {
   const radioAnchors = new Set()
   allControls.forEach((element) => {
     if (!(element instanceof HTMLInputElement) || element.type !== 'radio') return
-    const name = element.getAttribute('name')
-    const group = name
-      ? allControls.filter(candidate => candidate instanceof HTMLInputElement && candidate.type === 'radio' && candidate.getAttribute('name') === name)
-      : Array.from((element.closest('.el-form-item, .ant-form-item, .form-item, .form-group, .ud-formily-item, [role="group"]') ?? element.parentElement)?.querySelectorAll('input[type="radio"]') ?? [])
+    const group = radioGroupFor(element)
     const anchorIndex = allControls.indexOf(group[0])
     const fieldId = `radio-group-${anchorIndex}`
     if (radioAnchors.has(fieldId)) return
@@ -908,7 +1038,8 @@ export async function applyChoiceEntries(instructions) {
       skippedExistingIds.push(fieldId)
       return
     }
-    const matches = group.filter(radio => radioOptionText(radio) === normalizeOption(entry.value))
+    const answer = radioText(entry.value)
+    const matches = group.filter(radio => radioText(radioOptionText(radio)) === answer)
     if (matches.length !== 1) {
       markUnavailable(fieldId, visibleAnchor, '单选组的选项里没有与答案完全对应的一项。')
       return
@@ -1061,23 +1192,80 @@ export function collectControlValues() {
       if (value) values[`form-field-${index}`] = value
     })
 
+  // #region radio-group identity
+  // Byte-for-byte identical in `scanVisibleFormFields`, `applyChoiceEntries` and
+  // `collectControlValues`: the scan names a group `radio-group-<index of its
+  // first radio>`, and both of the others rebuild that same name from the page.
+  // A copy that grouped differently would write into a field the plan never
+  // meant, so the three are locked together by a test rather than by hope.
+  const radioText = (value) => String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[*\s]+|[*\s]+$/g, '')
+    .replace(/[:：]\s*$/, '')
+    .trim()
+  /**
+   * The words on one option.
+   *
+   * Component libraries wrap the input in a `<label>` and put the words there;
+   * hand-rolled forms leave the text as a plain sibling. The wrapper is only
+   * trusted when it holds this input and nothing else — a group's own container
+   * holds every option in it, and reading that would name every option the same.
+   */
+  const radioOptionText = (element) => {
+    const wrapper = element.parentElement
+    const ownWrapper = wrapper && wrapper.querySelectorAll(CONTROL_SELECTOR).length === 1
+    // `<div><input type="radio"></div><span>是</span>` — the text sits outside the
+    // box the input was put in, so the wrapper's own text says nothing.
+    const beside = ownWrapper && wrapper.nextElementSibling && !wrapper.nextElementSibling.querySelector(CONTROL_SELECTOR)
+      ? wrapper.nextElementSibling.textContent
+      : ''
+    return [
+      element.getAttribute('aria-label'),
+      element.closest('label')?.textContent,
+      wrapper?.querySelector('.el-radio__label, .ant-radio-wrapper, [class*="radio__label"]')?.textContent,
+      ownWrapper ? wrapper.textContent : '',
+      beside,
+    ].map(radioText).find(Boolean) ?? ''
+  }
+  /**
+   * The radios that answer one question.
+   *
+   * A shared `name` is the page saying so itself. Without one — and plenty of
+   * Vue forms render bare siblings — the group is the nearest ancestor holding
+   * two radios or more. Climbing to it is the whole point: stopping at the
+   * nearest wrapper that holds “a control” lands on the box around a *single*
+   * option, and then a 是/否 question reaches the plan as two separate fields,
+   * named after the option each one happens to sit next to.
+   *
+   * Two questions rendered side by side in one wrapper look exactly like one
+   * group from here, and the tell is repeated option text (“是, 否, 是, 否”).
+   * That case goes back to being a single option: an answer would match two
+   * radios, and refusing to write beats writing into the wrong question.
+   */
+  const radioGroupFor = (element) => {
+    const name = element.getAttribute('name')
+    if (name) return allControls.filter(candidate => candidate instanceof HTMLInputElement && candidate.type === 'radio' && candidate.getAttribute('name') === name)
+    const alone = [element]
+    for (let node = element.parentElement, level = 0; node && level < 5; node = node.parentElement, level += 1) {
+      const radios = Array.from(node.querySelectorAll('input[type="radio"]'))
+      if (radios.length < 2) continue
+      const texts = radios.map(radio => radioOptionText(radio)).filter(Boolean)
+      if (new Set(texts).size !== texts.length) return alone
+      return radios
+    }
+    return alone
+  }
+  // #endregion radio-group identity
+
   const seenRadioAnchors = new Set()
   allControls.forEach((element, index) => {
     if (!(element instanceof HTMLInputElement) || element.type !== 'radio' || seenRadioAnchors.has(index)) return
-    const name = element.getAttribute('name')
-    const group = name
-      ? allControls.filter(candidate => candidate instanceof HTMLInputElement && candidate.type === 'radio' && candidate.getAttribute('name') === name)
-      : Array.from((element.closest('.el-form-item, .ant-form-item, .form-item, .form-group, .ud-formily-item, [role="group"]') ?? element.parentElement)?.querySelectorAll('input[type="radio"]') ?? [])
+    const group = radioGroupFor(element)
     const anchorIndex = allControls.indexOf(group[0])
     group.forEach(radio => seenRadioAnchors.add(allControls.indexOf(radio)))
     const checked = group.find(radio => radio.checked)
     if (!checked) return
-    const optionText = readText(
-      checked.getAttribute('aria-label')
-        ?? checked.closest('label')?.textContent
-        ?? checked.parentElement?.querySelector('.el-radio__label, .ant-radio-wrapper, [class*="radio__label"]')?.textContent
-        ?? '',
-    )
+    const optionText = radioOptionText(checked)
     if (optionText) values[`radio-group-${anchorIndex}`] = optionText
   })
 

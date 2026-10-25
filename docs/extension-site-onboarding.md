@@ -16,6 +16,8 @@ docs/diagnosis-scripts/dumps/<站点>.json
 
 命名用「平台-租户」，例如 `dayee-gszq.json`、`beisen-zhiye-camzhaopin.json`。同一平台的另一家公司是**另一份**文件——字段名与区块结构由客户配置，不通用。
 
+**入库前先抹掉已填的值。** 导出按钮的提示是"带属性，不含已填的值"，但 `context` 是这个控件周围盒子的可见文本，页面上已经有草稿时它会把姓名、证件号码、电子邮箱一起带出来。把 `context` 里「页面字段」之前那一段删掉就够了，剩下的 `页面字段 N/M；相邻字段：…` 才是适配要用的。这个仓库是公开的，这一步不能省。
+
 ### 2. 手写期望（10 分钟）
 
 新建 `<站点>.expect.json`：
@@ -58,6 +60,7 @@ node --test extension/lib/site-fixtures.test.js
 | 整块认错段落（教育块被当成证书） | `SECTION_HINTS` |
 | 认出来了但选不中选项 | `OPTION_ALIASES` |
 | 同名字段串位 | 先看 `ANCHOR_KEYS` 有没有覆盖这个区块的锚点字段 |
+| 一道 是/否 被拆成两个字段，或字段名就是「是」「否」 | `form-page-bridge.js` 的 `radioGroupFor`（三处副本必须一起动） |
 
 **改别名与标记词，不改判定逻辑。** 逻辑一动，所有站点一起受影响；夹具只能证明这几家没坏。
 
@@ -74,6 +77,8 @@ node docs/diagnosis-scripts/replay-dump.mjs docs/diagnosis-scripts/dumps/beisen-
 
 - 同一个现象在**三家以上**站点重复出现 → 是通用规则缺了一个维度（F-048 的归属层就是这么来的）。
 - 只有一家 → 加别名，别动逻辑。
+- **例外：一家也改，当原规则按构造不可能对。** 中建那次，无 `name` 的单选组用「控件所在的那个盒子」分组——那个盒子按定义只装得下一个 radio，所以永远找不到第二个选项。这不是一家站点的口味问题，是规则本身写错了方向；同一处错误在每一家手写单选组的站点上都成立，只是以前没人撞上。
+- 判据是**"这条规则有可能对吗"**，不是"有几家报过"。改完仍要跑满全量回归。
 
 ## 现在覆盖的站点
 
@@ -82,3 +87,7 @@ node docs/diagnosis-scripts/replay-dump.mjs docs/diagnosis-scripts/dumps/beisen-
 | 北森 · camzhaopin.zhiye.com | `beisen-zhiye-camzhaopin` | ✅ 7 条期望 |
 | 北森 · jlcehr.zhiye.com（社会招聘，无区块标题） | `beisen-jlcehr` | ✅ 7 条期望 |
 | 大易 · gszq.hotjob.cn | 待补 | 结构已导出，期望未写 |
+| 中建 · recruit.cscec.com | 待补 | 结构已导出（`cscec-recruit.json`，**修复前的那一份**：单选组还是两个字段；`context` 里的已填值已抹掉），期望待重新导出后写 |
+
+中建这份结构是 2026-10-25 适配的起点：8 个控件里，6 个普通输入正常，第 7、8 个是同一道是非题的两个选项被拆成了两个字段（标签分别是「是」和「否」，`options` 都为空）。扫描器修好后重新导出，这份 dump 就应当变成 7 个控件，届时再写期望——并且**把这份旧 dump 换成新的**。
+

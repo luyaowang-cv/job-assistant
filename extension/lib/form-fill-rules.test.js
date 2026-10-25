@@ -690,6 +690,20 @@ test('answers a yes/no question from the profile when a rule covers it', () => {
   assert.equal(plan.entries[0].value, 'true')
 })
 
+test('does not answer a 是/否 question just because its wording contains a column name', () => {
+  // 中建（recruit.cscec.com）的「是否服从公司调剂」含「公司」二字，曾被 公司名称
+  // 的规则按字面命中：值既选不进选项（选项里没有公司名），又因为“匹配到了规则”
+  // 而绕过了是非题的拦截，于是被送进模型去猜一个人的意愿。
+  const plan = buildFillPlan({ workExperiences: [{ company: '甲公司' }] }, [
+    { id: 'adjust', label: '是否服从公司调剂', controlType: 'radio-group', inputType: 'radio', options: ['是', '否'] },
+  ])
+  const [entry] = plan.entries
+
+  assert.equal(entry.status, 'needs_manual')
+  assert.equal(entry.target, undefined, '不该被当成 公司名称 来填')
+  assert.equal(entry.skipAi, true, '是/否 的意愿题不能交给模型')
+})
+
 test('does not mistake 男/女 for a yes/no question', () => {
   const plan = buildFillPlan({ basics: { gender: '女' } }, [
     { id: 'gender', label: '性别', controlType: 'radio-group', inputType: 'radio', options: ['男', '女'] },

@@ -79,11 +79,21 @@ test('asks a radio group for its question, never for its first option', () => {
   // and the wrongest. The group's own text, minus its options, is the question.
   const source = scanVisibleFormFields.toString()
   assert.match(source, /const radioGroupLabel = /)
-  assert.match(source, /label: radioGroupLabel\(group\),/)
+  assert.match(source, /const label = radioGroupLabel\(group\)/)
   // And when the question lives beside the options rather than around them — a
   // two-column table, a hand-rolled `<div>` — it is read from there next, so a
   // group that used to be named “是” does not simply become unnamed instead.
   assert.match(source, /const beside = adjacentLabel\(anchor\)/)
+})
+
+test('组名从含住整个组的那个盒子里取', () => {
+  // `semanticContainerFor` 回答的是“这个控件所在的盒子”，对一个 radio 来说那就是
+  // 某一个选项的盒子。组比它宽的时候，题面不可能在里面，得往上找到含住整组的
+  // 那一层。分组本身的规则在 `radio-group.test.js` 里跑假 DOM 验证。
+  const source = scanVisibleFormFields.toString()
+  assert.match(source, /const radioGroupContainer = \(group\) =>/)
+  assert.match(source, /group\.every\(radio => own\.contains\(radio\)\)/)
+  assert.match(source, /const container = radioGroupContainer\(group\)/)
 })
 
 test('reports a contenteditable editor as the textarea it is', () => {

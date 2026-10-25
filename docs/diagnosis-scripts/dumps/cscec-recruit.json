@@ -1,0 +1,112 @@
+{
+  "host": "recruit.cscec.com",
+  "url": "https://recruit.cscec.com/recruit#/my_resume?company_id=1873&contract_unit=32042963",
+  "profile": "未选",
+  "unreachedFrames": 0,
+  "fields": [
+    {
+      "id": "0::form-field-2",
+      "label": "姓名",
+      "name": "",
+      "placeholder": "请输入姓名",
+      "controlType": "input",
+      "inputType": "text",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 1/8；相邻字段：证件号码、电子邮箱"
+    },
+    {
+      "id": "0::form-field-3",
+      "label": "证件号码",
+      "name": "",
+      "placeholder": "请输入身份证号",
+      "controlType": "input",
+      "inputType": "text",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 2/8；相邻字段：姓名、电子邮箱、英语分数"
+    },
+    {
+      "id": "0::form-field-7",
+      "label": "电子邮箱",
+      "name": "",
+      "placeholder": "请输入电子邮箱",
+      "controlType": "input",
+      "inputType": "text",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 3/8；相邻字段：姓名、证件号码、英语分数、体重（公斤）"
+    },
+    {
+      "id": "0::form-field-9",
+      "label": "英语分数",
+      "name": "",
+      "placeholder": "请输入英语分数",
+      "controlType": "input",
+      "inputType": "number",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 4/8；相邻字段：证件号码、电子邮箱、体重（公斤）、身高（厘米）"
+    },
+    {
+      "id": "0::form-field-10",
+      "label": "体重（公斤）",
+      "name": "",
+      "placeholder": "请输入体重",
+      "controlType": "input",
+      "inputType": "text",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 5/8；相邻字段：电子邮箱、英语分数、身高（厘米）、是"
+    },
+    {
+      "id": "0::form-field-11",
+      "label": "身高（厘米）",
+      "name": "",
+      "placeholder": "请输入身高",
+      "controlType": "input",
+      "inputType": "text",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 6/8；相邻字段：英语分数、体重（公斤）、是、否"
+    },
+    {
+      "id": "0::radio-group-85",
+      "label": "是",
+      "name": "",
+      "placeholder": "",
+      "controlType": "radio-group",
+      "inputType": "radio",
+      "options": [],
+      "hasValue": true,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 7/8；相邻字段：体重（公斤）、身高（厘米）、否"
+    },
+    {
+      "id": "0::radio-group-86",
+      "label": "否",
+      "name": "",
+      "placeholder": "",
+      "controlType": "radio-group",
+      "inputType": "radio",
+      "options": [],
+      "hasValue": false,
+      "dateUnit": "",
+      "dateRole": "",
+      "context": "页面字段 8/8；相邻字段：身高（厘米）、是"
+    }
+  ]
+}
