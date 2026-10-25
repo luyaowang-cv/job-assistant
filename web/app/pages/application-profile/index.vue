@@ -11,29 +11,37 @@ type Variant = { id: string; name: string; content: string }
 type Card = { id: string; title: string; type: string; tags: string[]; facts: Record<string, unknown>; variants: Variant[] }
 type Field = { key: string; label: string; text: string; limit: number | null }
 type Block = { key: string; title: string; fields: Field[] }
-type Version = { id: string; createdAt: string; blocks: Block[]; composition: { references: Array<{ cardId: string; variantId: string; fieldKey: string | null }> } }
+type Version = {
+  id: string; createdAt: string; blocks: Block[]
+  composition: { references: Array<{ cardId: string; variantId: string; fieldKey: string | null; section?: string; sortOrder?: number }> }
+}
 type Candidate = { sourceKey: string; type: string; title: string; imported: boolean; variant: { content: string } }
 type ResumeOption = { id: string; name: string }
 
+/** 一行 = 一张卡 + 一个版本。界面上就是"这一格放了哪份素材"。 */
+type Row = { cardId: string; variantId: string }
+
 /**
- * A brand-new profile starts from the modules an application form usually asks for,
- * so the first thing to do is drop material into them rather than invent the shape.
+ * 固定的区块。**key 同时是保存时的 section 名**：插件按它分组、服务端按它排序、
+ * 简历里按它决定"这段是不是教育"。所以 key 不能随便改，改了等于让历史档案里的引用
+ * 找不到归属。标题可以随便改。
+ *
+ * 顺序 = 网申表单里的常见顺序（教育 → 实习 → 工作 → 项目 → 校园 → 科研 → 奖项 → 证书 → 技能 → 自评）。
  */
-function templateBlocks(): Block[] {
-  return [
-    // 教育排最前：表单里它通常在基本信息之后、经历之前。教育现在只认素材卡，
-    // 所以这个模块的价值就是把教育卡挂进来（references 的 section 取模块 key，
-    // 而服务端转换只看卡片类型，所以放在哪个模块都能被识别）。
-    { key: 'education', title: '教育背景', fields: [] },
-    { key: 'self', title: '自我评价', fields: [{ key: 'selfEvaluation', label: '自我评价', text: '', limit: 500 }] },
-    { key: 'projects', title: '项目经历', fields: [{ key: 'project1', label: '项目经历 1', text: '', limit: 2000 }] },
-    { key: 'internship', title: '实习经历', fields: [{ key: 'internship1', label: '实习经历 1', text: '', limit: 2000 }] },
-    { key: 'campus', title: '校园经历', fields: [{ key: 'campus1', label: '校园经历 1', text: '', limit: 1000 }] },
-    { key: 'research', title: '科研经历', fields: [{ key: 'research1', label: '科研经历 1', text: '', limit: 2000 }] },
-    { key: 'awards', title: '荣誉奖项', fields: [{ key: 'award1', label: '荣誉奖项 1', text: '', limit: 1000 }] },
-    { key: 'certificates', title: '证书', fields: [{ key: 'certificate1', label: '证书 1', text: '', limit: 1000 }] },
-  ]
-}
+const SECTIONS = [
+  { key: 'education', title: '教育背景', cardType: 'EDUCATION', limit: null },
+  { key: 'internship', title: '实习经历', cardType: 'INTERNSHIP', limit: 2000 },
+  { key: 'work', title: '工作经历', cardType: 'WORK', limit: 2000 },
+  { key: 'projects', title: '项目经历', cardType: 'PROJECT', limit: 2000 },
+  { key: 'campus', title: '校园经历', cardType: 'CAMPUS', limit: 1000 },
+  { key: 'research', title: '科研经历', cardType: 'RESEARCH', limit: 2000 },
+  { key: 'awards', title: '荣誉奖项', cardType: 'AWARD', limit: 1000 },
+  { key: 'certificates', title: '证书', cardType: 'CERTIFICATE', limit: 1000 },
+  { key: 'skills', title: '专业技能', cardType: 'SKILL', limit: 1000 },
+  { key: 'self', title: '自我评价', cardType: 'SELF_EVALUATION', limit: 500 },
+] as const
+type Section = typeof SECTIONS[number]
+type SectionKey = Section['key']
 
 const emptyStrategy = (): Strategy => ({ targetLocations: [], expectedSalary: '', availableDate: '', recruitmentSource: '', referralCode: '' })
 
@@ -44,15 +52,23 @@ const selectedId = ref<string>()
 const loading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
-const blocks = ref<Block[]>(templateBlocks())
-const fieldRefs = reactive<Record<string, { cardId: string; variantId: string }>>({})
+/**
+ * 每个区块当前的卡片行。十个区块先全部建好空数组，模板里就不用到处判空。
+ * 用 Object.fromEntries 而不是逐个手写，加区块只改 SECTIONS。
+ */
+const rows = reactive<Record<SectionKey, Row[]>>(
+  Object.fromEntries(SECTIONS.map(section => [section.key, [] as Row[]])) as Record<SectionKey, Row[]>,
+)
 /** 左卡片的表单改动：这份档案是谁、投什么。 */
 const profileDirty = ref(false)
-/** 右卡片的内容改动：模块、字段、素材引用。两者分开，是为了决定保存时要不要写一条新版本。 */
+/** 右卡片的内容改动：区块里放了哪些卡。两者分开，是为了决定保存时要不要写一条新版本。 */
 const contentDirty = ref(false)
-const pickingBlock = ref<string | null>(null)
-const addingBlock = ref(false)
-const newBlockTitle = ref('')
+/**
+ * 老档案里自由加的模块（key 不在 SECTIONS 里）。固定区块的设计里没有它们的位置，
+ * 但**不能就这么丢掉**——保存时原样带回去，界面上不显示。等于是"冻结的历史内容"。
+ */
+const orphanBlocks = ref<Block[]>([])
+const orphanReferences = ref<Array<{ cardId: string; variantId: string; section: string; fieldKey: string | null; sortOrder: number }>>([])
 const migrationOpen = ref(false)
 const candidates = ref<Candidate[]>([])
 const selectedSources = ref<string[]>([])
@@ -69,8 +85,6 @@ const legacyCount = computed(() => {
   return ['workExperiences', 'projects', 'skills', 'campusExperiences', 'awards', 'certificates', 'languages']
     .reduce((total, key) => total + (Array.isArray(item[key as keyof typeof item]) ? (item[key as keyof typeof item] as unknown[]).length : 0), 0)
 })
-const allFields = computed(() => blocks.value.flatMap(block => block.fields))
-const missingCount = computed(() => allFields.value.filter(field => !fieldRefs[field.key]).length)
 
 /**
  * 这份档案会填进表单的「固定信息」。
@@ -95,13 +109,10 @@ const fixedInfo = computed(() => {
 
 const typeLabels: Record<string, string> = { PROJECT: '项目经历', INTERNSHIP: '实习经历', WORK: '工作经历', CAMPUS: '校园经历', AWARD: '荣誉奖项', RESEARCH: '科研经历', CERTIFICATE: '证书', SKILL: '专业技能', SELF_EVALUATION: '自我评价', CUSTOM_ANSWER: '自定义问答' }
 const displayCardTitle = (card: Pick<Card, 'title' | 'type'>) => card.title.trim() || typeLabels[card.type] || '未命名素材'
-const cardPeriod = (card: Card) => [card.facts.startDate, card.facts.endDate].filter(value => typeof value === 'string' && value).join(' — ')
-const cardMeta = (card: Card) => [card.facts.role, card.facts.organization, cardPeriod(card)].filter(value => typeof value === 'string' && value).join(' · ')
-const cardOf = (fieldKey: string) => cards.value.find(card => card.id === fieldRefs[fieldKey]?.cardId)
-const variantOf = (fieldKey: string) => cardOf(fieldKey)?.variants.find(item => item.id === fieldRefs[fieldKey]?.variantId)
-/** 字段最终会填进表单的那段文字：引用了素材卡就是那张卡的文案，否则是字段自己存的文本。 */
-const fieldText = (field: Field) => variantOf(field.key)?.content ?? field.text
-const fieldLength = (field: Field) => [...fieldText(field)].length
+/** 某个区块能选的卡：只列这一类型，免得在「项目经历」里挑到一张实习卡。 */
+const cardsOf = (section: Section) => cards.value.filter(card => card.type === section.cardType)
+const rowCard = (row: Row) => cards.value.find(card => card.id === row.cardId)
+const rowVariants = (row: Row) => rowCard(row)?.variants ?? []
 
 // 滚动位置的暗示。卡片不再让页面变长，所以"还能不能滚"只能靠边缘阴影说；
 // 阴影只在真的滚出内容时才画，没有可滚内容就什么都不出现。
@@ -142,6 +153,40 @@ async function load() {
   }
 }
 
+/** 清空所有区块。splice 而不是换新数组，避免模板里已经绑定的代理失效。 */
+function resetRows() {
+  for (const section of SECTIONS) rows[section.key].splice(0)
+  orphanBlocks.value = []
+  orphanReferences.value = []
+}
+
+/**
+ * 把一条版本还原成界面状态：引用按 section 归到对应区块。
+ *
+ * 服务端返回的顺序已经是 section 升序 + sortOrder 升序，直接 push 就是界面顺序。
+ * 认不出的 section（老档案里自由加的自定义模块）跳过——固定区块的设计里没有它们的位置。
+ */
+function applyVersion(version: Version) {
+  resetRows()
+  const known = new Set<string>(SECTIONS.map(section => section.key))
+  // 认不出的模块整块留档：不显示，但保存时带回去
+  orphanBlocks.value = (version.blocks ?? []).filter(block => !known.has(block.key))
+  orphanReferences.value = (version.composition?.references ?? [])
+    .filter(reference => !known.has(String(reference.section)))
+    .map(reference => ({
+      cardId: reference.cardId,
+      variantId: reference.variantId,
+      section: String(reference.section),
+      fieldKey: reference.fieldKey ?? null,
+      sortOrder: reference.sortOrder ?? 0,
+    }))
+  for (const reference of version.composition?.references ?? []) {
+    const list = rows[reference.section as SectionKey]
+    if (!list) continue
+    list.push({ cardId: reference.cardId, variantId: reference.variantId })
+  }
+}
+
 /**
  * 切换正在编辑的档案。
  *
@@ -154,11 +199,8 @@ async function selectProfile(item?: Profile) {
   form.targetTags = [...(item?.targetTags ?? [])]
   form.strategy = { ...emptyStrategy(), ...item?.strategy }
   form.resumeVersionId = item?.resumeVersionId ?? null
-  // 先摆上模板：没有内容的档案看到的是"该往哪几块放素材"，而不是一片空白。
-  blocks.value = templateBlocks()
-  for (const key of Object.keys(fieldRefs)) Reflect.deleteProperty(fieldRefs, key)
-  pickingBlock.value = null
-  addingBlock.value = false
+  // 先清空：没有内容的档案看到的是"十个空区块"，比一片空白更明确该往哪放东西
+  resetRows()
   profileDirty.value = false
   contentDirty.value = false
   if (!item) return
@@ -166,10 +208,7 @@ async function selectProfile(item?: Profile) {
     const response = await $fetch<{ data: Version[] }>(`/api/v1/application-profiles/${item.id}/versions`, { query: { limit: 1 } })
     const latest = response.data[0]
     if (!latest) return
-    blocks.value = latest.blocks ?? []
-    for (const reference of latest.composition?.references ?? []) {
-      if (reference.fieldKey) fieldRefs[reference.fieldKey] = { cardId: reference.cardId, variantId: reference.variantId }
-    }
+    applyVersion(latest)
   }
   catch {
     ElMessage.error('这份档案的内容读取失败，可以先建一个新档案。')
@@ -201,9 +240,7 @@ async function createProfile() {
   form.targetTags = []
   form.strategy = emptyStrategy()
   form.resumeVersionId = null
-  blocks.value = templateBlocks()
-  for (const key of Object.keys(fieldRefs)) Reflect.deleteProperty(fieldRefs, key)
-  pickingBlock.value = null
+  resetRows()
   profileDirty.value = true
   contentDirty.value = false
   await nextTick()
@@ -235,17 +272,55 @@ async function removeProfile() {
   }
 }
 
-/** 把模块与素材引用写成语义上的"当前内容"（服务端存成一条版本记录并设为当前版本）。 */
+/**
+ * 界面状态 → blocks + references。
+ *
+ * **复用原有数据结构，不新增表、不迁移**：一个区块 = 一个 block，一行卡 = 一个 field + 一条 reference。
+ * 这样服务端解析、简历渲染、插件取数全都不用改。
+ *
+ * `section` 取区块 key；`fieldKey` 把 reference 绑到 field 上——服务端靠它把素材文案填进
+ * block 的字段（自我评价走的就是这条路）。
+ */
+function buildPayload() {
+  const blocks = SECTIONS.map((section) => {
+    const filled = rows[section.key].filter(row => row.cardId && row.variantId)
+    const fields = filled.map((_, index) => ({
+      key: `${section.key}-${index + 1}`,
+      label: `${section.title} ${index + 1}`,
+      text: '',
+      limit: section.limit,
+    }))
+    // 自我评价的文案是插件按 block 标题匹配、再取字段 text 拿的；
+    // 哪怕没选卡也留一个空字段，保持这个 block 的形状稳定。
+    if (!fields.length && section.key === 'self') {
+      fields.push({ key: 'selfEvaluation', label: '自我评价', text: '', limit: section.limit })
+    }
+    return { key: section.key, title: section.title, fields }
+  })
+  const references = SECTIONS.flatMap(section => rows[section.key]
+    .filter(row => row.cardId && row.variantId)
+    .map((row, index) => ({
+      cardId: row.cardId,
+      variantId: row.variantId,
+      section: section.key,
+      fieldKey: `${section.key}-${index + 1}`,
+      sortOrder: index,
+      visible: true,
+      renderRules: { compact: false, hideTechnicalDetails: false },
+    })))
+  // 老档案里的自定义模块原样带回：界面上不显示，但不能在保存时被抹掉
+  return {
+    blocks: [...blocks, ...orphanBlocks.value],
+    references: [...references, ...orphanReferences.value],
+  }
+}
+
+/** 把当前内容写成一条版本记录（服务端会把它设为当前版本）。 */
 async function persistContent(profileId: string) {
-  const references = blocks.value.flatMap(block => block.fields.flatMap((field, index) => {
-    const reference = fieldRefs[field.key]
-    return reference
-      ? [{ ...reference, section: block.key, fieldKey: field.key, sortOrder: index, visible: true, renderRules: { compact: false, hideTechnicalDetails: false } }]
-      : []
-  }))
+  const { blocks, references } = buildPayload()
   await $fetch(`/api/v1/application-profiles/${profileId}/versions`, {
     method: 'POST',
-    body: { blocks: blocks.value, composition: { fieldVisibility: {}, config: { editor: 'structured-form' }, references } },
+    body: { blocks, composition: { fieldVisibility: {}, config: { editor: 'section-editor' }, references } },
   })
 }
 
@@ -280,57 +355,27 @@ async function save() {
   }
 }
 
-function chooseCard(field: Field, cardId: string) {
+/** 区块里加一行空的选择器。 */
+function addRow(section: Section) {
+  rows[section.key].push({ cardId: '', variantId: '' })
+  contentDirty.value = true
+}
+
+/** 选了卡之后自动带一个默认版本（优先「网申版」），省一步点击。 */
+function chooseCard(row: Row, cardId: string) {
   const card = cards.value.find(item => item.id === cardId)
-  if (!card?.variants[0]) {
-    Reflect.deleteProperty(fieldRefs, field.key)
-    contentDirty.value = true
-    return
-  }
-  // “网申版”是这份文案给表单用的那一版；没有就直接取第一版。
-  const variant = card.variants.find(item => item.name === '网申版') ?? card.variants[0]
-  fieldRefs[field.key] = { cardId, variantId: variant.id }
+  row.cardId = cardId
+  row.variantId = card?.variants.find(item => item.name === '网申版')?.id ?? card?.variants[0]?.id ?? ''
   contentDirty.value = true
 }
 
-function setVariant(fieldKey: string, variantId: string) {
-  const reference = fieldRefs[fieldKey]
-  if (reference) reference.variantId = variantId
+function setVariant(row: Row, variantId: string) {
+  row.variantId = variantId
   contentDirty.value = true
 }
 
-/** 从素材库挑一张卡插进这个模块：插完就是一行已经引用的字段。 */
-function insertCard(block: Block, card: Card) {
-  const variant = card.variants.find(item => item.name === '网申版') ?? card.variants[0]
-  if (!variant) {
-    ElMessage.warning('这张素材卡还没有文案版本，先去素材库补一个。')
-    return
-  }
-  const field: Field = { key: `${block.key}-${Date.now()}`, label: `${block.title} ${block.fields.length + 1}`, text: '', limit: 1000 }
-  block.fields.push(field)
-  fieldRefs[field.key] = { cardId: card.id, variantId: variant.id }
-  contentDirty.value = true
-  pickingBlock.value = null
-}
-
-async function removeBlock(block: Block) {
-  try {
-    await ElMessageBox.confirm(`移除「${block.title}」模块及其 ${block.fields.length} 个字段？`, '移除模块', { confirmButtonText: '移除', cancelButtonText: '取消', type: 'warning' })
-  }
-  catch {
-    return
-  }
-  for (const field of block.fields) Reflect.deleteProperty(fieldRefs, field.key)
-  blocks.value = blocks.value.filter(item => item.key !== block.key)
-  contentDirty.value = true
-}
-
-function confirmAddBlock() {
-  const title = newBlockTitle.value.trim()
-  if (!title) return
-  blocks.value.push({ key: `block-${Date.now()}`, title, fields: [] })
-  newBlockTitle.value = ''
-  addingBlock.value = false
+function removeRow(section: Section, index: number) {
+  rows[section.key].splice(index, 1)
   contentDirty.value = true
 }
 
@@ -354,7 +399,7 @@ onMounted(() => {
   window.addEventListener('resize', measureEdges)
 })
 onBeforeUnmount(() => window.removeEventListener('resize', measureEdges))
-watch([blocks, missingCount, addingBlock, pickingBlock, legacyCount], () => void nextTick(measureEdges), { deep: true })
+watch([rows, legacyCount], () => void nextTick(measureEdges), { deep: true })
 </script>
 
 <template>
@@ -408,93 +453,56 @@ watch([blocks, missingCount, addingBlock, pickingBlock, legacyCount], () => void
 
         <div class="workbench-surface__scroll" :class="{ 'is-top': rightEdge.top, 'is-bottom': rightEdge.bottom }">
           <div ref="rightBody" class="workbench-surface__body" @scroll="measureEdges">
-            <!-- 固定信息：不随岗位变、插件每个表单都会填，但页面上原来完全看不到 -->
-            <section v-if="fixedInfo.length" class="application-editor__fixed">
-              <div class="application-editor__fixed-head">
-                <span>固定信息<small>来自个人主档案，所有档案共用</small></span>
-                <NuxtLink to="/personal-profile">去修改</NuxtLink>
-              </div>
-              <div class="application-editor__fixed-grid">
-                <div v-for="item in fixedInfo" :key="item.label"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
-              </div>
-            </section>
             <div v-if="legacyCount" class="application-editor__banner application-editor__banner--info">
               这份档案还有 {{ legacyCount }} 项历史内容没有变成素材卡。
               <el-button text type="primary" @click="previewMigration">预览迁移</el-button>
             </div>
-            <div v-if="missingCount" class="application-editor__banner">
-              还有 <b>{{ missingCount }}</b> 个字段没有引用素材卡：填表时这些字段只能靠基础档案里的事实或 AI，文案不会来自素材库。
+            <!-- 基本信息 + 十个类型，全都是卡片，一行按宽度放三张。
+                 选中的素材一行里放「卡 + 版本 + 移除」，不再渲染正文——正文去素材库看。 -->
+            <div class="application-editor__tiles">
+              <!-- 基本信息也是一张卡：它不随岗位变，但同样是"这份档案会填什么"的一部分 -->
+              <section class="application-editor__tile application-editor__tile--info">
+                <header class="application-editor__tile-head">
+                  <h3>基本信息</h3>
+                </header>
+                <div class="application-editor__info-grid">
+                  <div v-for="item in fixedInfo" :key="item.label"><span>{{ item.label }}</span><b>{{ item.value }}</b></div>
+                </div>
+                <footer class="application-editor__tile-foot">
+                  <NuxtLink to="/personal-profile">去个人档案修改</NuxtLink>
+                </footer>
+              </section>
+              <section v-for="section in SECTIONS" :key="section.key" class="application-editor__tile">
+                <header class="application-editor__tile-head">
+                  <h3>{{ section.title }}</h3>
+                  <span v-if="rows[section.key].length" class="application-editor__tile-count">{{ rows[section.key].length }}</span>
+                </header>
+
+                <div class="application-editor__tile-body">
+                  <div v-for="(row, index) in rows[section.key]" :key="index" class="application-editor__tile-row">
+                    <el-select
+                      :model-value="row.cardId || undefined" filterable placeholder="选择素材卡"
+                      @update:model-value="(value: string) => chooseCard(row, value)"
+                    >
+                      <el-option v-for="card in cardsOf(section)" :key="card.id" :label="displayCardTitle(card)" :value="card.id" />
+                    </el-select>
+                    <el-select
+                      :model-value="row.variantId || undefined" placeholder="版本" :disabled="!rowCard(row)"
+                      @update:model-value="(value: string) => setVariant(row, value)"
+                    >
+                      <el-option v-for="variant in rowVariants(row)" :key="variant.id" :label="variant.name" :value="variant.id" />
+                    </el-select>
+                    <el-button text type="danger" class="application-editor__tile-remove" @click="removeRow(section, index)">移除</el-button>
+                  </div>
+                  <p v-if="!cardsOf(section).length" class="application-editor__note">素材库里还没有这个类型的卡</p>
+                </div>
+
+                <footer class="application-editor__tile-foot">
+                  <el-button text @click="addRow(section)">＋ 添加</el-button>
+                </footer>
+              </section>
             </div>
-
-            <section v-for="block in blocks" :key="block.key" class="application-editor__block">
-              <div class="application-editor__block-head">
-                <h3>{{ block.title }}</h3>
-                <div class="application-editor__block-actions">
-                  <el-button text @click="pickingBlock = pickingBlock === block.key ? null : block.key">＋ 插入素材卡片</el-button>
-                  <el-button text type="danger" @click="removeBlock(block)">移除模块</el-button>
-                </div>
-              </div>
-
-              <!-- 从素材库挑一张卡：挑完这个模块就多一条已引用的字段，不需要先加空字段 -->
-              <div v-if="pickingBlock === block.key" class="application-editor__library">
-                <div class="application-editor__library-head">
-                  <span>从素材库挑一张卡，插到这个模块里</span>
-                  <el-button text @click="pickingBlock = null">取消</el-button>
-                </div>
-                <button v-for="card in cards" :key="card.id" type="button" class="application-editor__library-item" @click="insertCard(block, card)">
-                  <span class="application-editor__library-type">{{ typeLabels[card.type] ?? card.type }}</span>
-                  <span>
-                    <b>{{ displayCardTitle(card) }}</b>
-                    <span v-if="cardPeriod(card)" class="application-editor__library-meta"> · {{ cardPeriod(card) }}</span>
-                  </span>
-                </button>
-                <p v-if="!cards.length" class="application-editor__note">素材库还是空的，先去「素材库」建一张卡。</p>
-              </div>
-
-              <div v-for="field in block.fields" :key="field.key" class="application-editor__field">
-                <div class="application-editor__field-head">
-                  <strong>{{ field.label }}</strong>
-                  <span v-if="cardOf(field.key)" class="application-editor__note">{{ typeLabels[cardOf(field.key)!.type] ?? cardOf(field.key)!.type }} · 引用自素材库</span>
-                  <span v-else class="application-editor__note">这个字段还没有内容</span>
-                </div>
-                <div class="application-editor__field-picks">
-                  <el-select :model-value="fieldRefs[field.key]?.cardId" clearable placeholder="选择素材卡片…" @update:model-value="value => chooseCard(field, value)">
-                    <el-option v-for="card in cards" :key="card.id" :label="displayCardTitle(card)" :value="card.id" />
-                  </el-select>
-                  <el-select v-if="cardOf(field.key)" :model-value="fieldRefs[field.key]?.variantId" placeholder="文案版本" @update:model-value="value => setVariant(field.key, value)">
-                    <el-option v-for="item in cardOf(field.key)?.variants" :key="item.id" :label="item.name" :value="item.id" />
-                  </el-select>
-                </div>
-                <div v-if="cardOf(field.key)" class="application-editor__preview">
-                  <span v-if="cardMeta(cardOf(field.key)!)" class="application-editor__note">{{ cardMeta(cardOf(field.key)!) }}</span>
-                  <p>{{ variantOf(field.key)?.content }}</p>
-                </div>
-                <div class="application-editor__field-foot">
-                  <span>{{ cardOf(field.key) ? '改文案请去素材库改这张卡的版本，这里只选引用' : '不引用素材卡时，插件只能用基础事实或 AI' }}</span>
-                  <span :class="{ 'application-editor__over': field.limit && fieldLength(field) > field.limit }">
-                    {{ fieldLength(field) }} / {{ field.limit ?? '不限' }}{{ field.limit && fieldLength(field) > field.limit ? ' · 超出上限' : '' }}
-                  </span>
-                </div>
-              </div>
-
-              <p v-if="!block.fields.length" class="application-editor__empty">这个模块还没有素材。点右上角「＋ 插入素材卡片」从素材库挑一张。</p>
-            </section>
-
-            <p v-if="!blocks.length" class="application-editor__empty">这份档案还没有模块。用下面的「＋ 添加模块」建第一个，例如"实习经历"。</p>
           </div>
-        </div>
-
-        <!-- 加模块固定在底部，模块变多也够得着 -->
-        <div class="workbench-surface__foot application-editor__foot">
-          <template v-if="addingBlock">
-            <el-input v-model="newBlockTitle" class="application-editor__new-block" placeholder="模块名称，例如：科研经历" maxlength="40" @keyup.enter="confirmAddBlock" />
-            <el-button type="primary" @click="confirmAddBlock">添加</el-button>
-            <el-button text @click="addingBlock = false; newBlockTitle = ''">取消</el-button>
-          </template>
-          <template v-else>
-            <el-button text @click="addingBlock = true">＋ 添加模块</el-button>
-            <span class="application-editor__note">模块是一组字段（如"实习经历"）；素材卡是字段的内容来源</span>
-          </template>
         </div>
       </main>
     </div>
@@ -540,39 +548,29 @@ watch([blocks, missingCount, addingBlock, pickingBlock, legacyCount], () => void
 .application-editor__banner { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-control); background: rgba(215,169,149,.18); font-size: 13px; }
 .application-editor__banner--info { background: rgba(122,150,137,.14); }
 /* 固定信息：只读，用比经历模块更轻的底色，避免被误认为可编辑 */
-.application-editor__fixed { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-control); background: rgba(122,150,137,.10); }
-.application-editor__fixed-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); font-size: 13px; font-weight: 650; }
-.application-editor__fixed-head small { margin-left: var(--space-2); color: var(--workbench-subtle); font-size: 12px; font-weight: 400; }
-.application-editor__fixed-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px var(--space-4); font-size: 12px; }
-.application-editor__fixed-grid span { color: var(--workbench-subtle); }
-.application-editor__fixed-grid b { margin-left: 6px; font-weight: 500; }
 
-.application-editor__block { margin-top: var(--space-6); }
-.application-editor__block:first-of-type { margin-top: var(--space-4); }
-.application-editor__block-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding-bottom: var(--space-2); border-bottom: 1px solid rgba(190,204,195,.7); }
-.application-editor__block-head h3 { margin: 0; }
-.application-editor__block-actions { display: flex; gap: var(--space-1); align-items: center; }
+/* 基本信息 + 十个类型都是卡片，一行按可用宽度放三张（320px 起）。
+   再窄的话「卡 + 版本 + 移除」一行放不下，又得拆成两行。 */
+/* 滚动态的容器顶部没有内边距（全局 .workbench-surface__body 只给了左右和底部），
+   所以第一排卡片要自己往下让一点，否则贴着标题栏 */
+.application-editor__tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--space-3); align-items: start; margin-top: var(--space-4); }
+/* 卡片高度跟着内容走：空卡片就是「标题 + ＋ 添加」两行，不留大片空白 */
+.application-editor__tile { display: grid; gap: var(--space-2); align-content: start; padding: var(--space-3); border: 1px solid rgba(112,132,120,.18); border-radius: var(--radius-control); background: rgba(255,255,255,.55); }
+.application-editor__tile--info { background: rgba(122,150,137,.10); }
+.application-editor__tile-head { display: flex; align-items: center; gap: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid rgba(190,204,195,.6); }
+.application-editor__tile-head h3 { margin: 0; font-size: 13.5px; font-weight: 650; }
+.application-editor__tile-count { min-width: 18px; padding: 0 5px; border-radius: 9px; background: rgba(122,150,137,.16); color: var(--workbench-slate); font-size: 11px; line-height: 18px; text-align: center; }
+.application-editor__tile-body { display: grid; gap: var(--space-2); align-content: start; }
+/* 一行三样：卡、版本（固定 88px）、移除。都在同一行，不再拆两行 */
+.application-editor__tile-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px auto; gap: var(--space-1); align-items: center; }
+.application-editor__tile-row :deep(.el-select) { width: 100%; }
+.application-editor__tile-remove { padding: 0 2px; font-size: 12px; }
+.application-editor__tile-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding-top: var(--space-1); font-size: 12px; }
+/* 基本信息卡里的字段：两列，标签淡、值深，省高度 */
+.application-editor__info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px var(--space-3); font-size: 12px; }
+.application-editor__info-grid span { color: var(--workbench-subtle); }
+.application-editor__info-grid b { margin-left: 6px; font-weight: 500; }
 
-.application-editor__library { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid rgba(112,132,120,.16); border-radius: var(--radius-control); background: rgba(255,254,250,.86); display: grid; gap: var(--space-1); }
-.application-editor__library-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); color: var(--workbench-slate); font-size: 12px; }
-.application-editor__library-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); align-items: baseline; text-align: left; padding: var(--space-2) var(--space-3); border: 1px solid transparent; border-radius: 8px; background: transparent; font: inherit; color: var(--workbench-ink); cursor: pointer; }
-.application-editor__library-item:hover { border-color: var(--workbench-blue); background: rgba(122,150,137,.08); }
-.application-editor__library-type { color: var(--workbench-slate); font-size: 11px; white-space: nowrap; }
-.application-editor__library-meta { color: var(--workbench-slate); font-size: 12px; }
-
-.application-editor__field { margin-top: var(--space-3); padding: var(--space-4); border: 1px solid rgba(112,132,120,.16); border-radius: var(--radius-control); background: rgba(255,255,255,.46); display: grid; gap: var(--space-3); }
-.application-editor__field-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); }
-.application-editor__field-picks { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--space-2); }
-.application-editor__field-picks :deep(.el-select) { width: 100%; }
-.application-editor__preview { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid rgba(112,132,120,.16); border-radius: 8px; background: rgba(255,254,250,.7); }
-.application-editor__preview p { margin: 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
-.application-editor__field-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); color: var(--workbench-slate); font-size: 12px; }
-.application-editor__over { color: #8a5a44; }
-.application-editor__empty { margin-top: var(--space-3); padding: var(--space-4); border: 1px dashed rgba(112,132,120,.28); border-radius: var(--radius-control); color: var(--workbench-slate); font-size: 13px; }
-
-.application-editor__foot { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
-.application-editor__foot .application-editor__note { flex: 1; min-width: 180px; }
-.application-editor__new-block { max-width: 260px; }
 
 .application-editor__migration { display: grid; gap: var(--space-3); max-height: 460px; overflow: auto; }
 .application-editor__migration :deep(.el-checkbox) { height: auto; display: grid; grid-template-columns: auto 1fr; white-space: normal; }
@@ -583,7 +581,8 @@ watch([blocks, missingCount, addingBlock, pickingBlock, legacyCount], () => void
   /* 窄屏没有并排的侧边栏，"和侧边栏底边齐平"也就无从谈起，回到普通文档流 */
   .page-rail.application-editor { height: auto; padding: 20px 3px 40px; }
   .application-editor__layout { grid-template-columns: 1fr; min-height: 0; }
-  .application-editor__field-picks { grid-template-columns: 1fr; }
+  /* 窄屏方块卡收窄，保证一屏至少放得下两张 */
+  .application-editor__tiles { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .application-editor__head { flex-direction: column; }
 }
 </style>
