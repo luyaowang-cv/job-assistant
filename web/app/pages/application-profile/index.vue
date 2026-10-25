@@ -70,6 +70,21 @@ const contentDirty = ref(false)
 const orphanBlocks = ref<Block[]>([])
 const orphanReferences = ref<Array<{ cardId: string; variantId: string; section: string; fieldKey: string | null; sortOrder: number }>>([])
 const migrationOpen = ref(false)
+
+/**
+ * 填充快照：插件拿到的就是 `/fill-context` 的响应，所以这里直接把那个响应展开看，
+ * 不另算一份。这样"页面上看起来配好了"和"插件实际读到什么"是同一件事。
+ */
+const snapshotOpen = ref(false)
+const snapshotLoading = ref(false)
+/** 接口只回插件要用的那一份（localFacts），所以这里直接展开它 */
+const snapshot = ref<Record<string, unknown> | null>(null)
+const snapshotError = ref('')
+const snapshotText = computed(() => {
+  if (!snapshot.value) return ''
+  return JSON.stringify(snapshot.value.localFacts ?? snapshot.value, null, 2)
+})
+const snapshotSize = computed(() => (snapshotText.value ? `${snapshotText.value.length.toLocaleString('en-US')} 字符` : ''))
 const candidates = ref<Candidate[]>([])
 const selectedSources = ref<string[]>([])
 
@@ -169,10 +184,34 @@ function resetRows() {
 function applyVersion(version: Version) {
   resetRows()
   const known = new Set<string>(SECTIONS.map(section => section.key))
-  // 认不出的模块整块留档：不显示，但保存时带回去
-  orphanBlocks.value = (version.blocks ?? []).filter(block => !known.has(block.key))
-  orphanReferences.value = (version.composition?.references ?? [])
-    .filter(reference => !known.has(String(reference.section)))
+  const blocks = version.blocks ?? []
+  /** 老的自定义模块 key → 它其实属于哪个固定区块：按标题对。对不上的才是真的孤儿。 */
+  const legacySectionOf = new Map<string, SectionKey>()
+  for (const block of blocks) {
+    if (known.has(block.key)) continue
+    const matched = SECTIONS.find(section => section.title === block.title.trim())
+    if (matched) legacySectionOf.set(block.key, matched.key)
+  }
+
+  const orphans: Version['composition']['references'] = []
+  for (const reference of version.composition?.references ?? []) {
+    const section = String(reference.section)
+    // 老模块里标题能对上的，内容搬回对应区块——否则会变成"界面显示未选、插件却能拿到"
+    const target = rows[section as SectionKey] ? (section as SectionKey) : legacySectionOf.get(section)
+    if (!target) {
+      orphans.push(reference)
+      continue
+    }
+    // 同一个区块里同一张卡只保留一次：老模块和新区块常常引用了同一张卡
+    if (rows[target].some(row => row.cardId === reference.cardId)) continue
+    rows[target].push({ cardId: reference.cardId, variantId: reference.variantId })
+  }
+
+  // 真的对不上标题的模块，整块留档：不显示，但保存时带回去
+  orphanBlocks.value = blocks.filter(block => !known.has(block.key) && !legacySectionOf.has(block.key))
+  const keptSections = new Set(orphanBlocks.value.map(block => block.key))
+  orphanReferences.value = orphans
+    .filter(reference => keptSections.has(String(reference.section)))
     .map(reference => ({
       cardId: reference.cardId,
       variantId: reference.variantId,
@@ -180,11 +219,6 @@ function applyVersion(version: Version) {
       fieldKey: reference.fieldKey ?? null,
       sortOrder: reference.sortOrder ?? 0,
     }))
-  for (const reference of version.composition?.references ?? []) {
-    const list = rows[reference.section as SectionKey]
-    if (!list) continue
-    list.push({ cardId: reference.cardId, variantId: reference.variantId })
-  }
 }
 
 /**
@@ -379,6 +413,38 @@ function removeRow(section: Section, index: number) {
   contentDirty.value = true
 }
 
+/**
+ * 打开填充快照。读的是**已保存**的内容——还没保存的改动不会出现在里面，
+ * 所以弹窗上要写明这一点，否则会以为是页面没生效。
+ */
+async function openSnapshot() {
+  if (!selectedId.value) return
+  snapshotLoading.value = true
+  snapshotOpen.value = true
+  snapshot.value = null
+  snapshotError.value = ''
+  try {
+    const response = await $fetch<{ data: Record<string, unknown> }>(`/api/v1/application-profiles/${selectedId.value}/fill-context`)
+    snapshot.value = response.data
+  }
+  catch {
+    snapshotError.value = '读取失败：请确认这份档案已经保存过，并且当前已登录。'
+  }
+  finally {
+    snapshotLoading.value = false
+  }
+}
+
+async function copySnapshot() {
+  try {
+    await navigator.clipboard.writeText(snapshotText.value)
+    ElMessage.success('已复制。')
+  }
+  catch {
+    ElMessage.error('复制失败，可以手动选中文本再复制。')
+  }
+}
+
 async function previewMigration() {
   if (!selectedId.value) return
   const response = await $fetch<{ data: { candidates: Candidate[] } }>(`/api/v1/material-migrations/application-profiles/${selectedId.value}/preview`, { method: 'POST' })
@@ -446,6 +512,8 @@ watch([rows, legacyCount], () => void nextTick(measureEdges), { deep: true })
             <p class="application-editor__state">{{ isDirty ? '有未保存的改动' : '每个字段从素材库里引用一段固定文案，插件按它填表。' }}</p>
           </div>
           <div class="application-editor__actions">
+            <!-- 插件拿的就是 /fill-context 的响应，点开就能核对"页面上配的"和"它实际读到的"是否一致 -->
+            <el-button plain :disabled="!selectedId" @click="openSnapshot">填充快照</el-button>
             <el-button type="danger" plain :disabled="!selectedId" :loading="deleting" @click="removeProfile">删除档案</el-button>
             <el-button type="primary" :disabled="!isDirty" :loading="saving" @click="save">保存档案</el-button>
           </div>
@@ -521,6 +589,27 @@ watch([rows, legacyCount], () => void nextTick(measureEdges), { deep: true })
         <el-button type="primary" :disabled="!selectedSources.length" @click="confirmMigration">确认导入所选项</el-button>
       </template>
     </el-dialog>
+
+    <!-- 填充快照：插件调 /fill-context 拿到的响应，原样展开 -->
+    <el-dialog v-model="snapshotOpen" title="插件会拿到的填充数据" width="min(880px, 94vw)">
+      <p class="application-editor__note">
+        插件调用 <code>/fill-context</code> 拿到的就是这份响应。读的是<b>已保存</b>的内容，未保存的改动不在里面。
+      </p>
+      <div class="application-editor__snapshot-bar">
+        <span v-if="snapshotSize" class="application-editor__note">共 {{ snapshotSize }}</span>
+      </div>
+      <p class="application-editor__note">
+        这是插件做<b>规则填充</b>时读的全部数据。AI 补全用的是服务端按档案 id 自己重算的另一份，
+        不会经过浏览器，所以这里看不到。
+      </p>
+      <div v-loading="snapshotLoading" class="application-editor__snapshot">
+        <pre>{{ snapshotError || snapshotText || '读取中…' }}</pre>
+      </div>
+      <template #footer>
+        <el-button @click="snapshotOpen = false">关闭</el-button>
+        <el-button type="primary" :disabled="!snapshotText" @click="copySnapshot">复制 JSON</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -544,6 +633,10 @@ watch([rows, legacyCount], () => void nextTick(measureEdges), { deep: true })
 .application-editor__head h2 { margin: 0; }
 .application-editor__state { margin: 5px 0 0; color: var(--workbench-slate); font-size: 13px; }
 .application-editor__actions { display: flex; gap: var(--space-2); align-items: center; }
+/* 填充快照：等宽字体 + 换行，长文案不要把弹窗撑宽 */
+.application-editor__snapshot-bar { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
+.application-editor__snapshot { max-height: 52vh; overflow: auto; padding: var(--space-3); border: 1px solid rgba(112,132,120,.16); border-radius: var(--radius-control); background: rgba(255,254,250,.7); }
+.application-editor__snapshot pre { margin: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 
 .application-editor__banner { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-control); background: rgba(215,169,149,.18); font-size: 13px; }
 .application-editor__banner--info { background: rgba(122,150,137,.14); }

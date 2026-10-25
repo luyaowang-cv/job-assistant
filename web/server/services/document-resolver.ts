@@ -18,8 +18,10 @@ export function countCodePoints(value: string) {
 /** 只需要这几个字段，所以不依赖完整的 ResolverReference。 */
 type EducationReferenceInput = {
   visible?: boolean
+  /** 引用挂在哪个区块下。老档案的教育可能挂在自定义模块（block-xxx）里，所以要看它 */
+  section?: string
   sortOrder: number
-  card: { type: string, title: string, facts?: unknown }
+  card: { id?: string, type: string, title: string, facts?: unknown }
 }
 
 /**
@@ -38,9 +40,24 @@ type EducationReferenceInput = {
 export function educationsFromReferences(references: EducationReferenceInput[]): unknown[] | null {
   const education = references
     .filter(reference => reference.visible !== false && reference.card.type === 'EDUCATION')
-    .sort((left, right) => left.sortOrder - right.sortOrder)
+    // 认得出的教育区块排前面：老档案里"教育背景"常挂在自定义模块下（section 是 block-xxx），
+    // 而新页面把教育放进 section='education'。两者都该被认，但顺序要优先前者。
+    .sort((left, right) => {
+      const leftPriority = left.section === 'education' ? 0 : 1
+      const rightPriority = right.section === 'education' ? 0 : 1
+      return leftPriority - rightPriority || left.sortOrder - right.sortOrder
+    })
   if (!education.length) return null
-  return education.map(reference => ({
+  // 同一张卡被引用多次只算一次：否则一张教育卡插两行就会让简历上出现两段一样的学历。
+  const seen = new Set<string>()
+  const unique = education.filter((reference) => {
+    const id = reference.card.id
+    if (!id) return true
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+  return unique.map(reference => ({
     ...(reference.card.facts && typeof reference.card.facts === 'object' ? reference.card.facts as Record<string, unknown> : {}),
     school: reference.card.title,
   }))

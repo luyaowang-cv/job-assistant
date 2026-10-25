@@ -38,6 +38,22 @@ test('没有教育卡时返回 null，调用方据此回退主档案数组', () 
   assert.equal(educationsFromReferences([reference('a1', 'AWARD', '奖学金', 0)]), null)
 })
 
+test('同一张教育卡被引用多次只算一段，且优先认 education 区块', () => {
+  // 真实档案里出现过的情况：新「教育背景」区块插了两行同一张卡，
+  // 老的自定义模块（section 是 block-xxx）里还留着一份同样的引用。
+  const same = (id: string, section: string, sortOrder: number) => ({
+    id: `${section}-${sortOrder}`, section, sortOrder, visible: true,
+    card: { id, type: 'EDUCATION', title: id === 'card-master' ? '北方工业大学' : '河北科技师范学院', facts: {} },
+  })
+  const converted = educationsFromReferences([
+    same('card-master', 'education', 0),
+    same('card-master', 'education', 1),
+    same('card-master', 'block-1', 0),
+    same('card-bachelor', 'block-1', 1),
+  ]) as Array<Record<string, unknown>>
+  assert.deepEqual(converted.map(item => item.school), ['北方工业大学', '河北科技师范学院'])
+})
+
 test('facts 缺失时只给出 school，不编造字段', () => {
   const records = educationsFromReferences([{ sortOrder: 0, card: { type: 'EDUCATION', title: '第一大学' } }]) as Array<Record<string, unknown>>
   assert.deepEqual(records, [{ school: '第一大学' }])
