@@ -197,6 +197,19 @@ const RULES = [
   { key: 'education.researchDirection', section: 'education', collection: 'educations', aliases: ['研究方向', '领域方向', '研究领域', 'researchdirection'], read: (c, i) => c.educations[i]?.researchDirection },
   { key: 'education.advisor', section: 'education', collection: 'educations', aliases: ['导师', '指导教师', '指导老师', 'advisor', 'supervisor'], read: (c, i) => c.educations[i]?.advisor },
 
+  // 教育卡的补充字段。别名只收「教育语境下有明确含义」的说法，短词一概不要——
+  // 教育段框位本来就多，多一个宽泛别名就多一次抢别人字段的机会。
+  // 注意 thesis 故意不含「论文题目」：research.name 已经占用了这条精确别名，重复会两边都判成冲突。
+  { key: 'education.studyMode', section: 'education', collection: 'educations', aliases: ['学习方式', '学习形式', '就读形式', 'studymode'], read: (c, i) => c.educations[i]?.studyMode },
+  { key: 'education.duration', section: 'education', collection: 'educations', aliases: ['学制', '修业年限', '学制年限', 'studyduration'], read: (c, i) => c.educations[i]?.duration },
+  { key: 'education.schoolCategory', section: 'education', collection: 'educations', aliases: ['学校类别', '院校类别', '院校类型', '学校类型', '办学层次', 'schooltype', 'schoolcategory'], read: (c, i) => c.educations[i]?.schoolCategory },
+  { key: 'education.trainingMode', section: 'education', collection: 'educations', aliases: ['培养方式', '培养类型', '招生类型', 'trainingmode'], read: (c, i) => c.educations[i]?.trainingMode },
+  { key: 'education.overseas', section: 'education', collection: 'educations', aliases: ['是否海外教育经历', '海外教育经历', '是否海外学历', '是否留学', 'overseaseducation'], read: (c, i) => c.educations[i]?.overseas },
+  { key: 'education.studentId', section: 'education', collection: 'educations', aliases: ['学号', '学籍号', 'studentid', 'studentnumber'], read: (c, i) => c.educations[i]?.studentId },
+  { key: 'education.thesis', section: 'education', collection: 'educations', aliases: ['毕业论文', '毕业设计', '毕业论文题目', '毕业设计题目', 'thesistopic'], read: (c, i) => c.educations[i]?.thesis },
+  { key: 'education.majorDescription', section: 'education', collection: 'educations', aliases: ['专业描述', '专业介绍', '专业说明', 'majordescription'], multiline: true, read: (c, i) => c.educations[i]?.majorDescription },
+  { key: 'education.courses', section: 'education', collection: 'educations', aliases: ['专业课程', '主修课程', '主要课程', '核心课程', 'majorcourses'], multiline: true, read: (c, i) => c.educations[i]?.courses },
+
   // ------------------------------------------------------------------ work
   { key: 'work.company', section: 'work', collection: 'works', aliases: ['公司', '公司名称', '实习公司', '单位', '单位名称', '企业名称', '工作单位', '实习单位', '任职单位', 'company', 'companyname', 'organization', 'employer'], read: (c, i) => c.works[i]?.company },
   { key: 'work.title', section: 'work', collection: 'works', aliases: ['岗位', '职位', '岗位名称', '职位名称', '实习岗位', '担任职务', '任职岗位', '职务', '角色', 'position', 'title', 'jobtitle', 'role'], read: (c, i) => c.works[i]?.title },
@@ -227,7 +240,7 @@ const RULES = [
   // 这里只认真正属于科研的说法，表里写「项目名称」的仍交给 project 规则；
   // 而科研记录也拼进了 projects 集合（见 buildContext），所以并成一栏时照样填得上。
   // role 是「作者顺位 / 研究角色」——素材库给 RESEARCH 卡的就是这个标签。
-  { key: 'research.name', section: 'research', collection: 'research', aliases: ['论文名称', '论文题目', '论文标题', '论文', '科研项目名称', '科研经历名称', '科研名称', '研究项目名称', '课题名称', '课题', '毕业论文', '研究成果名称', '学术成果名称', 'researchname', 'papername', 'papertitle', 'thesistitle', 'researchproject'], read: (c, i) => c.research[i]?.name },
+  { key: 'research.name', section: 'research', collection: 'research', aliases: ['论文名称', '论文题目', '论文标题', '论文', '科研项目名称', '科研经历名称', '科研名称', '研究项目名称', '课题名称', '课题', '研究成果名称', '学术成果名称', 'researchname', 'papername', 'papertitle', 'thesistitle', 'researchproject'], read: (c, i) => c.research[i]?.name },
   { key: 'research.role', section: 'research', collection: 'research', aliases: ['作者顺位', '作者排名', '作者排序', '作者身份', '第几作者', '论文作者', '科研角色', '研究角色', '论文排名', 'authorrank', 'authororder', 'authorship'], read: (c, i) => c.research[i]?.role },
   { key: 'research.startDate', section: 'research', collection: 'research', aliases: ['科研开始时间', '课题开始时间', '论文开始时间', '科研起始时间', '研究开始时间', '开始时间', 'startdate'], date: true, read: (c, i) => c.research[i]?.startDate },
   { key: 'research.endDate', section: 'research', collection: 'research', aliases: ['科研结束时间', '课题结束时间', '论文结束时间', '科研截止时间', '研究结束时间', '结束时间', 'enddate'], date: true, endOfMonth: true, read: (c, i) => c.research[i]?.endDate },
@@ -235,13 +248,14 @@ const RULES = [
 
   // ------------------------------------------------------------------ skills
   { key: 'skills.list', section: 'skills', aliases: ['专业技能', '个人技能', '技能特长', '核心技能', '专业能力', '掌握技能', '技能', 'skills', 'technicalskills'], read: c => c.skills },
-  // Columns the profile has no shape for. `skills` is a flat list of names, so
-  // there is no per-skill duration and no per-skill description anywhere in it —
-  // and a model asked for them writes “3 年” and a sentence about each one, nine
-  // times on one real form. `noAnswer` keeps those rows out of the model's hands
-  // rather than filling them with something nobody checked.
+  // 技能在真实表单里常见两种形态：一个大文本框（上面那条 skills.list 管），
+  // 或者一座表格——每行「技能名称 / 熟练程度 / 使用时间 / 技能描述」。
+  // 表格形态按行取素材卡：技能卡有熟练程度（facts.role）和文案（技能描述）。
+  // 「使用时间」我们确实没有存，仍然保持 noAnswer——让模型编一个"3 年"比留空更糟。
+  { key: 'skills.name', section: 'skills', collection: 'skillRecords', noInvent: true, aliases: ['技能名称', '技能项', 'skillname'], read: (c, i) => c.skillRecords[i]?.name },
+  { key: 'skills.level', section: 'skills', collection: 'skillRecords', noInvent: true, aliases: ['熟练程度', '掌握程度', '熟练度', 'skilllevel', 'proficiency'], read: (c, i) => c.skillRecords[i]?.level },
   { key: 'skills.duration', section: 'skills', aliases: ['使用时间总计', '使用时长', '使用时间', '用时', '掌握时长'], noAnswer: true, read: () => '' },
-  { key: 'skills.description', section: 'skills', aliases: ['技能描述', '技能说明', '技能详情'], multiline: true, noAnswer: true, read: () => '' },
+  { key: 'skills.description', section: 'skills', collection: 'skillRecords', noInvent: true, aliases: ['技能描述', '技能说明', '技能详情'], multiline: true, read: (c, i) => c.skillRecords[i]?.description },
 
   // ------------------------------------------------------------------ campus
   { key: 'campus.name', section: 'campus', collection: 'campus', aliases: ['校园经历名称', '校园经历', '社团名称', '组织名称', '学生工作名称', '活动名称', 'campusname', 'organizationname'], read: (c, i) => c.campus[i]?.name },
@@ -260,7 +274,7 @@ const RULES = [
 
   // --------------------------------------------------------------- languages
   { key: 'languages.name', section: 'languages', collection: 'languages', aliases: ['语言名称', '语言', '外语', '语种', 'languagename', 'language'], read: (c, i) => c.languages[i]?.name },
-  { key: 'languages.detail', section: 'languages', collection: 'languages', aliases: ['语言水平', '外语水平', '外语等级', '语言等级', '语言熟练度', '精通程度', '熟练程度', '掌握程度', '语言成绩', 'proficiency', 'languagelevel'], read: (c, i) => c.languages[i]?.detail },
+  { key: 'languages.detail', section: 'languages', collection: 'languages', aliases: ['语言水平', '外语水平', '外语等级', '语言等级', '语言熟练度', '精通程度', '语言成绩', 'languagelevel'], read: (c, i) => c.languages[i]?.detail },
 ]
 
 // ------------------------------------------------------------------ helpers
@@ -472,7 +486,12 @@ function buildContext(profile) {
     awards: named(root.awards).concat(fromReference('AWARD')),
     certificates: named(root.certificates).concat(fromReference('CERTIFICATE')),
     languages: named(root.languages),
+    // 大文本框形态用的顿号串
     skills: array(root.skills).map(text).filter(Boolean).join('、'),
+    // 表格形态用的逐条记录，来自技能素材卡（与 works/projects 同一套 fromReference）
+    skillRecords: fromReference('SKILL')
+      .map(item => ({ name: text(item.name), level: text(item.role), description: text(item.content) }))
+      .filter(item => item.name),
     selfEvaluation: savedSelfEvaluation(root),
     targetCity: array(basics.targetCities).map(text).filter(Boolean)[0] ?? array(strategy.targetLocations).map(text).filter(Boolean)[0] ?? '',
     expectedSalary: text(strategy.expectedSalary),
@@ -1152,8 +1171,12 @@ export function buildFillPlan(profile, fields) {
         }
         // The section is absent from the profile altogether. We know nothing
         // about this part of the applicant's history, so the resume in the
-        // model's evidence remains the only source and it is still asked.
-        return needsManual(field, category, '所选资料档案没有该字段的可用内容。', rule.key)
+        // model's evidence remains the only source and it is still asked —
+        // 除非规则自己声明了 noInvent（技能这类，编出来比留空更糟）。
+        const absentReason = '所选资料档案没有该字段的可用内容。'
+        return rule.noInvent
+          ? { ...needsManual(field, category, absentReason, rule.key), skipAi: true }
+          : needsManual(field, category, absentReason, rule.key)
       }
     }
     // A date component claims its record together with its siblings, so the
@@ -1173,7 +1196,9 @@ export function buildFillPlan(profile, fields) {
           ? `档案中没有第 ${recordIndex + 1} 条对应记录。`
           : '所选资料档案没有该字段的可用内容。')
       // A column the profile has no shape for is not a column to guess at.
-      if (rule.noAnswer) return { ...needsManual(field, category, reason, rule.key), skipAi: true }
+      // `noInvent`：档案里有就填，没有也别交给模型编（技能名称/熟练程度/技能描述这类）——
+      // 编出来的技能和熟练度比留空更糟，而且用户不会逐条核对。
+      if (rule.noAnswer || rule.noInvent) return { ...needsManual(field, category, reason, rule.key), skipAi: true }
       return needsManual(field, category, reason, rule.key)
     }
     const value = rule.date ? formatDateValue(rawValue, field, rule, candidate.datePart) : rawValue

@@ -125,6 +125,32 @@ test('实习/工作的公司背景与证明人字段来自素材卡，工作卡�
   assert.deepEqual(plan.entries.map(entry => entry.value), ['500-999 人', '互联网', '实习', '张三', '13800138000', '直属上级'])
 })
 
+test('教育卡的补充字段能填进教育区块（学校类别/学制/学号/论文/课程…）', () => {
+  // educations 是服务端把教育卡转换后的数组（educationsFromReferences），插件直接读它
+  const withEducation = {
+    basics: {},
+    educations: [{
+      school: '北方工业大学', college: '人工智能与计算机学院', major: '软件工程', educationLevel: '硕士',
+      studyMode: '全日制', duration: '3 年', schoolCategory: '普通本科', trainingMode: '统招', overseas: '否',
+      studentId: '2023322040127', thesis: '融合物理先验的去斑方法', majorDescription: '专业描述内容', courses: '大模型语言、高级算法',
+    }],
+  }
+  const plan = buildFillPlan(withEducation, [
+    { id: 'mode', label: '学习方式', controlType: 'input' },
+    { id: 'duration', label: '学制', controlType: 'input' },
+    { id: 'category', label: '学校类别', controlType: 'input' },
+    { id: 'training', label: '培养方式', controlType: 'input' },
+    { id: 'overseas', label: '是否海外教育经历', controlType: 'input' },
+    { id: 'student-id', label: '学号', controlType: 'input' },
+    { id: 'thesis', label: '毕业论文', controlType: 'input' },
+    { id: 'major-desc', label: '专业描述', controlType: 'textarea' },
+    { id: 'courses', label: '专业课程', controlType: 'textarea' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.status), Array(9).fill('filled'))
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['全日制', '3 年', '普通本科', '统招', '否', '2023322040127', '融合物理先验的去斑方法', '专业描述内容', '大模型语言、高级算法'])
+})
+
 test('never reports or overwrites existing field content', () => {
   const plan = buildFillPlan(profile, [{ id: 'name', label: '姓名', hasValue: true }])
 
@@ -784,6 +810,23 @@ test('reads the field names one real ATS uses for facts the profile already has'
 
   assert.deepEqual(plan.entries.map(entry => entry.target), ['basics.nativePlace', 'project.role'])
   assert.deepEqual(plan.entries.map(entry => entry.value), ['河北省邯郸市', '独立开发'])
+})
+
+test('技能表格的三列来自技能素材卡（名称 / 熟练程度 / 描述）', () => {
+  const withSkills = {
+    basics: {},
+    references: [
+      { type: 'SKILL', title: '前端开发', content: '熟悉 Vue3 / TypeScript；了解 Vite 与组件化', facts: { role: '熟练' } },
+      { type: 'SKILL', title: '英语', content: 'CET-6，可阅读英文文档', facts: { role: '一般' } },
+    ],
+  }
+  const plan = buildFillPlan(withSkills, [
+    { id: 'name', label: '技能名称', controlType: 'input' },
+    { id: 'level', label: '熟练程度', controlType: 'input' },
+    { id: 'desc', label: '技能描述', controlType: 'textarea' },
+  ])
+
+  assert.deepEqual(plan.entries.map(entry => entry.value), ['前端开发', '熟练', '熟悉 Vue3 / TypeScript；了解 Vite 与组件化'])
 })
 
 test('does not ask a model for a column the profile has no shape for', () => {
