@@ -39,6 +39,9 @@ function buildFillContexts(profile: Awaited<ReturnType<typeof resolveProfile>>, 
   const candidateContext = {
     basics,
     educations: profile.educations,
+    // 家庭成员：插件目前没有对应规则，但先放进 localFacts——数据在这里意味着
+    // 以后补规则只用改插件，不用再动服务端。
+    familyMembers: profile.familyMembers,
     strategy,
     workExperiences: profile.workExperiences,
     projects: profile.projects,
@@ -59,11 +62,14 @@ function buildFillContexts(profile: Awaited<ReturnType<typeof resolveProfile>>, 
 }
 
 async function resolveProfile(userId: string, profile: Prisma.ApplicationProfileGetPayload<{ select: typeof publicProfileSelect }>) {
-  const common = await prisma.personalProfile.findUnique({ where: { userId }, select: { basics: true, educations: true } })
+  const common = await prisma.personalProfile.findUnique({ where: { userId }, select: { basics: true, educations: true, familyMembers: true } })
   return {
     ...profile,
     basics: resolveBasics((common?.basics ?? {}) as CommonBasics, profile.basics as CommonBasics),
     educations: resolveEducations((common?.educations ?? []) as Education[], profile.educations as Education[]),
+    // 家庭成员没有「按档案覆盖」的概念——它是不变的信息，所有档案共用主档案那一份。
+    // 放在 resolveProfile 里返回，是为了让两条取数路径（保存过版本 / 没保存过）天然一致。
+    familyMembers: Array.isArray(common?.familyMembers) ? common.familyMembers : [],
   }
 }
 
@@ -93,6 +99,8 @@ export async function getApplicationProfileFillContext(profileId: string) {
         localFacts: {
           basics: composed.resolved.basics,
           educations: composed.resolved.educations,
+          // 来自主档案（composed.resolved 只有文档解析出来的字段，不含家庭成员）
+          familyMembers: resolved.familyMembers,
           strategy: asRecord(resolved.strategy),
           workExperiences: resolved.workExperiences,
           projects: resolved.projects,
@@ -107,6 +115,7 @@ export async function getApplicationProfileFillContext(profileId: string) {
         },
         aiContext: {
           ...composed.resolved,
+          familyMembers: resolved.familyMembers,
           strategy: asRecord(resolved.strategy),
           workExperiences: resolved.workExperiences,
           projects: resolved.projects,

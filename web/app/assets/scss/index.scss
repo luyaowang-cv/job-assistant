@@ -687,6 +687,31 @@ select {
   text-align: right;
   white-space: nowrap;
 }
+/* 个人档案页：字段多（二十多个），固定两列会在中间留出大片空档。
+   这里只覆盖这一页（页面根上带了 personal-profile-fields），不动共用的 .profile-form-grid /
+   .profile-form-row —— 网申档案页也用后者，跟着变会牵连别的页面。
+   auto-fill + minmax(300px)：窗口窄自动两列、宽了自动三到四列，不用写断点。 */
+.profile-form-grid.personal-profile-fields {
+  /* 按可用宽度自动分列（每列至少 250px），列数不写死。
+     250 是调过的值：再大一点宽屏就只剩 3 列，再小一点标签+输入框就挤。 */
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+}
+/* 标签列 112 → 96：最长的是「紧急联系人姓名」七个字，96px 刚放得下，省出来的给输入框 */
+.profile-form-grid.personal-profile-fields > .el-form-item { grid-template-columns: 96px minmax(0, 1fr); margin-bottom: var(--space-3); }
+.profile-form-grid.personal-profile-fields > .el-form-item .el-form-item__label { width: 96px; }
+/* 文件底部那条「小屏单列」写的是 .profile-form-grid（0,1,0），压不过上面这条（0,2,0）——
+   所以这里必须自己再声明一次，否则手机上会一直是两列。 */
+@media (max-width: 767px) {
+  .profile-form-grid.personal-profile-fields { grid-template-columns: 1fr; }
+}
+/* 跨两列（特长 / 兴趣爱好这种多行文本）；跨满整行的 --wide 已有，另开一个更合适 */
+.profile-form-grid.personal-profile-fields > .el-form-item.profile-form-item--span2 { grid-column: span 2; }
+/* 多行文本的行高是自适应的，不能沿用 40px 固定行高，否则文字会溢出格子 */
+.profile-form-grid.personal-profile-fields > .el-form-item.profile-form-item--tall { grid-template-rows: auto; min-height: 64px; align-items: start; }
+.profile-form-grid.personal-profile-fields > .el-form-item.profile-form-item--tall .el-form-item__label { height: auto; padding-top: 9px; }
+.profile-form-grid.personal-profile-fields .el-textarea__inner { min-height: 64px !important; }
 .profile-form-grid > .el-form-item .el-form-item__content,
 .profile-form-row > .el-form-item .el-form-item__content { display: block; min-width: 0; margin-left: 0 !important; }
 .profile-form-grid .el-input,
@@ -704,6 +729,18 @@ select {
 .profile-form-row .el-select__wrapper,
 .profile-form-row .el-input-number { height: 40px !important; min-height: 40px !important; box-sizing: border-box; }
 .profile-form-note { margin: 0 0 0 124px; color: var(--workbench-slate); font-size: 12px; line-height: 1.55; }
+/* 家庭成员：和已删掉的教育编辑区同一套卡片样式（同样的内边距/描边/底色）。
+   每条成员一张卡，卡之间留 space-3，否则会贴在一起像一张大表。 */
+.personal-profile__family { margin-top: var(--space-6); padding-top: var(--space-6); border-top: 1px solid rgba(190,204,195,.7); }
+/* 一条成员占一行：8 个字段并排（宽屏正好放得下），窄屏自动折行。
+   之前用 UnoCSS 的 md:grid-cols-3，固定在 3 列，一行放不完就折成三行。 */
+.family-member-item { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--space-2); padding: var(--space-4); border: 1px solid rgba(112,132,120,.16); border-radius: var(--radius-control); background: rgba(255,255,255,.46); }
+.family-member-item + .family-member-item { margin-top: var(--space-3); }
+/* 跨满整行：以前靠 UnoCSS 的 md:col-span-3，卡片列数一变（3 列→4 列）就只跨 3 格，
+   按钮看着贴在中间。改成显式跨满，与列数无关。 */
+.family-member-item__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; margin-top: var(--space-2); }
+.family-member-item .el-button--danger.is-plain { border-color: rgba(190,100,92,.32); background: transparent; color: #a55851; }
+.personal-profile__family-actions { display: flex; justify-content: flex-end; margin-top: var(--space-3); }
 .personal-profile__save { position: sticky; bottom: 16px; z-index: 2; display: flex; justify-content: flex-end; margin-top: var(--space-4); pointer-events: none; }
 .personal-profile__save .el-button { pointer-events: auto; }
 .application-records__reset {

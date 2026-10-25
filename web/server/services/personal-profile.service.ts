@@ -3,7 +3,9 @@ import { prisma } from '../lib/prisma'
 import type { PersonalProfileInput } from '../schemas/personal-profile'
 import { getCurrentUser } from './current-user'
 
-const publicSelect = { id: true, basics: true, educations: true, photoMimeType: true, photoUpdatedAt: true } satisfies Prisma.PersonalProfileSelect
+// ⚠️ 加字段时这里也要跟着加：select 没列出来的列，写进去了也读不回来，
+// 表现是"保存成功、刷新后没了"，排查时很容易往保存逻辑上怀疑。
+const publicSelect = { id: true, basics: true, educations: true, familyMembers: true, photoMimeType: true, photoUpdatedAt: true } satisfies Prisma.PersonalProfileSelect
 const asJson = (value: unknown) => value as Prisma.InputJsonValue
 
 export async function getPersonalProfile() {
@@ -32,13 +34,17 @@ export async function deletePersonalProfilePhoto() {
 
 export async function savePersonalProfile(input: PersonalProfileInput) {
   const user = await getCurrentUser()
-  // educations 是可选字段：页面上已经不编辑它（教育改成素材卡了），
-  // 没传就不覆盖——写成 `educations: asJson(input.educations)` 会把 undefined 存成 null / 清空历史。
-  const educations = input.educations === undefined ? {} : { educations: asJson(input.educations) }
+  // 可选字段：传了才写、没传就别动。
+  // 写成 `educations: asJson(input.educations)` 的话，undefined 会被当成一个值写进去，
+  // 把库里的历史数据清掉——只有 basics 是每次都会整体覆盖的（它是页面的主表单）。
+  const optionalFields = {
+    ...(input.educations === undefined ? {} : { educations: asJson(input.educations) }),
+    ...(input.familyMembers === undefined ? {} : { familyMembers: asJson(input.familyMembers) }),
+  }
   return prisma.personalProfile.upsert({
     where: { userId: user.id },
-    create: { userId: user.id, basics: asJson(input.basics), ...educations },
-    update: { basics: asJson(input.basics), ...educations },
+    create: { userId: user.id, basics: asJson(input.basics), ...optionalFields },
+    update: { basics: asJson(input.basics), ...optionalFields },
     select: publicSelect,
   })
 }
