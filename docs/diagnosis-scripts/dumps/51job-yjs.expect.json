@@ -1,0 +1,21 @@
+{
+  "site": "51job · xyz.51job.com（应届生网申·实习经验）",
+  "dump": "51job-yjs.json",
+  "profile": "example-profile.json",
+  "note": "这一页的控件混进了按钮（btnAppend / imgbtnNext 等），已填过的字段不能覆盖，只有「证明人」这类空字段会走规则。期望覆盖：按钮一律跳过、已填字段不覆盖、证明人归到工作经历的证明人栏而不是姓名/电话。",
+  "expect": [
+    { "id": "0::form-field-10", "status": "skipped_button" },
+    { "id": "0::form-field-11", "status": "skipped_button" },
+    { "id": "0::form-field-14", "status": "skipped_existing", "why": "实习单位名称已填，不覆盖" },
+    { "id": "0::form-field-17", "status": "skipped_existing", "why": "实习内容已填，不覆盖" },
+    { "id": "0::form-field-18", "status": "needs_manual", "key": "work.refereeName", "why": "示例档案没有证明人，应留空而不是填成姓名或电话" },
+    { "id": "0::form-field-19", "status": "skipped_button" },
+    { "id": "0::form-field-20", "status": "skipped_button" },
+    { "id": "0::form-field-22", "status": "skipped_existing" },
+    { "id": "0::form-field-25", "status": "skipped_existing" },
+    { "id": "0::form-field-26", "status": "needs_manual", "key": "work.refereeName" },
+    { "id": "0::form-field-27", "status": "skipped_button" },
+    { "id": "0::form-field-28", "status": "skipped_button" },
+    { "id": "0::form-field-29", "status": "skipped_button" }
+  ]
+}

@@ -186,7 +186,7 @@ type FillEntry = {
   fieldId: string
   label: string
   category: string
-  status: 'filled' | 'skipped_existing' | 'skipped_sensitive' | 'needs_manual'
+  status: 'filled' | 'skipped_existing' | 'skipped_sensitive' | 'skipped_button' | 'needs_manual'
   reason: string
   target?: string
   record?: number
@@ -697,6 +697,7 @@ function renderFillReport(report: Omit<FillPlan, 'entries'> & { entries: Array<O
     filled: '已填写',
     skipped_existing: '已有内容，已跳过',
     skipped_sensitive: '敏感字段，已跳过',
+    skipped_button: '按钮，已跳过',
     needs_manual: '需手动处理',
   }
 
@@ -1217,7 +1218,7 @@ async function fillCurrentPage() {
         summary: entries.reduce((summary, entry) => {
           summary[entry.status] += 1
           return summary
-        }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
+        }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, skipped_button: 0, needs_manual: 0 }),
       }
       renderFillReport(report)
       await paintFillOutcome(tabId, entries as FillEntry[])
@@ -1437,7 +1438,7 @@ async function fillCurrentPage() {
       summary: entries.reduce((summary, entry) => {
         summary[entry.status] += 1
         return summary
-      }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
+      }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, skipped_button: 0, needs_manual: 0 }),
     }
     renderFillReport(report)
     await paintFillOutcome(tabId, entries as FillEntry[])

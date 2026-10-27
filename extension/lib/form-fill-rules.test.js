@@ -1062,6 +1062,51 @@ test('F-048 归属判定：他人词命中，但住址类反例优先', () => {
   assert.equal(attributionOfDescriptor(''), 'self')
 })
 
+// ------------------------------------------------------- F-051 家庭成员区块
+
+test('F-051 家庭成员区块的“工作单位/年龄”靠上下文判成他人', () => {
+  // 单看措辞，这些框和本人的工作经历/电话/年龄一模一样；是周围的「亲属姓名 / 与本人
+  // 关系」说明它们属于家属，而不是本人的记录。
+  assert.equal(inferAttribution({ label: '工作单位' }), 'self')
+  assert.equal(inferAttribution({ label: '工作单位', context: '亲属姓名 与本人关系' }), 'other')
+  assert.equal(inferAttribution({ label: '年龄', context: '亲属姓名 与本人关系' }), 'other')
+  assert.equal(inferAttribution({ label: '政治面貌', context: '家庭成员' }), 'other')
+})
+
+test('F-051 家庭成员字段从 familyMembers 取值，不泄漏本人的工作/电话/年龄', () => {
+  const withFamily = {
+    basics: { fullName: '王路瑶', birthDate: '2001-11-11', phone: '13800000000', politicalStatus: '共青团员', countryRegion: '中国' },
+    workExperiences: [{ company: '某某科技有限公司', title: '前端开发实习生' }],
+    familyMembers: [{ name: '王父', relation: '父亲', organization: '某某事业单位', role: '科员', phone: '13900139000', age: '52', politicalStatus: '中共党员', nativePlace: '河北省邯郸市' }],
+  }
+  const block = ['亲属姓名', '与本人关系', '工作单位', '职务', '联系电话', '年龄', '政治面貌', '家庭所在地', '国籍']
+    .map((label, index) => ({ id: `kin-${index}`, label, inputType: label === '联系电话' ? 'tel' : 'text', controlType: 'input', context: '亲属姓名 与本人关系 家庭所在地' }))
+  const plan = buildFillPlan(withFamily, block)
+  const entry = id => plan.entries.find(item => item.fieldId === id)
+  assert.equal(entry('kin-0').value, '王父')
+  assert.equal(entry('kin-1').value, '父亲')
+  assert.equal(entry('kin-2').value, '某某事业单位', '工作单位应取家属单位，不是本人的公司')
+  assert.equal(entry('kin-3').value, '科员', '职务应取家属职务，不是本人的职位')
+  assert.equal(entry('kin-4').value, '13900139000', '联系电话应取家属电话，不是本人手机')
+  assert.equal(entry('kin-5').value, '52', '年龄应取家属年龄，不是由本人生日推算')
+  assert.equal(entry('kin-6').value, '中共党员', '政治面貌应取家属，不是本人')
+  assert.equal(entry('kin-7').value, '河北省邯郸市')
+  assert.equal(entry('kin-8').status, 'needs_manual', '国籍没有对应栏目，不能填本人国籍')
+})
+
+test('F-051 档案没有家庭成员时，家属区块一个都不填本人数据', () => {
+  const noFamily = {
+    basics: { fullName: '王路瑶', birthDate: '2001-11-11', phone: '13800000000', politicalStatus: '共青团员', countryRegion: '中国' },
+    workExperiences: [{ company: '某某科技有限公司', title: '前端开发实习生' }],
+  }
+  const block = ['工作单位', '职务', '联系电话', '年龄', '政治面貌', '国籍']
+    .map((label, index) => ({ id: `kin-${index}`, label, inputType: label === '联系电话' ? 'tel' : 'text', controlType: 'input', context: '亲属姓名 与本人关系' }))
+  const plan = buildFillPlan(noFamily, block)
+  for (const item of plan.entries) {
+    assert.equal(item.status, 'needs_manual', `${item.label} 被填上了本人的数据：${item.value ?? ''}`)
+  }
+})
+
 // ------------------------------------------------------- F-048 规则冲突分差
 
 test('F-048 两条规则分差过小时不猜，且不交给模型', () => {

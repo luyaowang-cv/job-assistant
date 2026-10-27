@@ -122,7 +122,7 @@ const BASIC_OWN_WORDS = /出生日期|出生年月|生日|birthdate|dateofbirth|
 /** Own wording that means “free text”: never lock these to a section. */
 const FREE_TEXT_OWN_WORDS = /自我描述|自我评价|个人总结|个人优势|个人简介|个人概述|自我介绍|selfdescription|selfsummary|personalsummary|profilesummary/i
 
-const REPEATABLE_SECTIONS = ['education', 'work', 'project', 'research', 'campus', 'awards', 'certificates', 'languages']
+const REPEATABLE_SECTIONS = ['education', 'work', 'project', 'research', 'campus', 'awards', 'certificates', 'languages', 'family']
 
 const ANCHOR_KEYS = {
   education: 'education.school',
@@ -133,6 +133,7 @@ const ANCHOR_KEYS = {
   awards: 'awards.name',
   certificates: 'certificates.name',
   languages: 'languages.name',
+  family: 'family.name',
 }
 
 const COMPOUND_SURNAMES = ['欧阳', '司马', '上官', '皇甫', '令狐', '诸葛', '司徒', '公孙']
@@ -275,6 +276,21 @@ const RULES = [
   // --------------------------------------------------------------- languages
   { key: 'languages.name', section: 'languages', collection: 'languages', aliases: ['语言名称', '语言', '外语', '语种', 'languagename', 'language'], read: (c, i) => c.languages[i]?.name },
   { key: 'languages.detail', section: 'languages', collection: 'languages', aliases: ['语言水平', '外语水平', '外语等级', '语言等级', '语言熟练度', '精通程度', '语言成绩', 'languagelevel'], read: (c, i) => c.languages[i]?.detail },
+
+  // ---------------------------------------------------------------- family
+  // 家庭成员：主档案里的家庭成员表（F-059）。网申把「工作单位 / 职务 / 联系电话 /
+  // 年龄 / 政治面貌」这些词用在家属身上时，光看字段自己的措辞和本人一模一样；靠
+  // 区块里的「亲属姓名 / 与本人关系 / 家庭所在地」认出这是家属（见 inferAttribution），
+  // 再归到 familyMembers 而不是本人的工作经历或手机号。attribution: 'other' 让这些
+  // 规则只在「他人」字段上生效，和本人的 work/basics 规则互不抢。
+  { key: 'family.name', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['亲属姓名', '家属姓名', '家庭成员姓名', '亲属', '家属'], read: (c, i) => c.familyMembers[i]?.name },
+  { key: 'family.relation', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['与本人关系', '与申请人关系', '亲属关系', '家属关系'], read: (c, i) => c.familyMembers[i]?.relation },
+  { key: 'family.organization', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['工作单位', '单位名称'], read: (c, i) => c.familyMembers[i]?.organization },
+  { key: 'family.role', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['职务', '岗位', '职位'], read: (c, i) => c.familyMembers[i]?.role },
+  { key: 'family.phone', section: 'family', collection: 'familyMembers', attribution: 'other', types: ['tel'], aliases: ['联系电话', '手机号', '手机号码'], read: (c, i) => c.familyMembers[i]?.phone },
+  { key: 'family.age', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['年龄'], read: (c, i) => c.familyMembers[i]?.age },
+  { key: 'family.politicalStatus', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['政治面貌'], read: (c, i) => c.familyMembers[i]?.politicalStatus },
+  { key: 'family.nativePlace', section: 'family', collection: 'familyMembers', attribution: 'other', aliases: ['家庭所在地'], read: (c, i) => c.familyMembers[i]?.nativePlace },
 ]
 
 // ------------------------------------------------------------------ helpers
@@ -486,6 +502,7 @@ function buildContext(profile) {
     awards: named(root.awards).concat(fromReference('AWARD')),
     certificates: named(root.certificates).concat(fromReference('CERTIFICATE')),
     languages: named(root.languages),
+    familyMembers: array(root.familyMembers).map(record),
     // 大文本框形态用的顿号串
     skills: array(root.skills).map(text).filter(Boolean).join('、'),
     // 表格形态用的逐条记录，来自技能素材卡（与 works/projects 同一套 fromReference）
@@ -559,7 +576,7 @@ function descriptorFor(field) {
  * Multi-character only. Single characters would catch 母公司 / 子公司 / 子女教育
  * inside a company or project name, and silently blank a legitimate field.
  */
-const OTHER_PERSON_PATTERN = /父亲|母亲|家长|配偶|爱人|丈夫|妻子|子女|家庭成员|家庭|紧急|联系人|推荐人|证明人|介绍人|担保人|监护人|亲属|家人|亲友/
+const OTHER_PERSON_PATTERN = /父亲|母亲|家长|配偶|爱人|丈夫|妻子|子女|家庭成员|家庭|紧急|联系人|推荐人|证明人|介绍人|担保人|监护人|亲属|家属|家人|亲友|与本人关系|与申请人关系/
 
 /**
  * Words that keep a field on the applicant even though it carries an
@@ -581,7 +598,16 @@ export function attributionOfDescriptor(descriptor) {
 }
 
 export function inferAttribution(field) {
-  return attributionOfDescriptor(descriptorFor(field))
+  const own = descriptorFor(field)
+  // “家庭住址”是本人的地址、“籍贯”是本人的籍贯——自己的措辞里的地址类词优先，
+  // 不能被周围的“亲属”字样推翻。
+  if (SELF_CONTEXT_PATTERN.test(own)) return 'self'
+  if (OTHER_PERSON_PATTERN.test(own)) return 'other'
+  // 自己的措辞没说清是谁的（家庭成员区块里的“工作单位 / 联系电话 / 年龄”和本人
+  // 一模一样），再读上下文。家属区块的相邻字段里总会有“亲属姓名 / 与本人关系 /
+  // 家庭所在地”这样的他人词，据此把这整块判成他人，而不是本人的工作经历或电话。
+  if (OTHER_PERSON_PATTERN.test(contextTextFor(field))) return 'other'
+  return 'self'
 }
 
 function contextTextFor(field) {
@@ -760,7 +786,7 @@ function scoreRule(rule, field, signals, sectionHint, descriptor, sections) {
 
   // Whose value this box wants is decided before any label is scored: a “姓名”
   // box that says 父亲 must never be answered from the applicant's own record.
-  if (attributionOfDescriptor(descriptor) !== ruleAttribution(rule)) return 0
+  if (inferAttribution(field) !== ruleAttribution(rule)) return 0
   if (sectionHint && rule.section !== sectionHint) {
     // Dates are the ambiguous case: “开始时间” appears in every block, so an
     // exact label alone is not enough to move one across sections. Everything
@@ -1056,6 +1082,12 @@ export function buildFillPlan(profile, fields) {
       decisions.set(field, { entry: baseEntry(field, 'unknown', 'needs_manual', '字段缺少稳定标识，无法安全填写。') })
       continue
     }
+    // 按钮/提交控件不是可填写项：扫描器已把它们排除，这里再兜底一次，让旧 dump 或
+    // 手写控件也能被正确跳过，而不是当成未知字段送进模型。
+    if (['button', 'submit', 'reset', 'image'].includes(String(field.inputType ?? '').toLowerCase())) {
+      decisions.set(field, { entry: baseEntry(field, 'unknown', 'skipped_button', '这是按钮或提交控件，不填写。') })
+      continue
+    }
     // A control whose only label was a unit character or a range separator has
     // no identity left once that is filtered out. Nothing can decide what goes
     // in it, and handing it to a model turns an unfillable box into an invented
@@ -1238,7 +1270,7 @@ export function buildFillPlan(profile, fields) {
     summary: entries.reduce((summary, entry) => {
       summary[entry.status] += 1
       return summary
-    }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
+    }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, skipped_button: 0, needs_manual: 0 }),
   }
 }
 
@@ -1345,6 +1377,6 @@ export function reconcileFillOutcome(plan, outcome) {
     summary: entries.reduce((summary, entry) => {
       summary[entry.status] += 1
       return summary
-    }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, needs_manual: 0 }),
+    }, { filled: 0, skipped_existing: 0, skipped_sensitive: 0, skipped_button: 0, needs_manual: 0 }),
   }
 }

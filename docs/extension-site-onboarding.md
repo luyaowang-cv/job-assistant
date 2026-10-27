@@ -86,6 +86,8 @@ node docs/diagnosis-scripts/replay-dump.mjs docs/diagnosis-scripts/dumps/beisen-
 |---|---|---|
 | 北森 · camzhaopin.zhiye.com | `beisen-zhiye-camzhaopin` | ✅ 7 条期望 |
 | 北森 · jlcehr.zhiye.com（社会招聘，无区块标题） | `beisen-jlcehr` | ✅ 7 条期望 |
+| 51job · xyz.51job.com（应届生网申·实习经验） | `51job-yjs` | ✅ 13 条期望 |
+| 51job · xyz.51job.com（应届生网申·家庭成员） | `51job-yjs-family` | ✅ 19 条期望 |
 | 大易 · gszq.hotjob.cn | 待补 | 结构已导出，期望未写 |
 | 中建 · recruit.cscec.com | 待补 | 结构已导出（`cscec-recruit.json`，**修复前的那一份**：单选组还是两个字段；`context` 里的已填值已抹掉），期望待重新导出后写 |
 

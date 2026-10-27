@@ -1,0 +1,27 @@
+{
+  "site": "51job · xyz.51job.com（应届生网申·家庭成员）",
+  "dump": "51job-yjs-family.json",
+  "profile": "example-profile.json",
+  "note": "家庭成员区块里的「工作单位 / 职务 / 联系电话 / 年龄 / 国籍 / 政治面貌」措辞和本人一模一样，全靠周围的「亲属姓名 / 与本人关系」判成他人。期望覆盖：这些框不泄漏本人的工作经历/电话/年龄（未填的走 family.* 规则，示例档案没有家庭成员则留空），按钮一律跳过，iframe 里没标签的控件不猜。",
+  "expect": [
+    { "id": "0::form-field-10", "status": "skipped_button" },
+    { "id": "0::form-field-11", "status": "skipped_button" },
+    { "id": "0::form-field-14", "status": "needs_manual", "key": "family.name", "why": "亲属姓名应归到家属栏，而不是本人的姓名" },
+    { "id": "0::form-field-15", "status": "skipped_existing" },
+    { "id": "0::form-field-16", "status": "skipped_existing" },
+    { "id": "0::form-field-17", "status": "needs_manual", "key": "family.relation", "why": "与本人关系应归到家属关系栏" },
+    { "id": "0::form-field-18", "status": "skipped_existing" },
+    { "id": "0::form-field-19", "status": "skipped_existing" },
+    { "id": "0::form-field-20", "status": "skipped_existing" },
+    { "id": "0::form-field-21", "status": "skipped_existing" },
+    { "id": "0::form-field-22", "status": "skipped_existing" },
+    { "id": "0::form-field-23", "status": "skipped_button" },
+    { "id": "0::form-field-24", "status": "skipped_button" },
+    { "id": "0::form-field-25", "status": "skipped_button" },
+    { "id": "1204::form-field-0", "status": "needs_manual", "why": "iframe 里没有标签的控件，不猜" },
+    { "id": "1204::form-field-1", "status": "needs_manual" },
+    { "id": "1204::form-field-7", "status": "skipped_button" },
+    { "id": "1204::form-field-8", "status": "skipped_button" },
+    { "id": "1204::form-field-9", "status": "skipped_button" }
+  ]
+}

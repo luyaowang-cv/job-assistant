@@ -416,6 +416,7 @@ export function scanVisibleFormFields() {
   const controlTypeOf = (element) => (isRichText(element) ? 'textarea' : element.tagName.toLowerCase())
   const visibleControls = allControls.map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden' && !(element instanceof HTMLInputElement && element.type === 'radio'))
+    .filter(({ element }) => !(element instanceof HTMLInputElement && ['button', 'submit', 'reset', 'image'].includes(element.type)))
     .filter(({ element }) => !customSelectFor(element))
     .filter(({ element }) => !element.hasAttribute('disabled') && !element.hasAttribute('readonly') && element.getAttribute('aria-disabled') !== 'true')
   const radioGroups = []
@@ -647,6 +648,7 @@ export async function applyFillEntries(instructions) {
     .map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden')
     .filter(({ element }) => !(element instanceof HTMLInputElement && element.type === 'radio'))
+    .filter(({ element }) => !(element instanceof HTMLInputElement && ['button', 'submit', 'reset', 'image'].includes(element.type)))
     .filter(({ element }) => !(element.closest('.ud__select, .el-select, .ant-select, .arco-select, .semi-select') || element.getAttribute('role') === 'combobox'))
     .filter(({ element }) => !element.hasAttribute('disabled') && !element.hasAttribute('readonly') && element.getAttribute('aria-disabled') !== 'true')
   const byId = new Map(entries.map(entry => [entry.fieldId, entry]))
@@ -1181,6 +1183,7 @@ export function collectControlValues() {
 
   allControls.map((element, index) => ({ element, index }))
     .filter(({ element }) => isVisible(element) && element.type !== 'hidden' && !(element instanceof HTMLInputElement && element.type === 'radio'))
+    .filter(({ element }) => !(element instanceof HTMLInputElement && ['button', 'submit', 'reset', 'image'].includes(element.type)))
     .filter(({ element }) => !customSelectFor(element))
     .filter(({ element }) => !element.hasAttribute('disabled') && !element.hasAttribute('readonly') && element.getAttribute('aria-disabled') !== 'true')
     .forEach(({ element, index }) => {

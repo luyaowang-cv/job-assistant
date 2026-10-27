@@ -26,7 +26,7 @@ export const MANUAL_GROUPS = [
 export function groupReportEntries(entries) {
   const list = Array.isArray(entries) ? entries : []
   const filled = list.filter(entry => entry?.status === 'filled')
-  const skipped = list.filter(entry => entry?.status === 'skipped_existing' || entry?.status === 'skipped_sensitive')
+  const skipped = list.filter(entry => entry?.status === 'skipped_existing' || entry?.status === 'skipped_sensitive' || entry?.status === 'skipped_button')
   const manual = list.filter(entry => entry?.status === 'needs_manual')
   const buckets = MANUAL_GROUPS.map(group => ({
     ...group,
